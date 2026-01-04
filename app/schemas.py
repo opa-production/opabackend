@@ -45,6 +45,10 @@ class HostProfileResponse(BaseModel):
     bio: Optional[str] = None
     mobile_number: Optional[str] = None
     id_number: Optional[str] = None
+    avatar_url: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    id_document_url: Optional[str] = None
+    license_document_url: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -108,6 +112,9 @@ class ClientProfileResponse(BaseModel):
     fun_fact: Optional[str] = None
     mobile_number: Optional[str] = None
     id_number: Optional[str] = None
+    avatar_url: Optional[str] = None
+    id_document_url: Optional[str] = None
+    license_document_url: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

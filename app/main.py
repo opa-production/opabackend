@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app import models  # Import models to ensure they're registered
-from app.routers import host_auth, client_auth, cars, payment_methods
+from app.routers import host_auth, client_auth, cars, payment_methods, media
 
 app = FastAPI(
     title="Car Rental API",
@@ -20,7 +20,13 @@ async def startup_event():
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[
+        "http://localhost:8081",  # Expo default
+        "http://localhost:19000",  # Expo web
+        "http://localhost:19006",  # Expo web alternative
+        "exp://localhost:8081",   # Expo client
+        "*"  # Allow all for development - RESTRICT IN PRODUCTION
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,6 +37,7 @@ app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])
 app.include_router(client_auth.router, prefix="/api/v1", tags=["Client Auth"])
 app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
 app.include_router(payment_methods.router, prefix="/api/v1", tags=["Payment Methods"])
+app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 
 
 @app.get("/")

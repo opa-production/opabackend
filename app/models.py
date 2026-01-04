@@ -56,6 +56,12 @@ class Host(Base):
     mobile_number = Column(String(50), nullable=True)
     id_number = Column(String(100), nullable=True)  # ID number, passport number, or DL number
     
+    # Media URLs (stored in Supabase Storage)
+    avatar_url = Column(String(500), nullable=True)
+    cover_image_url = Column(String(500), nullable=True)
+    id_document_url = Column(String(500), nullable=True)
+    license_document_url = Column(String(500), nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -79,6 +85,11 @@ class Client(Base):
     fun_fact = Column(Text, nullable=True)
     mobile_number = Column(String(50), nullable=True)
     id_number = Column(String(100), nullable=True)  # Driver's licence/passport number
+    
+    # Media URLs (stored in Supabase Storage)
+    avatar_url = Column(String(500), nullable=True)
+    id_document_url = Column(String(500), nullable=True)
+    license_document_url = Column(String(500), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -119,6 +130,10 @@ class Car(Base):
     location_name = Column(String(255), nullable=True)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    
+    # Media URLs (stored in Supabase Storage)
+    image_urls = Column(Text, nullable=True)  # JSON array of image URLs
+    video_url = Column(String(500), nullable=True)
     
     # Status tracking
     is_complete = Column(Boolean, default=False)
