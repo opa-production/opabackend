@@ -8,14 +8,18 @@ from app.schemas import (
     HostRegisterRequest,
     HostRegisterResponse,
     HostLoginRequest,
-    HostLoginResponse,
+    HostLoginResponseWithRefresh,
     HostProfileUpdateRequest,
-    HostProfileResponse
+    HostProfileResponse,
+    RefreshTokenRequest,
+    TokenPairResponse
 )
 from app.auth import (
     get_password_hash,
     verify_password,
     create_access_token,
+    create_refresh_token,
+    verify_refresh_token,
     get_host_by_email,
     get_current_host,
     ACCESS_TOKEN_EXPIRE_MINUTES
@@ -60,16 +64,22 @@ async def register_host(
     return db_host
 
 
-@router.post("/host/auth/login", response_model=HostLoginResponse)
+@router.post("/host/auth/login", response_model=HostLoginResponseWithRefresh)
 async def login_host(
     request: HostLoginRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Login for hosts
+    Login for hosts - returns access and refresh tokens
     
     - **email**: Registered email address
     - **password**: Password
+    
+    Returns:
+    - access_token: Short-lived JWT for API access
+    - refresh_token: Long-lived JWT for refreshing access tokens
+    - expires_in: Access token expiration time in seconds
+    - host: Host profile information
     """
     # Get host by email
     host = get_host_by_email(db, request.email)
@@ -89,14 +99,18 @@ async def login_host(
         )
     
     # Create access token with role
+    token_data = {"sub": str(host.id), "role": "host"}
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": str(host.id), "role": "host"}, expires_delta=access_token_expires
-    )
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    
+    # Create refresh token
+    refresh_token = create_refresh_token(data=token_data)
     
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
         "host": host
     }
 
@@ -111,6 +125,59 @@ async def logout_host(current_host: Host = Depends(get_current_host)):
     consistency. The client should discard the token.
     """
     return {"message": "Successfully logged out"}
+
+
+@router.post("/host/auth/refresh", response_model=TokenPairResponse)
+async def refresh_host_token(
+    request: RefreshTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Refresh access token using refresh token
+    
+    - **refresh_token**: Valid refresh token obtained during login
+    
+    Returns new access and refresh tokens. The old refresh token is invalidated.
+    """
+    # Verify the refresh token
+    payload = verify_refresh_token(request.refresh_token)
+    
+    # Verify role is host
+    role = payload.get("role")
+    if role != "host":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid token - not a host token"
+        )
+    
+    # Get host from database to ensure they still exist
+    host_id_str = payload.get("sub")
+    try:
+        host_id = int(host_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token - malformed host ID"
+        )
+    
+    host = db.query(Host).filter(Host.id == host_id).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Host no longer exists"
+        )
+    
+    # Create new token pair
+    token_data = {"sub": str(host.id), "role": "host"}
+    access_token = create_access_token(data=token_data)
+    refresh_token = create_refresh_token(data=token_data)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
 
 
 @router.get("/host/me", response_model=HostProfileResponse)

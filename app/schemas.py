@@ -322,3 +322,196 @@ class PaymentMethodListResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+# ==================== TOKEN SCHEMAS ====================
+
+class RefreshTokenRequest(BaseModel):
+    """Request to refresh access token using refresh token"""
+    refresh_token: str = Field(..., description="Valid refresh token")
+
+
+class TokenPairResponse(BaseModel):
+    """Response containing both access and refresh tokens"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(..., description="Access token expiration time in seconds")
+
+
+class HostLoginResponseWithRefresh(BaseModel):
+    """Host login response with refresh token"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    host: HostProfileResponse
+
+
+class ClientLoginResponseWithRefresh(BaseModel):
+    """Client login response with refresh token"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    client: ClientProfileResponse
+
+
+class ClientTokenData(BaseModel):
+    """Token data for client authentication"""
+    client_id: Optional[int] = None
+
+
+# ==================== CAR LISTING SCHEMAS (CLIENT VIEW) ====================
+
+class CarListingResponse(BaseModel):
+    """Car listing for client browsing"""
+    id: int
+    host_id: int
+    name: Optional[str] = None
+    model: Optional[str] = None
+    body_type: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    seats: Optional[int] = None
+    fuel_type: Optional[str] = None
+    transmission: Optional[str] = None
+    color: Optional[str] = None
+    mileage: Optional[int] = None
+    features: Optional[List[str]] = None
+    daily_rate: Optional[float] = None
+    weekly_rate: Optional[float] = None
+    monthly_rate: Optional[float] = None
+    min_rental_days: Optional[int] = None
+    max_rental_days: Optional[int] = None
+    min_age_requirement: Optional[int] = None
+    rules: Optional[str] = None
+    location_name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    image_urls: Optional[List[str]] = None
+    video_url: Optional[str] = None
+    host_name: Optional[str] = None
+    host_avatar_url: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CarListResponse(BaseModel):
+    """Paginated car listing response"""
+    cars: List[CarListingResponse]
+    total: int
+    skip: int
+    limit: int
+
+    class Config:
+        from_attributes = True
+
+
+class CarAvailabilityResponse(BaseModel):
+    """Car availability response"""
+    car_id: int
+    available: bool
+    booked_dates: List[dict]  # List of {start_date, end_date} for booked periods
+    message: str
+
+
+# ==================== BOOKING SCHEMAS ====================
+
+class BookingStatusEnum(str, Enum):
+    """Booking status enum for API"""
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class BookingCreateRequest(BaseModel):
+    """Request to create a new booking"""
+    car_id: int = Field(..., description="ID of the car to book")
+    start_date: datetime = Field(..., description="Rental start date")
+    end_date: datetime = Field(..., description="Rental end date")
+    pickup_time: Optional[str] = Field("10:00", max_length=10)
+    return_time: Optional[str] = Field("10:00", max_length=10)
+    pickup_location: Optional[str] = Field(None, max_length=500)
+    return_location: Optional[str] = Field(None, max_length=500)
+    damage_waiver_enabled: Optional[bool] = Field(False)
+    drive_type: Optional[str] = Field("self", description="'self' or 'withDriver'")
+    check_in_preference: Optional[str] = Field("self", description="'self' or 'assisted'")
+    special_requirements: Optional[str] = Field(None, max_length=2000)
+
+    @model_validator(mode='after')
+    def validate_dates(self):
+        if self.start_date >= self.end_date:
+            raise ValueError('End date must be after start date')
+        if self.start_date < datetime.now():
+            raise ValueError('Start date cannot be in the past')
+        return self
+
+
+class BookingResponse(BaseModel):
+    """Booking response with full details"""
+    id: int
+    booking_id: str
+    client_id: int
+    car_id: int
+    
+    # Car details (denormalized for convenience)
+    car_name: Optional[str] = None
+    car_model: Optional[str] = None
+    car_year: Optional[int] = None
+    car_make: Optional[str] = None
+    car_image_urls: Optional[List[str]] = None
+    
+    # Host details
+    host_id: Optional[int] = None
+    host_name: Optional[str] = None
+    
+    # Booking dates
+    start_date: datetime
+    end_date: datetime
+    pickup_time: Optional[str] = None
+    return_time: Optional[str] = None
+    pickup_location: Optional[str] = None
+    return_location: Optional[str] = None
+    
+    # Pricing
+    daily_rate: float
+    rental_days: int
+    base_price: float
+    damage_waiver_fee: float
+    total_price: float
+    
+    # Options
+    damage_waiver_enabled: bool
+    drive_type: Optional[str] = None
+    check_in_preference: Optional[str] = None
+    special_requirements: Optional[str] = None
+    
+    # Status
+    status: str
+    status_updated_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
+    
+    # Timestamps
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BookingListResponse(BaseModel):
+    """Paginated booking list response"""
+    bookings: List[BookingResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class BookingCancelRequest(BaseModel):
+    """Request to cancel a booking"""
+    reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")

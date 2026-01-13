@@ -1,9 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from app.database import engine, Base
 from app import models  # Import models to ensure they're registered
-from app.routers import host_auth, client_auth, cars, payment_methods, media
+from app.routers import host_auth, client_auth, cars, payment_methods, media, bookings
 
 app = FastAPI(
     title="Car Rental API",
@@ -36,6 +40,7 @@ app.add_middleware(
 app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])
 app.include_router(client_auth.router, prefix="/api/v1", tags=["Client Auth"])
 app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
+app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(payment_methods.router, prefix="/api/v1", tags=["Payment Methods"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 
