@@ -19,6 +19,9 @@ class PaymentMethod(Base):
     id = Column(Integer, primary_key=True, index=True)
     host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
     
+    # Payment method name (e.g., "John's M-Pesa", "My Visa Card")
+    name = Column(String(255), nullable=False)
+    
     # Payment method type
     method_type = Column(SQLEnum(PaymentMethodType), nullable=False)
     

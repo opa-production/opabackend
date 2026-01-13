@@ -229,6 +229,7 @@ class PaymentMethodTypeEnum(str, Enum):
 
 class MpesaPaymentMethodAddRequest(BaseModel):
     """Add M-Pesa payment method request schema"""
+    name: str = Field(..., min_length=1, max_length=255, description="Name for this M-Pesa payment method (e.g., 'John's M-Pesa')")
     mpesa_number: str = Field(..., max_length=20, description="M-Pesa phone number (e.g., 254712345678)")
     is_default: Optional[bool] = Field(False, description="Set as default payment method")
     
@@ -248,10 +249,10 @@ class MpesaPaymentMethodAddRequest(BaseModel):
 
 class CardPaymentMethodAddRequest(BaseModel):
     """Add card payment method request schema"""
+    name: str = Field(..., min_length=1, max_length=255, description="Name for this card payment method (e.g., 'My Visa Card')")
     card_number: str = Field(..., description="16-digit card number")
+    expiry_date: str = Field(..., description="Expiry date in MM/YY format (e.g., '08/30')")
     cvc: str = Field(..., description="3-4 digit CVC/CVV code")
-    expiry_month: int = Field(..., ge=1, le=12, description="Expiry month (1-12)")
-    expiry_year: int = Field(..., ge=2024, le=2099, description="Expiry year (YYYY)")
     card_type: Literal["visa", "mastercard"] = Field(..., description="Card type (visa or mastercard)")
     is_default: Optional[bool] = Field(False, description="Set as default payment method")
     
@@ -270,18 +271,49 @@ class CardPaymentMethodAddRequest(BaseModel):
         if self.card_type == "mastercard" and first_digit != '5':
             raise ValueError('Mastercard cards must start with 5')
         
+        # Validate expiry date format MM/YY
+        expiry_clean = re.sub(r'[\s]', '', self.expiry_date)
+        if not re.match(r'^\d{2}/\d{2}$', expiry_clean):
+            raise ValueError('Expiry date must be in MM/YY format (e.g., 08/30)')
+        
+            # Parse expiry date
+        try:
+            month_str, year_str = expiry_clean.split('/')
+            expiry_month = int(month_str)
+            expiry_year = int(year_str)
+            
+            # Validate month range
+            if expiry_month < 1 or expiry_month > 12:
+                raise ValueError('Invalid expiry month. Must be between 01 and 12')
+            
+            # Convert YY to YYYY (assuming 20YY for years 00-99)
+            # If year is 00-30, assume 2000-2030, otherwise assume 1900-1999
+            if expiry_year <= 30:
+                expiry_year_full = 2000 + expiry_year
+            else:
+                expiry_year_full = 1900 + expiry_year
+            
+            # Validate expiry date is not in the past
+            today = date.today()
+            current_year = today.year
+            current_month = today.month
+            # Card is expired if expiry year is before current year, or same year but expiry month is before current month
+            if expiry_year_full < current_year or (expiry_year_full == current_year and expiry_month < current_month):
+                raise ValueError('Card expiry date cannot be in the past')
+            
+            # Store parsed values (will be used in router)
+            self._expiry_month = expiry_month
+            self._expiry_year = expiry_year_full
+            
+        except ValueError as e:
+            if 'Invalid expiry' in str(e) or 'Card expiry date' in str(e):
+                raise
+            raise ValueError('Invalid expiry date format. Use MM/YY (e.g., 08/30)')
+        
         # Validate CVC/CVV (3-4 digits)
         cvc_clean = re.sub(r'[\s]', '', self.cvc)
         if not re.match(r'^\d{3,4}$', cvc_clean):
             raise ValueError('CVC/CVV must be 3 or 4 digits')
-        
-        # Validate expiry date is not in the past
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        # Card is expired if expiry year is before current year, or same year but expiry month is before current month
-        if self.expiry_year < current_year or (self.expiry_year == current_year and self.expiry_month < current_month):
-            raise ValueError('Card expiry date cannot be in the past')
         
         # Store cleaned values
         self.card_number = card_clean
@@ -294,15 +326,27 @@ class PaymentMethodResponse(BaseModel):
     """Payment method response schema"""
     id: int
     host_id: int
+    name: str
     method_type: str  # Will be automatically converted from PaymentMethodType enum
     mpesa_number: Optional[str] = None
     card_last_four: Optional[str] = None
     card_type: Optional[str] = None
-    expiry_month: Optional[int] = None
-    expiry_year: Optional[int] = None
+    expiry_month: Optional[int] = None  # Stored internally, used to format expiry_date
+    expiry_year: Optional[int] = None  # Stored internally, used to format expiry_date
+    expiry_date: Optional[str] = None  # Formatted as MM/YY (e.g., "08/30")
     is_default: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    @model_validator(mode='after')
+    def format_expiry_date(self):
+        """Format expiry date as MM/YY if card payment method"""
+        if self.expiry_month is not None and self.expiry_year is not None:
+            # Convert YYYY to YY (last 2 digits)
+            year_short = self.expiry_year % 100
+            # Format as MM/YY with zero padding
+            self.expiry_date = f"{self.expiry_month:02d}/{year_short:02d}"
+        return self
 
     class Config:
         from_attributes = True

@@ -25,12 +25,24 @@ pip install -r requirements.txt
 
 4. Run the application:
 ```bash
+# For local development (localhost only)
 uvicorn app.main:app --reload
+
+# For network access (Expo Go, mobile devices, etc.)
+uvicorn app.main:app --reload --host 0.0.0.0
 ```
 
-The API will be available at `http://localhost:8000`
-- API Documentation (Swagger): `http://localhost:8000/docs`
-- Alternative docs (ReDoc): `http://localhost:8000/redoc`
+The API will be available at:
+- Local: `http://localhost:8000`
+- Network: `http://<your-local-ip>:8000` (e.g., `http://192.168.88.253:8000`)
+- API Documentation (Swagger): `http://localhost:8000/docs` or `http://<your-local-ip>:8000/docs`
+- Alternative docs (ReDoc): `http://localhost:8000/redoc` or `http://<your-local-ip>:8000/redoc`
+
+**Note for Expo Go/Mobile Development:**
+- Make sure your computer and phone are on the same WiFi network
+- Use your local IP address (not localhost) in your app
+- Run the server with `--host 0.0.0.0` to allow network connections
+- Find your local IP with: `ipconfig` (Windows) or `ifconfig` (Mac/Linux)
 
 ## Database
 

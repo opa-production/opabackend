@@ -13,7 +13,7 @@ from app.schemas import TokenData
 # JWT settings
 SECRET_KEY = "your-secret-key-change-in-production"  # Should be in environment variables
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours (1440 minutes) - more reasonable for mobile apps
 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()

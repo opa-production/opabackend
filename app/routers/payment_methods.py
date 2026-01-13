@@ -34,6 +34,7 @@ async def add_mpesa_payment_method(
     """
     Add a new M-Pesa payment method for the authenticated host
     
+    - **name**: Name for this M-Pesa payment method (e.g., "John's M-Pesa")
     - **mpesa_number**: M-Pesa phone number (9-15 digits, e.g., 254712345678)
     - **is_default**: Set as default payment method
     
@@ -51,6 +52,7 @@ async def add_mpesa_payment_method(
     # Create M-Pesa payment method
     db_payment_method = PaymentMethod(
         host_id=current_host.id,
+        name=request.name,
         method_type=PaymentMethodType.MPESA,
         mpesa_number=request.mpesa_number,
         is_default=request.is_default
@@ -72,10 +74,10 @@ async def add_card_payment_method(
     """
     Add a new card payment method (Visa or Mastercard) for the authenticated host
     
+    - **name**: Name for this card payment method (e.g., "My Visa Card")
     - **card_number**: 16-digit card number (Visa must start with 4, Mastercard with 5)
+    - **expiry_date**: Expiry date in MM/YY format (e.g., "08/30")
     - **cvc**: 3-4 digit CVC/CVV code
-    - **expiry_month**: Expiry month (1-12)
-    - **expiry_year**: Expiry year (YYYY, must not be in the past)
     - **card_type**: Card type ("visa" or "mastercard")
     - **is_default**: Set as default payment method
     
@@ -99,14 +101,19 @@ async def add_card_payment_method(
         "mastercard": PaymentMethodType.MASTERCARD
     }
     
+    # Get parsed expiry month and year from validation
+    expiry_month = request._expiry_month
+    expiry_year = request._expiry_year
+    
     db_payment_method = PaymentMethod(
         host_id=current_host.id,
+        name=request.name,
         method_type=method_type_map[request.card_type],
         card_number_hash=hash_card_number(request.card_number),
         card_last_four=card_last_four,
         card_type=request.card_type,
-        expiry_month=request.expiry_month,
-        expiry_year=request.expiry_year,
+        expiry_month=expiry_month,
+        expiry_year=expiry_year,
         cvc_hash=hash_cvc(request.cvc),
         is_default=request.is_default
     )
