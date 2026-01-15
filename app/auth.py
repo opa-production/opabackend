@@ -7,7 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Host, Client
+from app.models import Host, Client, Admin
 from app.schemas import TokenData
 
 # JWT settings
@@ -18,6 +18,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours (1440 minutes) - more reasonable 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()
 client_security = HTTPBearer()
+admin_security = HTTPBearer()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -55,6 +56,11 @@ def get_host_by_email(db: Session, email: str) -> Optional[Host]:
 def get_client_by_email(db: Session, email: str) -> Optional[Client]:
     """Get client by email"""
     return db.query(Client).filter(Client.email == email).first()
+
+
+def get_admin_by_email(db: Session, email: str) -> Optional[Admin]:
+    """Get admin by email"""
+    return db.query(Admin).filter(Admin.email == email).first()
 
 
 async def get_current_host(
@@ -99,8 +105,6 @@ async def get_current_host(
                 detail="Invalid host ID in token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-            
-        token_data = TokenData(host_id=host_id)
     except JWTError as e:
         error_msg = str(e)
         if "expired" in error_msg.lower() or "exp" in error_msg.lower():
@@ -119,13 +123,22 @@ async def get_current_host(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    host = db.query(Host).filter(Host.id == token_data.host_id).first()
+    host = db.query(Host).filter(Host.id == host_id).first()
     if host is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Host not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Check if host is active
+    if not host.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Host account is inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     return host
 
 
@@ -134,6 +147,12 @@ async def get_current_client(
     db: Session = Depends(get_db)
 ) -> Client:
     """Dependency to get current authenticated client from JWT token"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -190,5 +209,92 @@ async def get_current_client(
             detail="Client not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Check if client is active
+    if not client.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Client account is inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     return client
 
+
+async def get_current_admin(
+    credentials: HTTPAuthorizationCredentials = Security(admin_security),
+    db: Session = Depends(get_db)
+) -> Admin:
+    """Dependency to get current authenticated admin from JWT token"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Verify token role is "admin"
+        role = payload.get("role")
+        if role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This endpoint requires admin authentication",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        admin_id_str = payload.get("sub")
+        
+        if admin_id_str is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token missing subject (sub) claim",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Convert string to int (JWT sub claim must be a string)
+        try:
+            admin_id = int(admin_id_str)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid admin ID in token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except JWTError as e:
+        error_msg = str(e)
+        if "expired" in error_msg.lower() or "exp" in error_msg.lower():
+            detail = "Token has expired"
+        else:
+            detail = f"Invalid token: {error_msg}"
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error validating token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    if admin is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check if admin is active
+    if not admin.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin account is inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return admin

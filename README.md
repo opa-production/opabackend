@@ -72,6 +72,19 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `GET /api/v1/cars` - List all cars (with pagination)
 - `GET /api/v1/host/cars` - List all cars belonging to authenticated host
 
+### Media Upload (Requires authentication)
+
+#### Client Media Endpoints
+- `POST /api/v1/client/upload/avatar` - Upload client profile avatar
+- `POST /api/v1/client/upload/document` - Upload client documents (ID or license)
+
+#### Host Media Endpoints
+- `POST /api/v1/host/upload/avatar` - Upload host profile avatar
+- `POST /api/v1/host/upload/cover` - Upload host profile cover image
+- `POST /api/v1/host/upload/document` - Upload host documents (ID or license)
+- `POST /api/v1/host/upload/vehicle/{car_id}/images` - Upload vehicle images (up to 10)
+- `POST /api/v1/host/upload/vehicle/{car_id}/video` - Upload vehicle video
+
 ## Development
 
 See `guide.md` for the complete development checklist and project requirements.
