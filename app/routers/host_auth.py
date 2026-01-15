@@ -63,6 +63,27 @@ async def register_host(
     db.commit()
     db.refresh(db_host)
     
+    # Create welcome notification from CEO
+    welcome_message = (
+        f"Hey {db_host.full_name}! Welcome to the family. I'm Deon, the founder of Ardena. "
+        f"We built this platform to make car ownership more rewarding for people like you, "
+        f"and I'm so glad you've joined us. You're in great hands with our support team, "
+        f"but I also want to make sure you have my direct line: +254702248984. "
+        f"Don't hesitate to say hi or ask a question. Happy hosting!"
+    )
+    
+    welcome_notification = Notification(
+        recipient_type="host",
+        recipient_id=db_host.id,
+        title="Welcome Message from CEO",
+        message=welcome_message,
+        notification_type="info",
+        sender_name="Deon, CEO Ardena"
+    )
+    
+    db.add(welcome_notification)
+    db.commit()
+    
     return db_host
 
 
