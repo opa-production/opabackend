@@ -14,6 +14,7 @@ from app.schemas import TokenData
 SECRET_KEY = "your-secret-key-change-in-production"  # Should be in environment variables
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours (1440 minutes) - more reasonable for mobile apps
+REFRESH_TOKEN_EXPIRE_DAYS = 7  # 7 days for refresh tokens
 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()
@@ -42,10 +43,74 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({
+        "exp": expire,
+        "type": "access",  # Token type identifier
+        "iat": datetime.utcnow()  # Issued at timestamp
+    })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def create_refresh_token(data: dict) -> str:
+    """
+    Create JWT refresh token with longer expiration.
+    
+    Args:
+        data: Dictionary containing token payload (must include 'sub' and 'role')
+    
+    Returns:
+        Encoded JWT refresh token string
+    """
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    
+    to_encode.update({
+        "exp": expire,
+        "type": "refresh",  # Token type identifier
+        "iat": datetime.utcnow()  # Issued at timestamp
+    })
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+def verify_refresh_token(token: str) -> dict:
+    """
+    Verify and decode a refresh token.
+    
+    Args:
+        token: The refresh token string
+    
+    Returns:
+        Decoded token payload
+    
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Verify this is a refresh token
+        if payload.get("type") != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type - expected refresh token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        return payload
+    except JWTError as e:
+        error_msg = str(e)
+        if "expired" in error_msg.lower():
+            detail = "Refresh token has expired. Please login again."
+        else:
+            detail = f"Invalid refresh token: {error_msg}"
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def get_host_by_email(db: Session, email: str) -> Optional[Host]:

@@ -6,12 +6,17 @@ media files in Supabase Storage. All media is organized by user ID
 for proper access control and management.
 """
 import os
-from supabase import create_client, Client as SupabaseClient
 from fastapi import HTTPException, status
 from datetime import datetime
 import uuid
 from typing import Optional
 import logging
+
+try:
+    from supabase import create_client, Client as SupabaseClient
+except ImportError:
+    SupabaseClient = None
+    create_client = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,7 +34,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         "Supabase configuration missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
         "environment variables. Media uploads will fail until configured."
     )
-else:
+elif create_client is not None:
     # Initialize Supabase client with service role key for backend operations
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)

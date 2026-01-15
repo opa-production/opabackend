@@ -219,9 +219,20 @@ class CarResponse(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     is_complete: bool
+    verification_status: Optional[str] = None
+    is_hidden: Optional[bool] = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    class Config:
+        from_attributes = True
+
+
+class CarStatusResponse(BaseModel):
+    """Car verification status response"""
+    car_id: int
+    verification_status: str
+    
     class Config:
         from_attributes = True
 
@@ -362,9 +373,566 @@ class PaymentMethodResponse(BaseModel):
 class PaymentMethodListResponse(BaseModel):
     """List of payment methods response"""
     payment_methods: List[PaymentMethodResponse]
+
+
+# Feedback Schemas
+class FeedbackCreateRequest(BaseModel):
+    """Create feedback request schema"""
+    content: str = Field(..., min_length=1, max_length=250, description="Feedback content (max 250 characters)")
+
+
+class FeedbackResponse(BaseModel):
+    """Feedback response schema"""
+    id: int
+    host_id: int
+    content: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class FeedbackListResponse(BaseModel):
+    """List of feedbacks response"""
+    feedbacks: List[FeedbackResponse]
     
     class Config:
         from_attributes = True
+
+
+# Support Message Schemas
+class SupportMessageRequest(BaseModel):
+    """Request to send a message in support conversation"""
+    message: str = Field(..., min_length=1, max_length=2000, description="Message content")
+
+
+class SupportMessageResponse(BaseModel):
+    """Individual message in a conversation"""
+    id: int
+    conversation_id: int
+    sender_type: str  # "host" or "admin"
+    sender_id: int
+    sender_name: Optional[str] = None  # Host name or Admin name
+    message: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SupportConversationResponse(BaseModel):
+    """Support conversation with messages"""
+    id: int
+    host_id: int
+    host_name: Optional[str] = None
+    host_email: Optional[str] = None
+    status: str  # open, closed
+    is_read_by_host: bool
+    is_read_by_admin: bool
+    messages: List[SupportMessageResponse]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SupportConversationListResponse(BaseModel):
+    """Paginated support conversations list (for admin)"""
+    conversations: List[SupportConversationResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+    unread_count: Optional[int] = None  # For admin: unread conversations count
+
+
+class AdminResponseRequest(BaseModel):
+    """Request for admin to respond to a support conversation"""
+    message: str = Field(..., min_length=1, max_length=2000, description="Admin response message")
+
+
+# ==================== ADMIN SCHEMAS ====================
+
+# Admin Auth Schemas
+class AdminProfileResponse(BaseModel):
+    """Complete admin profile response"""
+    id: int
+    full_name: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminLoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class AdminLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    admin: AdminProfileResponse
+
+
+# Admin User Management Schemas
+class HostListResponse(BaseModel):
+    """Host list item response"""
+    id: int
+    full_name: str
+    email: str
+    mobile_number: Optional[str] = None
+    is_active: bool
+    cars_count: int = 0
+    payment_methods_count: int = 0
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class HostDetailResponse(BaseModel):
+    """Full host detail response"""
+    id: int
+    full_name: str
+    email: str
+    bio: Optional[str] = None
+    mobile_number: Optional[str] = None
+    id_number: Optional[str] = None
+    is_active: bool
+    cars_count: int = 0
+    payment_methods_count: int = 0
+    feedbacks_count: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class HostUpdateRequest(BaseModel):
+    """Update host profile request"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    bio: Optional[str] = Field(None, max_length=2000)
+    mobile_number: Optional[str] = Field(None, max_length=50)
+    id_number: Optional[str] = Field(None, max_length=100)
+
+
+class PaginatedHostListResponse(BaseModel):
+    """Paginated host list response"""
+    hosts: List[HostListResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+class ClientListResponse(BaseModel):
+    """Client list item response"""
+    id: int
+    full_name: str
+    email: str
+    mobile_number: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClientDetailResponse(BaseModel):
+    """Full client detail response"""
+    id: int
+    full_name: str
+    email: str
+    bio: Optional[str] = None
+    fun_fact: Optional[str] = None
+    mobile_number: Optional[str] = None
+    id_number: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientUpdateRequest(BaseModel):
+    """Update client profile request"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    bio: Optional[str] = Field(None, max_length=2000)
+    fun_fact: Optional[str] = Field(None, max_length=500)
+    mobile_number: Optional[str] = Field(None, max_length=50)
+    id_number: Optional[str] = Field(None, max_length=100)
+
+
+class PaginatedClientListResponse(BaseModel):
+    """Paginated client list response"""
+    clients: List[ClientListResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+# Admin Car Management Schemas
+class CarDetailResponse(BaseModel):
+    """Car detail response with host information"""
+    id: int
+    host_id: int
+    host_name: str
+    host_email: str
+    name: Optional[str] = None
+    model: Optional[str] = None
+    body_type: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    seats: Optional[int] = None
+    fuel_type: Optional[str] = None
+    transmission: Optional[str] = None
+    color: Optional[str] = None
+    mileage: Optional[int] = None
+    features: Optional[List[str]] = None
+    daily_rate: Optional[float] = None
+    weekly_rate: Optional[float] = None
+    monthly_rate: Optional[float] = None
+    min_rental_days: Optional[int] = None
+    max_rental_days: Optional[int] = None
+    min_age_requirement: Optional[int] = None
+    rules: Optional[str] = None
+    location_name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    is_complete: bool
+    verification_status: str
+    rejection_reason: Optional[str] = None
+    is_hidden: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CarStatusUpdateRequest(BaseModel):
+    """Update car verification status request"""
+    verification_status: str
+    rejection_reason: Optional[str] = Field(None, max_length=1000, description="Required if status is 'denied'")
+
+    @model_validator(mode='after')
+    def validate_rejection_reason(self):
+        if self.verification_status == "denied" and not self.rejection_reason:
+            raise ValueError('rejection_reason is required when verification_status is "denied"')
+        return self
+
+
+class BulkCarStatusUpdateRequest(BaseModel):
+    """Bulk update car status request"""
+    car_ids: List[int] = Field(..., min_length=1, description="List of car IDs to update")
+    verification_status: str
+    rejection_reason: Optional[str] = Field(None, max_length=1000, description="Required if status is 'denied'")
+
+    @model_validator(mode='after')
+    def validate_rejection_reason(self):
+        if self.verification_status == "denied" and not self.rejection_reason:
+            raise ValueError('rejection_reason is required when verification_status is "denied"')
+        return self
+
+
+class CarRejectRequest(BaseModel):
+    """Reject car request"""
+    rejection_reason: str = Field(..., min_length=1, max_length=1000, description="Reason for rejection")
+
+
+class CarUpdateRequest(BaseModel):
+    """Admin car update request - can update any field"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    model: Optional[str] = Field(None, min_length=1, max_length=100)
+    body_type: Optional[str] = Field(None, min_length=1, max_length=50)
+    year: Optional[int] = Field(None, ge=1900, le=2100)
+    description: Optional[str] = Field(None, min_length=1)
+    seats: Optional[int] = Field(None, ge=1, le=50)
+    fuel_type: Optional[str] = Field(None, min_length=1, max_length=50)
+    transmission: Optional[str] = Field(None, min_length=1, max_length=50)
+    color: Optional[str] = Field(None, min_length=1, max_length=50)
+    mileage: Optional[int] = Field(None, ge=0)
+    features: Optional[List[str]] = Field(None, max_length=12)
+    daily_rate: Optional[float] = Field(None, gt=0)
+    weekly_rate: Optional[float] = Field(None, gt=0)
+    monthly_rate: Optional[float] = Field(None, gt=0)
+    min_rental_days: Optional[int] = Field(None, ge=1)
+    max_rental_days: Optional[int] = Field(None, ge=1)
+    min_age_requirement: Optional[int] = Field(None, ge=18, le=100)
+    rules: Optional[str] = Field(None, min_length=1)
+    location_name: Optional[str] = Field(None, max_length=255)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+
+
+class AdminCarListResponse(BaseModel):
+    """Car list item response for admin"""
+    id: int
+    host_id: int
+    host_name: str
+    name: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    verification_status: str
+    is_hidden: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PaginatedCarListResponse(BaseModel):
+    """Paginated car list response"""
+    cars: List[AdminCarListResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+# Admin Dashboard Schemas
+class DashboardStatsResponse(BaseModel):
+    """Dashboard statistics response"""
+    total_hosts: int
+    active_hosts: int
+    inactive_hosts: int
+    total_clients: int
+    active_clients: int
+    inactive_clients: int
+    total_cars: int
+    cars_awaiting_verification: int
+    verified_cars: int
+    rejected_cars: int
+    hidden_cars: int
+    visible_cars: int
+
+
+class ActivityItem(BaseModel):
+    """Activity item response"""
+    type: str  # "host_registration", "client_registration", "car_submission", "car_status_change"
+    entity_type: str  # "host", "client", "car"
+    entity_id: int
+    entity_name: Optional[str] = None
+    description: str
+    timestamp: datetime
+
+
+class RecentActivityResponse(BaseModel):
+    """Recent activity response"""
+    activities: List[ActivityItem]
+    total: int
+
+
+class VerificationQueueStatsResponse(BaseModel):
+    """Verification queue statistics response"""
+    cars_awaiting_verification: int
+    average_verification_time_hours: Optional[float] = None  # Average time from submission to verification
+    rejection_rate: float  # Percentage of rejected cars (0-100)
+    total_processed: int  # Total cars that have been verified or rejected
+    verified_count: int
+    rejected_count: int
+
+
+# Admin Feedback Management Schemas
+class AdminFeedbackListResponse(BaseModel):
+    """Feedback list item with host information"""
+    id: int
+    host_id: int
+    host_name: str
+    host_email: str
+    content: str
+    is_flagged: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminFeedbackDetailResponse(BaseModel):
+    """Full feedback detail with host information"""
+    id: int
+    host_id: int
+    host_name: str
+    host_email: str
+    host_mobile_number: Optional[str] = None
+    content: str
+    is_flagged: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PaginatedFeedbackListResponse(BaseModel):
+    """Paginated feedback list response"""
+    feedbacks: List[AdminFeedbackListResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+# Admin Notification Schemas
+class NotificationRequest(BaseModel):
+    """Notification request schema"""
+    title: str = Field(..., min_length=1, max_length=255, description="Notification title")
+    message: str = Field(..., min_length=1, max_length=1000, description="Notification message")
+    type: Optional[str] = Field("info", description="Notification type (info, warning, success, error)")
+
+
+class BroadcastNotificationRequest(BaseModel):
+    """Broadcast notification request"""
+    title: str = Field(..., min_length=1, max_length=255)
+    message: str = Field(..., min_length=1, max_length=1000)
+    type: Optional[str] = Field("info", description="Notification type")
+
+
+class UserNotificationRequest(BaseModel):
+    """Send notification to specific user"""
+    user_type: str = Field(..., pattern="^(host|client)$", description="User type: host or client")
+    user_id: int = Field(..., description="User ID")
+    title: str = Field(..., min_length=1, max_length=255)
+    message: str = Field(..., min_length=1, max_length=1000)
+    type: Optional[str] = Field("info", description="Notification type")
+
+
+class NotificationResponse(BaseModel):
+    """Notification response"""
+    message: str
+    sent_count: Optional[int] = None
+    user_id: Optional[int] = None
+    user_type: Optional[str] = None
+
+
+# Host Notification Schemas
+class HostNotificationResponse(BaseModel):
+    """Notification response for host"""
+    id: int
+    title: str
+    message: str
+    notification_type: str
+    sender_name: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class HostNotificationListResponse(BaseModel):
+    """List of notifications for host"""
+    notifications: List[HostNotificationResponse]
+    total: int
+    unread_count: int
+
+
+# Admin Management Schemas
+class AdminListResponse(BaseModel):
+    """Admin list item"""
+    id: int
+    full_name: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminDetailResponse(BaseModel):
+    """Full admin detail"""
+    id: int
+    full_name: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminCreateRequest(BaseModel):
+    """Create new admin request"""
+    full_name: str = Field(..., min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+    password_confirmation: str = Field(..., min_length=8)
+    role: str = Field("admin", pattern="^(admin|moderator)$", description="Role: admin or moderator (super_admin cannot be created via API)")
+    is_active: bool = Field(True, description="Account active status")
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.password != self.password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
+
+
+class AdminUpdateRequest(BaseModel):
+    """Update admin profile request"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    role: Optional[str] = Field(None, pattern="^(admin|moderator)$", description="Role: admin or moderator")
+    is_active: Optional[bool] = None
+
+
+class AdminPasswordChangeRequest(BaseModel):
+    """Change admin password request"""
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
+    new_password_confirmation: str = Field(..., min_length=8)
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.new_password != self.new_password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
+
+
+class AdminOwnPasswordChangeRequest(BaseModel):
+    """Change own password request"""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
+    new_password_confirmation: str = Field(..., min_length=8)
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.new_password != self.new_password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
+
+
+class AdminOwnProfileUpdateRequest(BaseModel):
+    """Update own profile request"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+
+
+class PaginatedAdminListResponse(BaseModel):
+    """Paginated admin list response"""
+    admins: List[AdminListResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
 
 
 # ==================== TOKEN SCHEMAS ====================

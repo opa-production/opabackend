@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models import Car, Host, VerificationStatus
 from app.schemas import (
     CarDetailResponse,
-    CarListResponse,
+    AdminCarListResponse,
     CarStatusUpdateRequest,
     BulkCarStatusUpdateRequest,
     CarRejectRequest,
@@ -110,7 +110,7 @@ async def list_cars(
     # Build response
     car_list = []
     for car in cars:
-        car_list.append(CarListResponse(
+        car_list.append(AdminCarListResponse(
             id=car.id,
             host_id=car.host_id,
             host_name=car.host.full_name,
@@ -427,7 +427,7 @@ async def get_cars_awaiting_verification(
     cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
     
     car_list = [
-        CarListResponse(
+        AdminCarListResponse(
             id=car.id,
             host_id=car.host_id,
             host_name=car.host.full_name,
@@ -464,7 +464,7 @@ async def get_verified_cars(
     cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
     
     car_list = [
-        CarListResponse(
+        AdminCarListResponse(
             id=car.id,
             host_id=car.host_id,
             host_name=car.host.full_name,
@@ -501,7 +501,7 @@ async def get_rejected_cars(
     cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
     
     car_list = [
-        CarListResponse(
+        AdminCarListResponse(
             id=car.id,
             host_id=car.host_id,
             host_name=car.host.full_name,

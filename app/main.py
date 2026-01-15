@@ -34,7 +34,7 @@ def migrate_database():
     """Add missing columns to existing tables"""
     inspector = inspect(engine)
     
-    # Check and add is_active to hosts table
+    # Check and add missing columns to hosts table
     if 'hosts' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('hosts')]
         if 'is_active' not in columns:
@@ -42,8 +42,24 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE hosts ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
             print("✓ Added is_active column to hosts table")
+        if 'avatar_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN avatar_url VARCHAR(500)"))
+            print("✓ Added avatar_url column to hosts table")
+        if 'cover_image_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN cover_image_url VARCHAR(500)"))
+            print("✓ Added cover_image_url column to hosts table")
+        if 'id_document_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN id_document_url VARCHAR(500)"))
+            print("✓ Added id_document_url column to hosts table")
+        if 'license_document_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN license_document_url VARCHAR(500)"))
+            print("✓ Added license_document_url column to hosts table")
     
-    # Check and add is_active to clients table
+    # Check and add missing columns to clients table
     if 'clients' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('clients')]
         if 'is_active' not in columns:
@@ -51,8 +67,20 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
             print("✓ Added is_active column to clients table")
+        if 'avatar_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN avatar_url VARCHAR(500)"))
+            print("✓ Added avatar_url column to clients table")
+        if 'id_document_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN id_document_url VARCHAR(500)"))
+            print("✓ Added id_document_url column to clients table")
+        if 'license_document_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN license_document_url VARCHAR(500)"))
+            print("✓ Added license_document_url column to clients table")
     
-    # Check and add rejection_reason and is_hidden to cars table
+    # Check and add missing columns to cars table
     if 'cars' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('cars')]
         if 'rejection_reason' not in columns:
@@ -63,6 +91,14 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE cars ADD COLUMN is_hidden INTEGER DEFAULT 0 NOT NULL"))
             print("✓ Added is_hidden column to cars table")
+        if 'image_urls' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN image_urls TEXT"))
+            print("✓ Added image_urls column to cars table")
+        if 'video_url' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN video_url VARCHAR(500)"))
+            print("✓ Added video_url column to cars table")
     
     # Check and add is_flagged to feedbacks table
     if 'feedbacks' in inspector.get_table_names():

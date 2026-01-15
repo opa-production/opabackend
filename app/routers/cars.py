@@ -9,12 +9,18 @@ from datetime import datetime, date
 import json
 
 from app.database import get_db
-from app.models import Car, Host, Booking, BookingStatus
-from app.auth import get_current_client
+from app.models import Car, Host, Booking, BookingStatus, VerificationStatus
+from app.auth import get_current_client, get_current_host
 from app.schemas import (
     CarListingResponse,
     CarListResponse,
     CarAvailabilityResponse,
+    CarResponse,
+    CarStatusResponse,
+    CarBasicsRequest,
+    CarTechnicalSpecsRequest,
+    CarPricingRulesRequest,
+    CarLocationRequest,
 )
 
 router = APIRouter()
@@ -40,6 +46,47 @@ def parse_features(features_str: Optional[str]) -> List[str]:
         return features if isinstance(features, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _car_to_response(db_car: Car) -> CarResponse:
+    """Helper function to convert Car model to CarResponse"""
+    features = None
+    if db_car.features:
+        try:
+            features = json.loads(db_car.features)
+        except (json.JSONDecodeError, TypeError):
+            features = None
+    
+    return CarResponse(
+        id=db_car.id,
+        host_id=db_car.host_id,
+        name=db_car.name,
+        model=db_car.model,
+        body_type=db_car.body_type,
+        year=db_car.year,
+        description=db_car.description,
+        seats=db_car.seats,
+        fuel_type=db_car.fuel_type,
+        transmission=db_car.transmission,
+        color=db_car.color,
+        mileage=db_car.mileage,
+        features=features,
+        daily_rate=db_car.daily_rate,
+        weekly_rate=db_car.weekly_rate,
+        monthly_rate=db_car.monthly_rate,
+        min_rental_days=db_car.min_rental_days,
+        max_rental_days=db_car.max_rental_days,
+        min_age_requirement=db_car.min_age_requirement,
+        rules=db_car.rules,
+        location_name=db_car.location_name,
+        latitude=db_car.latitude,
+        longitude=db_car.longitude,
+        is_complete=db_car.is_complete,
+        verification_status=VerificationStatus(db_car.verification_status).value if db_car.verification_status else VerificationStatus.AWAITING.value,
+        is_hidden=db_car.is_hidden,
+        created_at=db_car.created_at,
+        updated_at=db_car.updated_at
+    )
 
 
 def car_to_listing_response(car: Car) -> dict:
@@ -155,6 +202,191 @@ async def get_car_listings(
     )
 
 
+# ==================== HOST CAR CREATION & UPDATE ENDPOINTS ====================
+# These must come before /cars/{car_id} to avoid route conflicts
+
+@router.post("/cars/basics", response_model=CarResponse, status_code=status.HTTP_201_CREATED)
+async def create_car_basics(
+    request: CarBasicsRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint 1: Create car with basic information
+    
+    - **name**: Car name
+    - **model**: Car model
+    - **body_type**: Body type (e.g., Sedan, SUV, Hatchback)
+    - **year**: Manufacturing year
+    - **description**: Long-form description of the car
+    
+    Creates a new car listing in incomplete state, linked to the authenticated host.
+    """
+    # Create new car record
+    db_car = Car(
+        host_id=current_host.id,
+        name=request.name,
+        model=request.model,
+        body_type=request.body_type,
+        year=request.year,
+        description=request.description,
+        is_complete=False,
+        verification_status=VerificationStatus.AWAITING.value
+    )
+    
+    db.add(db_car)
+    db.commit()
+    db.refresh(db_car)
+    
+    return _car_to_response(db_car)
+
+
+@router.put("/cars/{car_id}/specs", response_model=CarResponse)
+async def update_car_specs(
+    car_id: int,
+    request: CarTechnicalSpecsRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint 2: Update car with technical specifications
+    
+    - **seats**: Number of seats (1-50)
+    - **fuel_type**: Fuel type (e.g., Gasoline, Diesel, Electric)
+    - **transmission**: Transmission type (e.g., Manual, Automatic)
+    - **color**: Car color
+    - **mileage**: Current mileage
+    - **features**: List of up to 12 optional features
+    
+    Updates an existing car record with technical specifications.
+    """
+    # Get car and verify ownership
+    db_car = db.query(Car).filter(Car.id == car_id).first()
+    if not db_car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    if db_car.host_id != current_host.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to update this car"
+        )
+    
+    # Update car specs
+    db_car.seats = request.seats
+    db_car.fuel_type = request.fuel_type
+    db_car.transmission = request.transmission
+    db_car.color = request.color
+    db_car.mileage = request.mileage
+    db_car.features = json.dumps(request.features) if request.features else None
+    
+    db.commit()
+    db.refresh(db_car)
+    
+    return _car_to_response(db_car)
+
+
+@router.put("/cars/{car_id}/pricing", response_model=CarResponse)
+async def update_car_pricing(
+    car_id: int,
+    request: CarPricingRulesRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint 3: Update car with pricing and rules
+    
+    - **daily_rate**: Daily rental rate (required, > 0)
+    - **weekly_rate**: Weekly rental rate (required, > 0)
+    - **monthly_rate**: Monthly rental rate (required, > 0)
+    - **min_rental_days**: Minimum rental days (required, >= 1)
+    - **max_rental_days**: Maximum rental days (optional, >= 1)
+    - **min_age_requirement**: Minimum age requirement (required, 18-100)
+    - **rules**: Text-based car rules
+    
+    Updates an existing car record with pricing and rental rules.
+    """
+    # Get car and verify ownership
+    db_car = db.query(Car).filter(Car.id == car_id).first()
+    if not db_car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    if db_car.host_id != current_host.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to update this car"
+        )
+    
+    # Update pricing and rules
+    db_car.daily_rate = request.daily_rate
+    db_car.weekly_rate = request.weekly_rate
+    db_car.monthly_rate = request.monthly_rate
+    db_car.min_rental_days = request.min_rental_days
+    db_car.max_rental_days = request.max_rental_days
+    db_car.min_age_requirement = request.min_age_requirement
+    db_car.rules = request.rules
+    
+    db.commit()
+    db.refresh(db_car)
+    
+    return _car_to_response(db_car)
+
+
+@router.put("/cars/{car_id}/location", response_model=CarResponse)
+async def update_car_location(
+    car_id: int,
+    request: CarLocationRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint 4: Update car location and mark as complete
+    
+    - **location_name**: Location name as string (e.g., "Downtown Parking")
+    OR
+    - **latitude**: Geographic latitude (-90 to 90)
+    - **longitude**: Geographic longitude (-180 to 180)
+    
+    Updates an existing car record with location information and marks it as complete.
+    """
+    # Get car and verify ownership
+    db_car = db.query(Car).filter(Car.id == car_id).first()
+    if not db_car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    if db_car.host_id != current_host.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to update this car"
+        )
+    
+    # Update location
+    if request.location_name:
+        db_car.location_name = request.location_name
+        db_car.latitude = None
+        db_car.longitude = None
+    else:
+        db_car.location_name = None
+        db_car.latitude = request.latitude
+        db_car.longitude = request.longitude
+    
+    # Mark car as complete
+    db_car.is_complete = True
+    
+    db.commit()
+    db.refresh(db_car)
+    
+    return _car_to_response(db_car)
+
+
 @router.get("/cars/{car_id}", response_model=CarListingResponse)
 async def get_car_details(
     car_id: int,
@@ -250,3 +482,96 @@ async def get_car_availability(
         booked_dates=booked_dates,
         message=message
     )
+
+
+@router.get("/cars/{car_id}/status", response_model=CarStatusResponse)
+async def get_car_status(
+    car_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get car verification status
+    
+    Returns the verification status of a car (awaiting, verified, or denied).
+    This endpoint is used by the UI to monitor the verification status.
+    
+    - **car_id**: The unique identifier of the car
+    """
+    db_car = db.query(Car).filter(Car.id == car_id).first()
+    if not db_car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    # Convert string value to enum
+    # db_car.verification_status is now a string, so we convert it to the enum
+    try:
+        verification_status = VerificationStatus(db_car.verification_status)
+    except (ValueError, AttributeError):
+        verification_status = VerificationStatus.AWAITING
+    
+    return CarStatusResponse(
+        car_id=db_car.id,
+        verification_status=verification_status.value
+    )
+
+
+# ==================== HOST CAR MANAGEMENT ENDPOINTS ====================
+
+@router.get("/host/cars", response_model=List[CarResponse])
+async def list_my_cars(
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    List all cars belonging to the authenticated host
+    
+    Returns all cars owned by the currently authenticated host, regardless of verification status.
+    """
+    cars = db.query(Car).filter(Car.host_id == current_host.id).order_by(Car.created_at.desc()).all()
+    return [_car_to_response(car) for car in cars]
+
+
+@router.put("/host/cars/{car_id}/toggle-visibility", response_model=CarResponse)
+async def toggle_car_visibility(
+    car_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Toggle car visibility (show/hide) for verified cars
+    
+    This endpoint allows hosts to make their verified cars available or hidden from public listings.
+    Only verified cars can have their visibility toggled.
+    
+    - **car_id**: ID of the car to toggle visibility
+    """
+    # Get car and verify ownership
+    db_car = db.query(Car).filter(Car.id == car_id).first()
+    if not db_car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    if db_car.host_id != current_host.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to modify this car"
+        )
+    
+    # Check if car is verified
+    if db_car.verification_status != VerificationStatus.VERIFIED.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only verified cars can have their visibility toggled"
+        )
+    
+    # Toggle visibility
+    db_car.is_hidden = not db_car.is_hidden
+    
+    db.commit()
+    db.refresh(db_car)
+    
+    return _car_to_response(db_car)

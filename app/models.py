@@ -12,6 +12,13 @@ class PaymentMethodType(str, enum.Enum):
     MASTERCARD = "mastercard"
 
 
+class VerificationStatus(str, enum.Enum):
+    """Car verification status"""
+    AWAITING = "awaiting"
+    VERIFIED = "verified"
+    DENIED = "denied"
+
+
 class PaymentMethod(Base):
     """Payment methods for hosts"""
     __tablename__ = "payment_methods"
@@ -65,6 +72,9 @@ class Host(Base):
     id_document_url = Column(String(500), nullable=True)
     license_document_url = Column(String(500), nullable=True)
     
+    # Account status
+    is_active = Column(Boolean, default=True, nullable=False)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -72,6 +82,8 @@ class Host(Base):
     cars = relationship("Car", back_populates="host")
     # Relationship to payment methods
     payment_methods = relationship("PaymentMethod", back_populates="host", cascade="all, delete-orphan")
+    # Relationship to feedback
+    feedbacks = relationship("Feedback", back_populates="host", cascade="all, delete-orphan")
 
 
 class Client(Base):
@@ -93,6 +105,9 @@ class Client(Base):
     avatar_url = Column(String(500), nullable=True)
     id_document_url = Column(String(500), nullable=True)
     license_document_url = Column(String(500), nullable=True)
+    
+    # Account status
+    is_active = Column(Boolean, default=True, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -140,6 +155,9 @@ class Car(Base):
     
     # Status tracking
     is_complete = Column(Boolean, default=False)
+    verification_status = Column(String(20), default=VerificationStatus.AWAITING.value, nullable=False)
+    rejection_reason = Column(Text, nullable=True)  # Reason for rejection if denied
+    is_hidden = Column(Boolean, default=False, nullable=False)  # Hide from public listing
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -209,3 +227,114 @@ class Booking(Base):
 
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
+
+
+class Feedback(Base):
+    """Host feedback"""
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    
+    # Feedback content
+    content = Column(String(250), nullable=False)  # Max 250 characters
+    
+    # Admin moderation
+    is_flagged = Column(Boolean, default=False, nullable=False)  # Flagged for review
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship to host
+    host = relationship("Host", foreign_keys=[host_id])
+
+
+class Admin(Base):
+    """System administrators"""
+    __tablename__ = "admins"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    
+    # Admin role (super_admin, admin, moderator)
+    role = Column(String(50), default="admin", nullable=False)
+    
+    # Account status
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class Notification(Base):
+    """System notifications"""
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Recipient information
+    recipient_type = Column(String(20), nullable=False, index=True)  # "host" or "client"
+    recipient_id = Column(Integer, nullable=False, index=True)  # Host ID or Client ID
+    
+    # Notification content
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    notification_type = Column(String(20), default="info", nullable=False)  # info, warning, success, error
+    
+    # Sender information (admin who sent it)
+    sender_name = Column(String(255), nullable=False, default="[Deon,CEO ardena]")
+    
+    # Read status
+    is_read = Column(Boolean, default=False, nullable=False, index=True)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class SupportConversation(Base):
+    """Support conversation thread - one per host"""
+    __tablename__ = "support_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, unique=True, index=True)  # One conversation per host
+    
+    # Status
+    status = Column(String(20), default="open", nullable=False, index=True)  # open, closed
+    is_read_by_host = Column(Boolean, default=False, nullable=False)  # Host has read latest admin message
+    is_read_by_admin = Column(Boolean, default=False, nullable=False)  # Admin has read latest host message
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_message_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)  # Last message timestamp
+    
+    # Relationships
+    host = relationship("Host", foreign_keys=[host_id])
+    messages = relationship("SupportMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class SupportMessage(Base):
+    """Individual messages in a support conversation"""
+    __tablename__ = "support_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("support_conversations.id"), nullable=False, index=True)
+    
+    # Sender information
+    sender_type = Column(String(20), nullable=False, index=True)  # "host" or "admin"
+    sender_id = Column(Integer, nullable=False)  # Host ID or Admin ID
+    
+    # Message content
+    message = Column(Text, nullable=False)
+    
+    # Read status (for the recipient)
+    is_read = Column(Boolean, default=False, nullable=False)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    # Relationships
+    conversation = relationship("SupportConversation", back_populates="messages")

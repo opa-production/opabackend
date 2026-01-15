@@ -29,4 +29,8 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Project specific
+backup_connected_branch/
+admin-web/
+
 
