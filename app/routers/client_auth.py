@@ -67,11 +67,11 @@ async def register_client(
     
     # Create welcome notification from CEO
     welcome_message = (
-        f"Hey {db_client.full_name}! Welcome to the family. I'm Deon, the founder of Ardena. "
-        f"We built this platform to make car ownership more rewarding for people like you, "
-        f"and I'm so glad you've joined us. You're in great hands with our support team, "
+        f"Hey {db_client.full_name}! Welcome to Ardena. I'm Deon, the founder. "
+        f"We built this platform to make car rental simple, affordable, and convenient for you. "
+        f"I'm so glad you've joined our community. You're in great hands with our support team, "
         f"but I also want to make sure you have my direct line: +254702248984. "
-        f"Don't hesitate to say hi or ask a question. Happy hosting!"
+        f"Don't hesitate to say hi or ask a question. Happy renting!"
     )
     
     welcome_notification = Notification(
