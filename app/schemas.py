@@ -197,6 +197,45 @@ class CarLocationRequest(BaseModel):
         return self
 
 
+class CarMediaRequest(BaseModel):
+    """Request schema for updating car media URLs after Supabase upload
+    
+    Frontend sends:
+    - files: REQUIRED - Array of image URLs (max 12)
+    - cover_image: OPTIONAL - Cover image URL
+    - car_video: OPTIONAL - Video URL
+    """
+    files: List[str] = Field(..., description="List of image URLs (required, max 12 items)")
+    cover_image: Optional[str] = Field(default=None, max_length=500, description="Cover image URL (optional)")
+    car_video: Optional[str] = Field(default=None, max_length=500, description="Car video URL (optional)")
+    
+    @field_validator('files')
+    @classmethod
+    def validate_files(cls, v):
+        if len(v) > 12:
+            raise ValueError("Maximum 12 car images allowed")
+        if len(v) == 0:
+            raise ValueError("At least one image URL is required in files array")
+        return v
+
+
+class CarMediaUrlsRequest(BaseModel):
+    """Alternative request schema that accepts 'files' as primary field (for app compatibility)"""
+    files: Optional[List[str]] = Field(default=None, description="List of image URLs (optional, will be stored in car_images)")
+    cover_image: Optional[str] = Field(default=None, max_length=500, description="Cover image URL (optional, defaults to first file)")
+    car_video: Optional[str] = Field(default=None, max_length=500, description="Car video URL")
+    
+    @field_validator('files')
+    @classmethod
+    def validate_files(cls, v):
+        if v is not None:
+            if len(v) > 12:
+                raise ValueError("Maximum 12 car images allowed")
+            if len(v) == 0:
+                raise ValueError("If provided, files must contain at least one image URL")
+        return v
+
+
 class CarResponse(BaseModel):
     """Car response schema"""
     id: int
@@ -225,6 +264,11 @@ class CarResponse(BaseModel):
     is_complete: bool
     verification_status: Optional[str] = None
     is_hidden: Optional[bool] = False
+    cover_image: Optional[str] = None
+    car_images: Optional[str] = None  # JSON string: '["url1", "url2"]' (frontend expects string, not array)
+    car_video: Optional[str] = None
+    image_urls: Optional[List[str]] = None  # Legacy - parsed array for backward compatibility
+    video_url: Optional[str] = None  # Legacy
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -1139,6 +1183,35 @@ class CarAvailabilityResponse(BaseModel):
     available: bool
     booked_dates: List[dict]  # List of {start_date, end_date} for booked periods
     message: str
+
+
+# ==================== EXPLORE PAGE SCHEMAS ====================
+
+class CarExploreItemResponse(BaseModel):
+    """Simplified car item for explore page"""
+    id: int
+    cover_image: Optional[str] = None  # First image from image_urls
+    car_name: Optional[str] = None
+    price_per_day: Optional[float] = None
+    rating: Optional[float] = None  # Placeholder for future rating system
+    is_renters_favourite: bool = False  # Placeholder for future favourite system
+    is_wishlisted: bool = False  # Placeholder for future wishlist system
+    location_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CarExploreListResponse(BaseModel):
+    """Paginated explore page car list response"""
+    cars: List[CarExploreItemResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+    class Config:
+        from_attributes = True
 
 
 # ==================== BOOKING SCHEMAS ====================

@@ -183,8 +183,13 @@ class Car(Base):
     longitude = Column(Float, nullable=True)
     
     # Media URLs (stored in Supabase Storage)
-    image_urls = Column(Text, nullable=True)  # JSON array of image URLs
-    video_url = Column(String(500), nullable=True)
+    image_urls = Column(Text, nullable=True)  # JSON array of image URLs (legacy, kept for backward compatibility)
+    video_url = Column(String(500), nullable=True)  # Legacy, kept for backward compatibility
+    
+    # New media structure (uploaded directly by app to Supabase)
+    cover_image = Column(String(500), nullable=True)  # Single cover image URL
+    car_images = Column(Text, nullable=True)  # JSON array of up to 12 car image URLs
+    car_video = Column(String(500), nullable=True)  # Car video URL
     
     # Status tracking
     is_complete = Column(Boolean, default=False)

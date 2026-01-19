@@ -108,6 +108,18 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE cars ADD COLUMN video_url VARCHAR(500)"))
             print("✓ Added video_url column to cars table")
+        if 'cover_image' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN cover_image VARCHAR(500)"))
+            print("✓ Added cover_image column to cars table")
+        if 'car_images' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN car_images TEXT"))
+            print("✓ Added car_images column to cars table")
+        if 'car_video' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN car_video VARCHAR(500)"))
+            print("✓ Added car_video column to cars table")
     
     # Check and add is_flagged to feedbacks table
     if 'feedbacks' in inspector.get_table_names():
