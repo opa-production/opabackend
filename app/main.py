@@ -7,6 +7,7 @@ load_dotenv()
 
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
+from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
 from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings
 from app.admin import (
     auth as admin_auth,
@@ -79,6 +80,14 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN license_document_url VARCHAR(500)"))
             print("✓ Added license_document_url column to clients table")
+        if 'date_of_birth' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN date_of_birth DATE"))
+            print("✓ Added date_of_birth column to clients table")
+        if 'gender' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN gender VARCHAR(20)"))
+            print("✓ Added gender column to clients table")
     
     # Check and add missing columns to cars table
     if 'cars' in inspector.get_table_names():
@@ -107,6 +116,107 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
             print("✓ Added is_flagged column to feedbacks table")
+    
+    # Check and add client_id to payment_methods table, and make host_id nullable
+    if 'payment_methods' in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('payment_methods')]
+        column_info = {col['name']: col for col in inspector.get_columns('payment_methods')}
+        
+        # Add client_id if missing
+        if 'client_id' not in columns:
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE payment_methods ADD COLUMN client_id INTEGER"))
+                    print("✓ Added client_id column to payment_methods table")
+                except Exception as e:
+                    print(f"⚠️  Error adding client_id to payment_methods: {e}")
+        
+        # SQLite doesn't support ALTER COLUMN to change nullability directly
+        # We need to recreate the table. Check if host_id is NOT NULL
+        if 'host_id' in column_info:
+            host_id_nullable = column_info['host_id'].get('nullable', False)
+            if not host_id_nullable:
+                print("⚠️  payment_methods.host_id is NOT NULL, recreating table to make it nullable...")
+                try:
+                    with engine.begin() as conn:
+                        # Drop temp table if it exists from previous failed migration
+                        try:
+                            conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
+                        except Exception:
+                            pass
+                        
+                        # Create new table with correct schema
+                        conn.execute(text("""
+                            CREATE TABLE payment_methods_new (
+                                id INTEGER PRIMARY KEY,
+                                host_id INTEGER,
+                                client_id INTEGER,
+                                name VARCHAR(255) NOT NULL,
+                                method_type VARCHAR(20) NOT NULL,
+                                mpesa_number VARCHAR(20),
+                                card_number_hash VARCHAR(255),
+                                card_last_four VARCHAR(4),
+                                card_type VARCHAR(20),
+                                expiry_month INTEGER,
+                                expiry_year INTEGER,
+                                cvc_hash VARCHAR(255),
+                                is_default INTEGER DEFAULT 0,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME,
+                                FOREIGN KEY(host_id) REFERENCES hosts(id),
+                                FOREIGN KEY(client_id) REFERENCES clients(id)
+                            )
+                        """))
+                        
+                        # Copy existing data - preserve ALL existing payment methods (both host and client)
+                        # Get all columns from old table BEFORE we modify anything
+                        old_columns = [col['name'] for col in inspector.get_columns('payment_methods')]
+                        
+                        # Build SELECT statement: copy all existing columns, add NULL for new client_id column
+                        select_parts = []
+                        
+                        # Always include these core columns (they should exist)
+                        select_parts.append('id')
+                        select_parts.append('host_id')  # Preserve existing host_id values
+                        select_parts.append('NULL as client_id')  # New column, will be NULL for existing host methods
+                        
+                        # Copy all other existing columns
+                        for col in ['name', 'method_type', 'mpesa_number', 'card_number_hash', 
+                                   'card_last_four', 'card_type', 'expiry_month', 'expiry_year', 
+                                   'cvc_hash', 'is_default', 'created_at', 'updated_at']:
+                            if col in old_columns:
+                                select_parts.append(col)
+                            else:
+                                select_parts.append(f'NULL as {col}')
+                        
+                        # Copy all existing data - this preserves ALL host payment methods
+                        select_sql = f"SELECT {', '.join(select_parts)} FROM payment_methods"
+                        insert_sql = f"""
+                            INSERT INTO payment_methods_new 
+                            (id, host_id, client_id, name, method_type, mpesa_number, 
+                             card_number_hash, card_last_four, card_type, expiry_month, 
+                             expiry_year, cvc_hash, is_default, created_at, updated_at)
+                            {select_sql}
+                        """
+                        conn.execute(text(insert_sql))
+                        print(f"✓ Copied {conn.execute(text('SELECT COUNT(*) FROM payment_methods_new')).scalar()} payment methods to new table")
+                        
+                        # Drop old table
+                        conn.execute(text("DROP TABLE payment_methods"))
+                        
+                        # Rename new table
+                        conn.execute(text("ALTER TABLE payment_methods_new RENAME TO payment_methods"))
+                        
+                        print("✓ Recreated payment_methods table with nullable host_id and client_id")
+                except Exception as e:
+                    print(f"⚠️  Error recreating payment_methods table: {e}")
+                    # Try to drop temp table if it exists
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
+                    except Exception:
+                        pass
+                    print("   The table will be recreated on next startup with Base.metadata.create_all()")
     
     # Create notifications table if it doesn't exist
     if 'notifications' not in inspector.get_table_names():

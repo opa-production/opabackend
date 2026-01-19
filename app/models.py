@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -20,11 +20,12 @@ class VerificationStatus(str, enum.Enum):
 
 
 class PaymentMethod(Base):
-    """Payment methods for hosts"""
+    """Payment methods for hosts and clients"""
     __tablename__ = "payment_methods"
 
     id = Column(Integer, primary_key=True, index=True)
-    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=True, index=True)  # Nullable to support clients
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)  # Nullable to support hosts
     
     # Payment method name (e.g., "John's M-Pesa", "My Visa Card")
     name = Column(String(255), nullable=False)
@@ -48,8 +49,9 @@ class PaymentMethod(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # Relationship to host
-    host = relationship("Host", back_populates="payment_methods")
+    # Relationships
+    host = relationship("Host", foreign_keys=[host_id], back_populates="payment_methods")
+    client = relationship("Client", foreign_keys=[client_id], back_populates="payment_methods")
 
 
 class Host(Base):
@@ -98,8 +100,10 @@ class Client(Base):
     # Profile fields
     bio = Column(Text, nullable=True)
     fun_fact = Column(Text, nullable=True)
-    mobile_number = Column(String(50), nullable=True)
-    id_number = Column(String(100), nullable=True)  # Driver's licence/passport number
+    mobile_number = Column(String(50), nullable=True)  # Required for updates, but nullable for existing clients
+    id_number = Column(String(100), nullable=True)  # Required for updates, but nullable for existing clients
+    date_of_birth = Column(Date, nullable=True)  # Required for updates, but nullable for existing clients
+    gender = Column(String(20), nullable=True)  # Required for updates, but nullable for existing clients - e.g., "male", "female", "other"
     
     # Media URLs (stored in Supabase Storage)
     avatar_url = Column(String(500), nullable=True)
@@ -111,6 +115,35 @@ class Client(Base):
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship to driving license
+    driving_license = relationship("DrivingLicense", back_populates="client", uselist=False, cascade="all, delete-orphan")
+    # Relationship to payment methods
+    payment_methods = relationship("PaymentMethod", back_populates="client", cascade="all, delete-orphan")
+
+
+class DrivingLicense(Base):
+    """Client driving license information"""
+    __tablename__ = "driving_licenses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), unique=True, nullable=False, index=True)
+    
+    # License information
+    license_number = Column(String(50), nullable=False, unique=True, index=True)  # Mix of letters and numbers
+    category = Column(String(10), nullable=False)  # One letter + number (e.g., B1, C2, D1)
+    issue_date = Column(Date, nullable=False)
+    expiry_date = Column(Date, nullable=False)
+    
+    # Verification status
+    is_verified = Column(Boolean, default=False, nullable=False)  # Admin verification status
+    verification_notes = Column(Text, nullable=True)  # Admin notes
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship to client
+    client = relationship("Client", back_populates="driving_license")
 
 
 class Car(Base):

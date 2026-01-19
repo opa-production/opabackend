@@ -99,8 +99,10 @@ class ClientProfileUpdateRequest(BaseModel):
     """Update client profile fields"""
     bio: Optional[str] = Field(None, max_length=2000)
     fun_fact: Optional[str] = Field(None, max_length=500)
-    mobile_number: Optional[str] = Field(None, max_length=50)
-    id_number: Optional[str] = Field(None, max_length=100, description="Driver's licence, passport, or ID number")
+    mobile_number: str = Field(..., min_length=1, max_length=50, description="Mobile phone number (required)")
+    id_number: str = Field(..., min_length=1, max_length=100, description="Driver's licence, passport, or ID number (required)")
+    date_of_birth: date = Field(..., description="Date of birth (required, format: YYYY-MM-DD)")
+    gender: str = Field(..., min_length=1, max_length=20, description="Gender (required, e.g., 'male', 'female', 'other')")
 
 
 class ClientProfileResponse(BaseModel):
@@ -110,8 +112,10 @@ class ClientProfileResponse(BaseModel):
     email: str
     bio: Optional[str] = None
     fun_fact: Optional[str] = None
-    mobile_number: Optional[str] = None
-    id_number: Optional[str] = None
+    mobile_number: Optional[str] = None  # May be None for existing clients before migration
+    id_number: Optional[str] = None  # May be None for existing clients before migration
+    date_of_birth: Optional[date] = None  # May be None for existing clients before migration
+    gender: Optional[str] = None  # May be None for existing clients before migration
     avatar_url: Optional[str] = None
     id_document_url: Optional[str] = None
     license_document_url: Optional[str] = None
@@ -343,7 +347,8 @@ class CardPaymentMethodAddRequest(BaseModel):
 class PaymentMethodResponse(BaseModel):
     """Payment method response schema"""
     id: int
-    host_id: int
+    host_id: Optional[int] = None  # Nullable to support clients
+    client_id: Optional[int] = None  # Nullable to support hosts
     name: str
     method_type: str  # Will be automatically converted from PaymentMethodType enum
     mpesa_number: Optional[str] = None
@@ -353,7 +358,7 @@ class PaymentMethodResponse(BaseModel):
     expiry_year: Optional[int] = None  # Stored internally, used to format expiry_date
     expiry_date: Optional[str] = None  # Formatted as MM/YY (e.g., "08/30")
     is_default: bool
-    created_at: datetime
+    created_at: Optional[datetime] = None  # Made optional to handle cases where it might be None initially
     updated_at: Optional[datetime] = None
 
     @model_validator(mode='after')
@@ -583,6 +588,92 @@ class PaginatedClientListResponse(BaseModel):
     page: int
     limit: int
     total_pages: int
+
+
+# ==================== DRIVING LICENSE SCHEMAS ====================
+
+class DrivingLicenseRequest(BaseModel):
+    """Add or update driving license information"""
+    license_number: str = Field(..., min_length=5, max_length=50, description="License number (mix of letters and numbers)")
+    category: str = Field(..., min_length=2, max_length=10, description="License category (one letter + number, e.g., B1, C2)")
+    issue_date: date = Field(..., description="License issue date")
+    expiry_date: date = Field(..., description="License expiry date")
+    
+    @model_validator(mode='after')
+    def validate_license_number(self):
+        """Validate license number contains letters and numbers"""
+        if not any(c.isalpha() for c in self.license_number):
+            raise ValueError('License number must contain at least one letter')
+        if not any(c.isdigit() for c in self.license_number):
+            raise ValueError('License number must contain at least one number')
+        # Allow only alphanumeric characters
+        if not self.license_number.replace(' ', '').isalnum():
+            raise ValueError('License number can only contain letters, numbers, and spaces')
+        return self
+    
+    @model_validator(mode='after')
+    def validate_category(self):
+        """Validate category format: one letter followed by one or more numbers"""
+        category_clean = self.category.strip().upper()
+        if len(category_clean) < 2:
+            raise ValueError('Category must be at least 2 characters (one letter + number)')
+        
+        # Check if first character is a letter
+        if not category_clean[0].isalpha():
+            raise ValueError('Category must start with a letter')
+        
+        # Check if remaining characters are numbers
+        if not category_clean[1:].isdigit():
+            raise ValueError('Category must have numbers after the letter (e.g., B1, C2, D1)')
+        
+        self.category = category_clean
+        return self
+    
+    @model_validator(mode='after')
+    def validate_dates(self):
+        """Validate issue and expiry dates according to Kenyan system"""
+        from datetime import date, timedelta
+        
+        today = date.today()
+        
+        # Issue date cannot be in the future
+        if self.issue_date > today:
+            raise ValueError('Issue date cannot be in the future')
+        
+        # Calculate expected expiry date (3 years from issue date)
+        expected_expiry = self.issue_date + timedelta(days=3*365)  # 3 years
+        
+        # Allow small margin (within 5 days) for expiry date
+        days_diff = abs((self.expiry_date - expected_expiry).days)
+        if days_diff > 5:
+            raise ValueError(
+                f'Expiry date must be approximately 3 years from issue date. '
+                f'Expected expiry: {expected_expiry.strftime("%Y-%m-%d")}, '
+                f'but got: {self.expiry_date.strftime("%Y-%m-%d")}'
+            )
+        
+        # Expiry date must be after issue date
+        if self.expiry_date <= self.issue_date:
+            raise ValueError('Expiry date must be after issue date')
+        
+        return self
+
+
+class DrivingLicenseResponse(BaseModel):
+    """Driving license information response"""
+    id: int
+    client_id: int
+    license_number: str
+    category: str
+    issue_date: date
+    expiry_date: date
+    is_verified: bool
+    verification_notes: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
 
 
 # Admin Car Management Schemas
@@ -838,6 +929,27 @@ class HostNotificationResponse(BaseModel):
 class HostNotificationListResponse(BaseModel):
     """List of notifications for host"""
     notifications: List[HostNotificationResponse]
+    total: int
+    unread_count: int
+
+
+class ClientNotificationResponse(BaseModel):
+    """Notification response for client"""
+    id: int
+    title: str
+    message: str
+    notification_type: str
+    sender_name: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClientNotificationListResponse(BaseModel):
+    """List of notifications for client"""
+    notifications: List[ClientNotificationResponse]
     total: int
     unread_count: int
 
