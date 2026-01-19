@@ -355,4 +355,3 @@ async def mark_all_notifications_as_read(
     
     return {"message": f"{updated_count} notification(s) marked as read"}
 
-
