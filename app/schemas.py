@@ -1132,7 +1132,7 @@ class ClientTokenData(BaseModel):
 # ==================== CAR LISTING SCHEMAS (CLIENT VIEW) ====================
 
 class CarListingResponse(BaseModel):
-    """Car listing for client browsing"""
+    """Car listing for client browsing - full car details page"""
     id: int
     host_id: int
     name: Optional[str] = None
@@ -1156,8 +1156,14 @@ class CarListingResponse(BaseModel):
     location_name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # New media fields (preferred)
+    cover_image: Optional[str] = None
+    car_images: Optional[List[str]] = None  # Array of image URLs for carousel
+    car_video: Optional[str] = None
+    # Legacy fields (for backward compatibility)
     image_urls: Optional[List[str]] = None
     video_url: Optional[str] = None
+    # Host information
     host_name: Optional[str] = None
     host_avatar_url: Optional[str] = None
     created_at: datetime

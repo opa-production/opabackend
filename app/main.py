@@ -27,7 +27,10 @@ from sqlalchemy import text, inspect
 app = FastAPI(
     title="Car Rental API",
     description="Backend API for car rental platform",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs",  # Explicitly enable Swagger UI
+    redoc_url="/redoc",  # Explicitly enable ReDoc
+    openapi_url="/openapi.json"  # Explicitly enable OpenAPI schema
 )
 
 
@@ -343,11 +346,47 @@ app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"
 
 @app.get("/")
 async def root():
-    return {"message": "Car Rental API"}
+    """Root endpoint - API information"""
+    return {
+        "message": "Car Rental API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "api_base": "/api/v1"
+    }
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "Car Rental API"}
+
+
+@app.get("/api")
+async def api_info():
+    """API information endpoint"""
+    return {
+        "message": "Car Rental API v1",
+        "base_url": "/api/v1",
+        "endpoints": {
+            "docs": "/docs",
+            "redoc": "/redoc",
+            "health": "/health"
+        }
+    }
+
+
+@app.get("/api/v1")
+async def api_v1_info():
+    """API v1 information endpoint"""
+    return {
+        "message": "Car Rental API v1",
+        "version": "1.0.0",
+        "endpoints": {
+            "host_auth": "/api/v1/host/auth",
+            "client_auth": "/api/v1/client/auth",
+            "cars": "/api/v1/cars",
+            "admin": "/api/v1/admin"
+        }
+    }
 
 

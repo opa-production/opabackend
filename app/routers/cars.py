@@ -132,7 +132,17 @@ def _car_to_response(db_car: Car) -> CarResponse:
 
 
 def car_to_listing_response(car: Car) -> dict:
-    """Convert Car model to CarListingResponse dict"""
+    """Convert Car model to CarListingResponse dict - full car details for details page"""
+    # Parse car_images from JSON string to array (for carousel)
+    car_images_array = None
+    if car.car_images:
+        car_images_array = parse_image_urls(car.car_images)
+    
+    # Fallback to legacy image_urls if car_images is empty
+    legacy_image_urls = parse_image_urls(car.image_urls)
+    if not car_images_array and legacy_image_urls:
+        car_images_array = legacy_image_urls
+    
     return {
         "id": car.id,
         "host_id": car.host_id,
@@ -157,8 +167,14 @@ def car_to_listing_response(car: Car) -> dict:
         "location_name": car.location_name,
         "latitude": car.latitude,
         "longitude": car.longitude,
-        "image_urls": parse_image_urls(car.image_urls),
+        # New media fields (preferred)
+        "cover_image": car.cover_image,
+        "car_images": car_images_array,  # Array for carousel
+        "car_video": car.car_video,
+        # Legacy fields (for backward compatibility)
+        "image_urls": legacy_image_urls,
         "video_url": car.video_url,
+        # Host information
         "host_name": car.host.full_name if car.host else None,
         "host_avatar_url": car.host.avatar_url if car.host else None,
         "created_at": car.created_at,
@@ -270,6 +286,7 @@ async def explore_cars(
     Filters:
     - Only shows verified cars (verification_status = 'verified')
     - Only shows visible cars (is_hidden = False)
+    - is_complete is NOT required - verified cars can be shown even if not fully complete
     - Supports search by name, model, or location
     - Supports filtering by location, price range, body type
     """
@@ -277,7 +294,8 @@ async def explore_cars(
                f"search={search}, location={location}, min_price={min_price}, "
                f"max_price={max_price}, body_type={body_type}")
     
-    # Base query: only verified and visible listings (is_complete not required for explore)
+    # Base query: only verified and visible listings (is_complete not required)
+    # This allows verified cars to be shown even if they haven't completed all steps
     query = db.query(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.VERIFIED.value,
         Car.is_hidden == False
@@ -374,8 +392,10 @@ async def explore_cars(
         logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Added to response. cover_image={cover_image} "
                     f"(source={cover_image_source}), car_name={car_name}")
     
+    car_ids = [car_item.id for car_item in car_responses]
     logger.info(f"🖼️ [EXPLORE CARS] ✅ Returning {len(car_responses)} cars. "
                f"Total matching: {total}, Page: {page}/{total_pages}")
+    logger.info(f"🖼️ [EXPLORE CARS] Car IDs returned: {car_ids}")
     
     return CarExploreListResponse(
         cars=car_responses,
@@ -789,24 +809,89 @@ async def get_car_details(
     db: Session = Depends(get_db)
 ):
     """
-    Get detailed information about a specific car listing.
+    Get detailed information about a specific car for car details page.
     
-    - **car_id**: The unique identifier of the car (listing_id)
-    - Returns full car details including host information
-    - Only returns complete listings
+    Returns all car information including:
+    - Car images (car_images array for carousel)
+    - Cover image
+    - Video
+    - Name, model, location
+    - All technical specs (seats, fuel_type, transmission, color, mileage, year, body_type)
+    - Features list
+    - Pricing (daily_rate, weekly_rate, monthly_rate)
+    - Rental rules (min_rental_days, max_rental_days, min_age_requirement, rules)
+    - Description
+    - Host information (name, avatar)
+    
+    Only returns verified and visible cars (verification_status = 'verified', is_hidden = False).
+    Note: is_complete is not required - verified cars can be viewed even if not fully complete.
     """
+    logger.info(f"🚗 [CAR DETAILS] Request received for car_id={car_id}")
+    
+    # First check if car exists at all
+    car_exists = db.query(Car).filter(Car.id == car_id).first()
+    if not car_exists:
+        logger.warning(f"🚗 [CAR DETAILS] Car ID {car_id} does not exist in database")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+    
+    # Log car status for debugging
+    logger.info(f"🚗 [CAR DETAILS] Car {car_id} exists. Status: verification={car_exists.verification_status}, "
+               f"is_hidden={car_exists.is_hidden}, is_complete={car_exists.is_complete}")
+    
+    # Now filter with requirements (only verification_status and is_hidden - is_complete not required)
+    # This allows verified cars to be viewed even if they haven't completed all steps (e.g., missing video/images)
     car = db.query(Car).options(joinedload(Car.host)).filter(
         Car.id == car_id,
-        Car.is_complete == True
+        Car.verification_status == VerificationStatus.VERIFIED.value,
+        Car.is_hidden == False
     ).first()
     
     if not car:
+        logger.warning(f"🚗 [CAR DETAILS] Car {car_id} exists but doesn't meet requirements: "
+                      f"verification={car_exists.verification_status} (needs 'verified'), "
+                      f"is_hidden={car_exists.is_hidden} (needs False)")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found"
+            detail="Car not found or not available"
         )
     
+    car_images_count = len(parse_image_urls(car.car_images)) if car.car_images else 0
+    logger.info(f"🚗 [CAR DETAILS] ✅ Returning car details for car_id={car_id}, "
+               f"name={car.name}, model={car.model}, images_count={car_images_count}")
+    
     return car_to_listing_response(car)
+
+
+@router.get("/client/cars/{car_id}", response_model=CarListingResponse)
+async def get_car_details_client(
+    car_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed information about a specific car for car details page (client endpoint).
+    
+    Alias for GET /cars/{car_id} - provides consistent API path structure for clients.
+    
+    Returns all car information including:
+    - Car images (car_images array for carousel)
+    - Cover image
+    - Video
+    - Name, model, location
+    - All technical specs (seats, fuel_type, transmission, color, mileage, year, body_type)
+    - Features list
+    - Pricing (daily_rate, weekly_rate, monthly_rate)
+    - Rental rules (min_rental_days, max_rental_days, min_age_requirement, rules)
+    - Description
+    - Host information (name, avatar)
+    
+    Only returns verified and visible cars (verification_status = 'verified', is_hidden = False).
+    Note: is_complete is not required - verified cars can be viewed even if not fully complete.
+    """
+    # Delegate to the main endpoint
+    return await get_car_details(car_id, db)
 
 
 @router.get("/cars/{car_id}/availability", response_model=CarAvailabilityResponse)

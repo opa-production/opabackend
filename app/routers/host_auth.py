@@ -300,8 +300,6 @@ async def get_host_notifications(
         total=len(notification_list),
         unread_count=unread_count
     )
-
-
 @router.put("/host/notifications/{notification_id}/read")
 async def mark_notification_as_read(
     notification_id: int,
