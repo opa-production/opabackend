@@ -504,6 +504,54 @@ class AdminResponseRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="Admin response message")
 
 
+# Client-Host Messaging Schemas
+class ClientHostMessageRequest(BaseModel):
+    """Request to send a message to a host"""
+    message: str = Field(..., min_length=1, max_length=2000, description="Message content")
+
+
+class ClientHostMessageResponse(BaseModel):
+    """Individual message in a client-host conversation"""
+    id: int
+    conversation_id: int
+    sender_type: str  # "client" or "host"
+    sender_id: int
+    sender_name: Optional[str] = None  # Client name or Host name
+    message: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClientHostConversationResponse(BaseModel):
+    """Client-host conversation with messages"""
+    id: int
+    client_id: int
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
+    host_id: int
+    host_name: Optional[str] = None
+    host_email: Optional[str] = None
+    is_read_by_client: bool
+    is_read_by_host: bool
+    messages: List[ClientHostMessageResponse]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientHostConversationListResponse(BaseModel):
+    """List of client-host conversations"""
+    conversations: List[ClientHostConversationResponse]
+    total: int
+    unread_count: Optional[int] = None  # Unread conversations count
+
+
 # ==================== ADMIN SCHEMAS ====================
 
 # Admin Auth Schemas

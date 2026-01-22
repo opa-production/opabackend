@@ -8,7 +8,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -270,6 +270,19 @@ async def startup_event():
         SupportMessage.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created support_messages table")
     
+    # Double-check that client_host_conversations and client_host_messages tables exist
+    if 'client_host_conversations' not in inspector.get_table_names():
+        print("⚠️  client_host_conversations table missing, creating...")
+        from app.models import ClientHostConversation, ClientHostMessage
+        ClientHostConversation.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created client_host_conversations table")
+    
+    if 'client_host_messages' not in inspector.get_table_names():
+        print("⚠️  client_host_messages table missing, creating...")
+        from app.models import ClientHostMessage
+        ClientHostMessage.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created client_host_messages table")
+    
     # Create default super admin if it doesn't exist
     db = SessionLocal()
     try:
@@ -331,6 +344,7 @@ app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
 app.include_router(payment_methods.router, prefix="/api/v1", tags=["Payment Methods"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["Feedback"])
 app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
+app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
