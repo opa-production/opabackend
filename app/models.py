@@ -233,8 +233,9 @@ class Booking(Base):
     # Pickup and return details
     pickup_time = Column(String(10), nullable=True)  # e.g., "10:00"
     return_time = Column(String(10), nullable=True)
-    pickup_location = Column(String(500), nullable=True)
-    return_location = Column(String(500), nullable=True)
+    pickup_location = Column(Text, nullable=True)  # JSON array: ["nairobi", "karen", "westside mall"]
+    return_location = Column(Text, nullable=True)  # JSON array: ["nairobi", "karen", "westside mall"]
+    dropoff_same_as_pickup = Column(Boolean, default=True, nullable=False)  # Toggle for same location
     
     # Pricing
     daily_rate = Column(Float, nullable=False)  # Rate at time of booking

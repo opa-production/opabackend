@@ -1283,23 +1283,31 @@ class BookingStatusEnum(str, Enum):
 class BookingCreateRequest(BaseModel):
     """Request to create a new booking"""
     car_id: int = Field(..., description="ID of the car to book")
-    start_date: datetime = Field(..., description="Rental start date")
-    end_date: datetime = Field(..., description="Rental end date")
-    pickup_time: Optional[str] = Field("10:00", max_length=10)
-    return_time: Optional[str] = Field("10:00", max_length=10)
-    pickup_location: Optional[str] = Field(None, max_length=500)
-    return_location: Optional[str] = Field(None, max_length=500)
-    damage_waiver_enabled: Optional[bool] = Field(False)
-    drive_type: Optional[str] = Field("self", description="'self' or 'withDriver'")
-    check_in_preference: Optional[str] = Field("self", description="'self' or 'assisted'")
-    special_requirements: Optional[str] = Field(None, max_length=2000)
+    start_date: date = Field(..., description="Rental start date (pickup date)")
+    end_date: date = Field(..., description="Rental end date (dropoff date)")
+    pickup_time: str = Field(..., description="Pickup time (e.g., '10:00')", max_length=10)
+    return_time: Optional[str] = Field(None, description="Return time (e.g., '10:00')", max_length=10)
+    pickup_location: List[str] = Field(..., description="Pickup location as array (e.g., ['nairobi', 'karen', 'westside mall'])")
+    dropoff_same_as_pickup: bool = Field(True, description="Whether dropoff location is same as pickup")
+    return_location: Optional[List[str]] = Field(None, description="Return location as array (required if dropoff_same_as_pickup is False)")
+    drive_type: str = Field(..., description="Drive type: 'self' or 'chauffeur'", pattern="^(self|chauffeur)$")
+    damage_waiver_enabled: Optional[bool] = Field(False, description="Whether damage waiver is enabled")
+    special_requirements: Optional[str] = Field(None, max_length=2000, description="Special requirements or notes")
 
     @model_validator(mode='after')
-    def validate_dates(self):
+    def validate_booking(self):
+        # Validate dates
         if self.start_date >= self.end_date:
             raise ValueError('End date must be after start date')
-        if self.start_date < datetime.now():
-            raise ValueError('Start date cannot be in the past')
+        
+        # Validate return location if dropoff is different
+        if not self.dropoff_same_as_pickup and not self.return_location:
+            raise ValueError('Return location is required when dropoff_same_as_pickup is False')
+        
+        # Set return_time to pickup_time if not provided
+        if not self.return_time:
+            self.return_time = self.pickup_time
+        
         return self
 
 
@@ -1326,8 +1334,9 @@ class BookingResponse(BaseModel):
     end_date: datetime
     pickup_time: Optional[str] = None
     return_time: Optional[str] = None
-    pickup_location: Optional[str] = None
-    return_location: Optional[str] = None
+    pickup_location: Optional[List[str]] = None  # Array format
+    return_location: Optional[List[str]] = None  # Array format
+    dropoff_same_as_pickup: Optional[bool] = True
     
     # Pricing
     daily_rate: float
@@ -1366,3 +1375,26 @@ class BookingListResponse(BaseModel):
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
+
+
+# Payment Processing Schemas
+class PaymentRequest(BaseModel):
+    """Request to process payment for a booking"""
+    booking_id: str = Field(..., description="Booking ID to pay for (e.g., 'BK-12345678')")
+    payment_method_id: int = Field(..., description="ID of the payment method to use")
+
+
+class PaymentResponse(BaseModel):
+    """Payment processing response"""
+    success: bool
+    booking_id: str
+    amount_paid: float
+    payment_method_type: str  # "mpesa", "visa", "mastercard"
+    payment_method_name: str
+    transaction_id: str
+    message: str
+    paid_at: datetime
+    booking: Optional[dict] = None  # Full booking details after payment confirmation
+
+    class Config:
+        from_attributes = True

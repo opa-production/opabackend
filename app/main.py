@@ -8,7 +8,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -283,6 +283,14 @@ async def startup_event():
         ClientHostMessage.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_host_messages table")
     
+    # Check and add dropoff_same_as_pickup column to bookings table if missing
+    if 'bookings' in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('bookings')]
+        if 'dropoff_same_as_pickup' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_same_as_pickup INTEGER DEFAULT 1 NOT NULL"))
+            print("✓ Added dropoff_same_as_pickup column to bookings table")
+    
     # Create default super admin if it doesn't exist
     db = SessionLocal()
     try:
@@ -346,6 +354,7 @@ app.include_router(feedback.router, prefix="/api/v1", tags=["Feedback"])
 app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
 app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
+app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
 app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
