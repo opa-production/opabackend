@@ -23,10 +23,14 @@ router = APIRouter()
 def _message_to_response(db_message: ClientHostMessage, client: Client = None, host: Host = None) -> ClientHostMessageResponse:
     """Helper function to convert ClientHostMessage model to ClientHostMessageResponse"""
     sender_name = None
+    sender_avatar_url = None
+    
     if db_message.sender_type == "client" and client:
         sender_name = client.full_name
+        sender_avatar_url = client.avatar_url
     elif db_message.sender_type == "host" and host:
         sender_name = host.full_name
+        sender_avatar_url = host.avatar_url
     
     return ClientHostMessageResponse(
         id=db_message.id,
@@ -34,6 +38,7 @@ def _message_to_response(db_message: ClientHostMessage, client: Client = None, h
         sender_type=db_message.sender_type,
         sender_id=db_message.sender_id,
         sender_name=sender_name,
+        sender_avatar_url=sender_avatar_url,
         message=db_message.message,
         is_read=db_message.is_read,
         created_at=db_message.created_at
@@ -144,9 +149,11 @@ async def get_conversation_with_host(
             client_id=current_client.id,
             client_name=current_client.full_name,
             client_email=current_client.email,
+            client_avatar_url=current_client.avatar_url,
             host_id=host_id,
             host_name=host.full_name,
             host_email=host.email,
+            host_avatar_url=host.avatar_url,
             is_read_by_client=True,
             is_read_by_host=True,
             messages=[],
@@ -232,9 +239,11 @@ async def get_client_conversations(
             client_id=conv.client_id,
             client_name=current_client.full_name,
             client_email=current_client.email,
+            client_avatar_url=current_client.avatar_url,
             host_id=conv.host_id,
             host_name=host.full_name if host else None,
             host_email=host.email if host else None,
+            host_avatar_url=host.avatar_url if host else None,
             is_read_by_client=conv.is_read_by_client,
             is_read_by_host=conv.is_read_by_host,
             messages=message_list,
@@ -353,9 +362,11 @@ async def get_conversation_with_client(
             client_id=client_id,
             client_name=client.full_name,
             client_email=client.email,
+            client_avatar_url=client.avatar_url,
             host_id=current_host.id,
             host_name=current_host.full_name,
             host_email=current_host.email,
+            host_avatar_url=current_host.avatar_url,
             is_read_by_client=True,
             is_read_by_host=True,
             messages=[],
@@ -441,9 +452,11 @@ async def get_host_conversations(
             client_id=conv.client_id,
             client_name=client.full_name if client else None,
             client_email=client.email if client else None,
+            client_avatar_url=client.avatar_url if client else None,
             host_id=conv.host_id,
             host_name=current_host.full_name,
             host_email=current_host.email,
+            host_avatar_url=current_host.avatar_url,
             is_read_by_client=conv.is_read_by_client,
             is_read_by_host=conv.is_read_by_host,
             messages=message_list,

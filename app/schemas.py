@@ -517,6 +517,7 @@ class ClientHostMessageResponse(BaseModel):
     sender_type: str  # "client" or "host"
     sender_id: int
     sender_name: Optional[str] = None  # Client name or Host name
+    sender_avatar_url: Optional[str] = None  # Profile picture URL of the sender
     message: str
     is_read: bool
     created_at: datetime
@@ -531,9 +532,11 @@ class ClientHostConversationResponse(BaseModel):
     client_id: int
     client_name: Optional[str] = None
     client_email: Optional[str] = None
+    client_avatar_url: Optional[str] = None  # Client profile picture URL
     host_id: int
     host_name: Optional[str] = None
     host_email: Optional[str] = None
+    host_avatar_url: Optional[str] = None  # Host profile picture URL
     is_read_by_client: bool
     is_read_by_host: bool
     messages: List[ClientHostMessageResponse]
