@@ -14,8 +14,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus
-from app.auth import get_current_client
+from app.models import Car, Client, Booking, BookingStatus, Host
+from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
     BookingResponse,
@@ -52,6 +52,12 @@ def booking_to_response(booking: Booking) -> dict:
     """Convert Booking model to BookingResponse dict"""
     car = booking.car
     host = car.host if car else None
+    # Get client (renter) information - may not be loaded in all queries
+    try:
+        client = booking.client if booking.client else None
+    except AttributeError:
+        # Client relationship not loaded, will be None
+        client = None
     
     # Parse location JSON strings to arrays
     pickup_location_list = []
@@ -68,7 +74,7 @@ def booking_to_response(booking: Booking) -> dict:
         except (json.JSONDecodeError, TypeError):
             return_location_list = [booking.return_location] if booking.return_location else []
     
-    return {
+    response = {
         "id": booking.id,
         "booking_id": booking.booking_id,
         "client_id": booking.client_id,
@@ -84,6 +90,11 @@ def booking_to_response(booking: Booking) -> dict:
         # Host details
         "host_id": host.id if host else None,
         "host_name": host.full_name if host else None,
+        
+        # Client (renter) details - for hosts to see who booked
+        "client_name": client.full_name if client else None,
+        "client_email": client.email if client else None,
+        "client_mobile_number": client.mobile_number if client else None,
         
         # Booking dates
         "start_date": booking.start_date,
@@ -116,6 +127,8 @@ def booking_to_response(booking: Booking) -> dict:
         "created_at": booking.created_at,
         "updated_at": booking.updated_at,
     }
+    
+    return response
 
 
 def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_date: datetime, exclude_booking_id: Optional[int] = None) -> bool:
@@ -490,3 +503,109 @@ async def delete_booking(
     db.commit()
     
     return None
+
+
+# ==================== HOST BOOKING ENDPOINTS ====================
+
+@router.get("/host/bookings", response_model=BookingListResponse)
+async def get_host_bookings(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
+    status: Optional[str] = Query(None, description="Filter by booking status"),
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all bookings for cars owned by the authenticated host.
+    
+    - Returns bookings for all cars owned by the host
+    - Returns bookings sorted by creation date (newest first)
+    - Supports filtering by status
+    - Results are paginated
+    - Includes client (renter) information for each booking
+    
+    Requires host authentication.
+    """
+    logger.info(f"📅 [HOST BOOKINGS] Request received: host_id={current_host.id}, status={status}")
+    
+    # Query bookings for host's cars (using join to filter by host_id)
+    query = db.query(Booking).join(Car).options(
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.client)
+    ).filter(Car.host_id == current_host.id)
+    
+    # Filter by status if provided
+    if status:
+        try:
+            status_enum = BookingStatus(status.lower())
+            query = query.filter(Booking.status == status_enum)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}"
+            )
+    
+    # Get total count
+    total = query.count()
+    
+    # Apply pagination and order by newest first
+    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    
+    logger.info(f"📅 [HOST BOOKINGS] Found {total} bookings for host_id={current_host.id}")
+    
+    # Convert to response format
+    booking_responses = [booking_to_response(b) for b in bookings]
+    
+    return BookingListResponse(
+        bookings=booking_responses,
+        total=total,
+        skip=skip,
+        limit=limit
+    )
+
+
+@router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
+async def get_host_booking_details(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed information about a specific booking for a host's car.
+    
+    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
+    - Only returns bookings for cars owned by the authenticated host
+    - Includes full client (renter) information for messaging
+    
+    Requires host authentication.
+    """
+    logger.info(f"📅 [HOST BOOKING DETAILS] Request received: host_id={current_host.id}, booking_id={booking_id}")
+    
+    # Get booking with car and client relationships
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.client)
+    ).filter(
+        Booking.booking_id == booking_id
+    ).first()
+    
+    if not booking:
+        logger.warning(f"📅 [HOST BOOKING DETAILS] Booking not found: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
+        )
+    
+    # Verify the booking is for a car owned by this host
+    if booking.car.host_id != current_host.id:
+        logger.warning(f"📅 [HOST BOOKING DETAILS] Permission denied: booking car owner={booking.car.host_id}, "
+                      f"requesting host={current_host.id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to view this booking"
+        )
+    
+    logger.info(f"📅 [HOST BOOKING DETAILS] ✅ Returning booking details: booking_id={booking_id}, "
+               f"client_id={booking.client_id}, car_id={booking.car_id}")
+    
+    return booking_to_response(booking)

@@ -1329,6 +1329,11 @@ class BookingResponse(BaseModel):
     host_id: Optional[int] = None
     host_name: Optional[str] = None
     
+    # Client (renter) details - included for hosts to see who booked
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
+    client_mobile_number: Optional[str] = None
+    
     # Booking dates
     start_date: datetime
     end_date: datetime
