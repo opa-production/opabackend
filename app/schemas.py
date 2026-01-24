@@ -61,6 +61,19 @@ class HostLoginRequest(BaseModel):
     password: str
 
 
+class HostPasswordChangeRequest(BaseModel):
+    """Change host password request"""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
+    new_password_confirmation: str = Field(..., min_length=8)
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.new_password != self.new_password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
+
+
 class HostLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -129,6 +142,19 @@ class ClientProfileResponse(BaseModel):
 class ClientLoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class ClientPasswordChangeRequest(BaseModel):
+    """Change client password request"""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
+    new_password_confirmation: str = Field(..., min_length=8)
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.new_password != self.new_password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
 
 
 class ClientLoginResponse(BaseModel):
