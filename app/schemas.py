@@ -61,19 +61,6 @@ class HostLoginRequest(BaseModel):
     password: str
 
 
-class HostPasswordChangeRequest(BaseModel):
-    """Change host password request"""
-    current_password: str = Field(..., description="Current password")
-    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
-    new_password_confirmation: str = Field(..., min_length=8)
-
-    @model_validator(mode='after')
-    def passwords_match(self):
-        if self.new_password != self.new_password_confirmation:
-            raise ValueError('Passwords do not match')
-        return self
-
-
 class HostLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -142,19 +129,6 @@ class ClientProfileResponse(BaseModel):
 class ClientLoginRequest(BaseModel):
     email: EmailStr
     password: str
-
-
-class ClientPasswordChangeRequest(BaseModel):
-    """Change client password request"""
-    current_password: str = Field(..., description="Current password")
-    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
-    new_password_confirmation: str = Field(..., min_length=8)
-
-    @model_validator(mode='after')
-    def passwords_match(self):
-        if self.new_password != self.new_password_confirmation:
-            raise ValueError('Passwords do not match')
-        return self
 
 
 class ClientLoginResponse(BaseModel):
@@ -528,57 +502,6 @@ class SupportConversationListResponse(BaseModel):
 class AdminResponseRequest(BaseModel):
     """Request for admin to respond to a support conversation"""
     message: str = Field(..., min_length=1, max_length=2000, description="Admin response message")
-
-
-# Client-Host Messaging Schemas
-class ClientHostMessageRequest(BaseModel):
-    """Request to send a message to a host"""
-    message: str = Field(..., min_length=1, max_length=2000, description="Message content")
-
-
-class ClientHostMessageResponse(BaseModel):
-    """Individual message in a client-host conversation"""
-    id: int
-    conversation_id: int
-    sender_type: str  # "client" or "host"
-    sender_id: int
-    sender_name: Optional[str] = None  # Client name or Host name
-    sender_avatar_url: Optional[str] = None  # Profile picture URL of the sender
-    message: str
-    is_read: bool
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class ClientHostConversationResponse(BaseModel):
-    """Client-host conversation with messages"""
-    id: int
-    client_id: int
-    client_name: Optional[str] = None
-    client_email: Optional[str] = None
-    client_avatar_url: Optional[str] = None  # Client profile picture URL
-    host_id: int
-    host_name: Optional[str] = None
-    host_email: Optional[str] = None
-    host_avatar_url: Optional[str] = None  # Host profile picture URL
-    is_read_by_client: bool
-    is_read_by_host: bool
-    messages: List[ClientHostMessageResponse]
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    last_message_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class ClientHostConversationListResponse(BaseModel):
-    """List of client-host conversations"""
-    conversations: List[ClientHostConversationResponse]
-    total: int
-    unread_count: Optional[int] = None  # Unread conversations count
 
 
 # ==================== ADMIN SCHEMAS ====================
@@ -1264,41 +1187,8 @@ class CarAvailabilityResponse(BaseModel):
     """Car availability response"""
     car_id: int
     available: bool
-    booked_dates: List[dict]  # List of {start_date, end_date, status} for booked periods
-    blocked_dates: List[dict]  # List of {start_date, end_date, reason} for blocked periods
+    booked_dates: List[dict]  # List of {start_date, end_date} for booked periods
     message: str
-
-
-class CarBlockedDateRequest(BaseModel):
-    """Request to block dates for a car"""
-    start_date: datetime = Field(..., description="Start date of blocked period (ISO format)")
-    end_date: datetime = Field(..., description="End date of blocked period (ISO format)")
-    reason: Optional[str] = Field(None, max_length=255, description="Optional reason for blocking")
-    
-    @model_validator(mode='after')
-    def validate_dates(self):
-        if self.end_date <= self.start_date:
-            raise ValueError('end_date must be after start_date')
-        return self
-
-
-class CarBlockedDateResponse(BaseModel):
-    """Blocked date response"""
-    id: int
-    car_id: int
-    start_date: datetime
-    end_date: datetime
-    reason: Optional[str] = None
-    created_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-
-class CarBlockedDateListResponse(BaseModel):
-    """List of blocked dates for a car"""
-    blocked_dates: List[CarBlockedDateResponse]
-    total: int
 
 
 # ==================== EXPLORE PAGE SCHEMAS ====================
@@ -1345,31 +1235,23 @@ class BookingStatusEnum(str, Enum):
 class BookingCreateRequest(BaseModel):
     """Request to create a new booking"""
     car_id: int = Field(..., description="ID of the car to book")
-    start_date: date = Field(..., description="Rental start date (pickup date)")
-    end_date: date = Field(..., description="Rental end date (dropoff date)")
-    pickup_time: str = Field(..., description="Pickup time (e.g., '10:00')", max_length=10)
-    return_time: Optional[str] = Field(None, description="Return time (e.g., '10:00')", max_length=10)
-    pickup_location: List[str] = Field(..., description="Pickup location as array (e.g., ['nairobi', 'karen', 'westside mall'])")
-    dropoff_same_as_pickup: bool = Field(True, description="Whether dropoff location is same as pickup")
-    return_location: Optional[List[str]] = Field(None, description="Return location as array (required if dropoff_same_as_pickup is False)")
-    drive_type: str = Field(..., description="Drive type: 'self' or 'chauffeur'", pattern="^(self|chauffeur)$")
-    damage_waiver_enabled: Optional[bool] = Field(False, description="Whether damage waiver is enabled")
-    special_requirements: Optional[str] = Field(None, max_length=2000, description="Special requirements or notes")
+    start_date: datetime = Field(..., description="Rental start date")
+    end_date: datetime = Field(..., description="Rental end date")
+    pickup_time: Optional[str] = Field("10:00", max_length=10)
+    return_time: Optional[str] = Field("10:00", max_length=10)
+    pickup_location: Optional[str] = Field(None, max_length=500)
+    return_location: Optional[str] = Field(None, max_length=500)
+    damage_waiver_enabled: Optional[bool] = Field(False)
+    drive_type: Optional[str] = Field("self", description="'self' or 'withDriver'")
+    check_in_preference: Optional[str] = Field("self", description="'self' or 'assisted'")
+    special_requirements: Optional[str] = Field(None, max_length=2000)
 
     @model_validator(mode='after')
-    def validate_booking(self):
-        # Validate dates
+    def validate_dates(self):
         if self.start_date >= self.end_date:
             raise ValueError('End date must be after start date')
-        
-        # Validate return location if dropoff is different
-        if not self.dropoff_same_as_pickup and not self.return_location:
-            raise ValueError('Return location is required when dropoff_same_as_pickup is False')
-        
-        # Set return_time to pickup_time if not provided
-        if not self.return_time:
-            self.return_time = self.pickup_time
-        
+        if self.start_date < datetime.now():
+            raise ValueError('Start date cannot be in the past')
         return self
 
 
@@ -1391,19 +1273,13 @@ class BookingResponse(BaseModel):
     host_id: Optional[int] = None
     host_name: Optional[str] = None
     
-    # Client (renter) details - included for hosts to see who booked
-    client_name: Optional[str] = None
-    client_email: Optional[str] = None
-    client_mobile_number: Optional[str] = None
-    
     # Booking dates
     start_date: datetime
     end_date: datetime
     pickup_time: Optional[str] = None
     return_time: Optional[str] = None
-    pickup_location: Optional[List[str]] = None  # Array format
-    return_location: Optional[List[str]] = None  # Array format
-    dropoff_same_as_pickup: Optional[bool] = True
+    pickup_location: Optional[str] = None
+    return_location: Optional[str] = None
     
     # Pricing
     daily_rate: float
@@ -1422,10 +1298,6 @@ class BookingResponse(BaseModel):
     status: str
     status_updated_at: Optional[datetime] = None
     cancellation_reason: Optional[str] = None
-    
-    # Pickup and dropoff confirmation
-    pickup_confirmed_at: Optional[datetime] = None
-    dropoff_confirmed_at: Optional[datetime] = None
     
     # Timestamps
     created_at: datetime
@@ -1446,26 +1318,3 @@ class BookingListResponse(BaseModel):
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
-
-
-# Payment Processing Schemas
-class PaymentRequest(BaseModel):
-    """Request to process payment for a booking"""
-    booking_id: str = Field(..., description="Booking ID to pay for (e.g., 'BK-12345678')")
-    payment_method_id: int = Field(..., description="ID of the payment method to use")
-
-
-class PaymentResponse(BaseModel):
-    """Payment processing response"""
-    success: bool
-    booking_id: str
-    amount_paid: float
-    payment_method_type: str  # "mpesa", "visa", "mastercard"
-    payment_method_name: str
-    transaction_id: str
-    message: str
-    paid_at: datetime
-    booking: Optional[dict] = None  # Full booking details after payment confirmation
-
-    class Config:
-        from_attributes = True

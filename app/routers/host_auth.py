@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Host, Notification
+from app.models import Host
 from app.schemas import (
     HostRegisterRequest,
     HostRegisterResponse,
@@ -11,11 +11,8 @@ from app.schemas import (
     HostLoginResponseWithRefresh,
     HostProfileUpdateRequest,
     HostProfileResponse,
-    HostPasswordChangeRequest,
     RefreshTokenRequest,
-    TokenPairResponse,
-    HostNotificationListResponse,
-    HostNotificationResponse
+    TokenPairResponse
 )
 from app.auth import (
     get_password_hash,
@@ -63,27 +60,6 @@ async def register_host(
     db.add(db_host)
     db.commit()
     db.refresh(db_host)
-    
-    # Create welcome notification from CEO
-    welcome_message = (
-        f"Hey {db_host.full_name}! Welcome to the family. I'm Deon, the founder of Ardena. "
-        f"We built this platform to make car ownership more rewarding for people like you, "
-        f"and I'm so glad you've joined us. You're in great hands with our support team, "
-        f"but I also want to make sure you have my direct line: +254702248984. "
-        f"Don't hesitate to say hi or ask a question. Happy hosting!"
-    )
-    
-    welcome_notification = Notification(
-        recipient_type="host",
-        recipient_id=db_host.id,
-        title="Welcome Message from CEO",
-        message=welcome_message,
-        notification_type="info",
-        sender_name="Deon, CEO Ardena"
-    )
-    
-    db.add(welcome_notification)
-    db.commit()
     
     return db_host
 
@@ -244,36 +220,6 @@ async def update_host_profile(
     return current_host
 
 
-@router.put("/host/change-password")
-async def change_host_password(
-    request: HostPasswordChangeRequest,
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Change host password
-    
-    - **current_password**: Current password (required for verification)
-    - **new_password**: New password (minimum 8 characters)
-    - **new_password_confirmation**: New password confirmation (must match new_password)
-    
-    Requires current password verification. If the current password is incorrect,
-    the password change will be rejected.
-    """
-    # Verify current password
-    if not verify_password(request.current_password, current_host.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect"
-        )
-    
-    # Update password
-    current_host.hashed_password = get_password_hash(request.new_password)
-    db.commit()
-    
-    return {"message": "Password changed successfully"}
-
-
 # Social Auth Placeholders
 # TODO: Implement "Continue with Google" integration
 # @router.post("/host/auth/google")
@@ -289,97 +235,3 @@ async def change_host_password(
 #     pass
 
 
-# ==================== NOTIFICATION ENDPOINTS ====================
-
-@router.get("/host/notifications", response_model=HostNotificationListResponse)
-async def get_host_notifications(
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Get all notifications for the authenticated host
-    
-    Returns all admin notifications sent to this host, ordered by creation date (newest first).
-    Includes unread count.
-    """
-    # Get all notifications for this host
-    notifications = db.query(Notification).filter(
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id
-    ).order_by(Notification.created_at.desc()).all()
-    
-    # Count unread notifications
-    unread_count = db.query(Notification).filter(
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id,
-        Notification.is_read == False
-    ).count()
-    
-    # Build response
-    notification_list = [HostNotificationResponse(
-        id=notification.id,
-        title=notification.title,
-        message=notification.message,
-        notification_type=notification.notification_type,
-        sender_name=notification.sender_name,
-        is_read=notification.is_read,
-        created_at=notification.created_at
-    ) for notification in notifications]
-    
-    return HostNotificationListResponse(
-        notifications=notification_list,
-        total=len(notification_list),
-        unread_count=unread_count
-    )
-@router.put("/host/notifications/{notification_id}/read")
-async def mark_notification_as_read(
-    notification_id: int,
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Mark a notification as read
-    
-    - **notification_id**: ID of the notification to mark as read
-    """
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id
-    ).first()
-    
-    if not notification:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Notification not found"
-        )
-    
-    if notification.is_read:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Notification is already marked as read"
-        )
-    
-    notification.is_read = True
-    db.commit()
-    
-    return {"message": "Notification marked as read"}
-
-
-@router.put("/host/notifications/read-all")
-async def mark_all_notifications_as_read(
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Mark all notifications as read for the authenticated host
-    """
-    updated_count = db.query(Notification).filter(
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id,
-        Notification.is_read == False
-    ).update({"is_read": True})
-    
-    db.commit()
-    
-    return {"message": f"{updated_count} notification(s) marked as read"}

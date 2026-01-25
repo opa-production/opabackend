@@ -11,7 +11,6 @@ from app.schemas import (
     ClientLoginResponseWithRefresh,
     ClientProfileUpdateRequest,
     ClientProfileResponse,
-    ClientPasswordChangeRequest,
     RefreshTokenRequest,
     TokenPairResponse,
     DrivingLicenseRequest,
@@ -270,36 +269,6 @@ async def update_client_profile(
     db.refresh(current_client)
     
     return current_client
-
-
-@router.put("/client/change-password")
-async def change_client_password(
-    request: ClientPasswordChangeRequest,
-    current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
-):
-    """
-    Change client password
-    
-    - **current_password**: Current password (required for verification)
-    - **new_password**: New password (minimum 8 characters)
-    - **new_password_confirmation**: New password confirmation (must match new_password)
-    
-    Requires current password verification. If the current password is incorrect,
-    the password change will be rejected.
-    """
-    # Verify current password
-    if not verify_password(request.current_password, current_client.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect"
-        )
-    
-    # Update password
-    current_client.hashed_password = get_password_hash(request.new_password)
-    db.commit()
-    
-    return {"message": "Password changed successfully"}
 
 
 # ==================== DRIVING LICENSE ENDPOINTS ====================

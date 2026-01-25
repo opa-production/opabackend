@@ -74,12 +74,7 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `PUT /api/v1/cars/{car_id}/location` - Step 4: Update car location and mark as complete
 - `GET /api/v1/cars/{car_id}` - Get car details by ID
 - `GET /api/v1/cars` - List all cars (with pagination)
-- `GET /api/v1/cars/{car_id}/availability` - Check car availability (public endpoint, includes booked and blocked dates)
 - `GET /api/v1/host/cars` - List all cars belonging to authenticated host
-- `PUT /api/v1/host/cars/{car_id}/toggle-visibility` - Toggle car visibility (show/hide)
-- `POST /api/v1/host/cars/{car_id}/block-dates` - Block dates for a car (make unavailable)
-- `GET /api/v1/host/cars/{car_id}/blocked-dates` - Get all blocked dates for a car
-- `DELETE /api/v1/host/cars/{car_id}/blocked-dates/{blocked_date_id}` - Unblock dates (remove from blocked list)
 
 ### Media Upload (Requires authentication)
 
@@ -93,21 +88,6 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `POST /api/v1/host/upload/document` - Upload host documents (ID or license)
 - `POST /api/v1/host/upload/vehicle/{car_id}/images` - Upload vehicle images (up to 10)
 - `POST /api/v1/host/upload/vehicle/{car_id}/video` - Upload vehicle video
-
-### Bookings (Requires authentication)
-
-#### Client Booking Endpoints
-- `POST /api/v1/client/bookings` - Create a new booking
-- `GET /api/v1/client/bookings` - Get all bookings for authenticated client
-- `GET /api/v1/client/bookings/{booking_id}` - Get booking details
-- `POST /api/v1/client/bookings/{booking_id}/cancel` - Cancel a booking
-- `DELETE /api/v1/client/bookings/{booking_id}` - Delete a booking
-
-#### Host Booking Endpoints
-- `GET /api/v1/host/bookings` - Get all bookings for host's cars
-- `GET /api/v1/host/bookings/{booking_id}` - Get booking details
-- `PUT /api/v1/host/bookings/{booking_id}/confirm-pickup` - Host confirms car pickup (updates status to ACTIVE)
-- `PUT /api/v1/host/bookings/{booking_id}/confirm-dropoff` - Host confirms car return (updates status to COMPLETED)
 
 ## Development
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum, Index
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -203,8 +203,6 @@ class Car(Base):
     host = relationship("Host", back_populates="cars")
     # Relationship to bookings
     bookings = relationship("Booking", back_populates="car", cascade="all, delete-orphan")
-    # Relationship to blocked dates
-    blocked_dates = relationship("CarBlockedDate", back_populates="car", cascade="all, delete-orphan")
 
 
 class BookingStatus(str, enum.Enum):
@@ -215,26 +213,6 @@ class BookingStatus(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
-
-
-class CarBlockedDate(Base):
-    """Blocked dates for cars (host-managed calendar)"""
-    __tablename__ = "car_blocked_dates"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    car_id = Column(Integer, ForeignKey("cars.id"), nullable=False, index=True)
-    start_date = Column(DateTime(timezone=True), nullable=False)
-    end_date = Column(DateTime(timezone=True), nullable=False)
-    reason = Column(String(255), nullable=True)  # Optional reason for blocking
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationship to car
-    car = relationship("Car", back_populates="blocked_dates")
-    
-    # Index for efficient date range queries
-    __table_args__ = (
-        Index('idx_car_blocked_dates_range', 'car_id', 'start_date', 'end_date'),
-    )
 
 
 class Booking(Base):
@@ -255,9 +233,8 @@ class Booking(Base):
     # Pickup and return details
     pickup_time = Column(String(10), nullable=True)  # e.g., "10:00"
     return_time = Column(String(10), nullable=True)
-    pickup_location = Column(Text, nullable=True)  # JSON array: ["nairobi", "karen", "westside mall"]
-    return_location = Column(Text, nullable=True)  # JSON array: ["nairobi", "karen", "westside mall"]
-    dropoff_same_as_pickup = Column(Boolean, default=True, nullable=False)  # Toggle for same location
+    pickup_location = Column(String(500), nullable=True)
+    return_location = Column(String(500), nullable=True)
     
     # Pricing
     daily_rate = Column(Float, nullable=False)  # Rate at time of booking
@@ -276,10 +253,6 @@ class Booking(Base):
     status = Column(SQLEnum(BookingStatus), default=BookingStatus.PENDING, nullable=False)
     status_updated_at = Column(DateTime(timezone=True), nullable=True)
     cancellation_reason = Column(Text, nullable=True)
-    
-    # Pickup and dropoff confirmation (host only for MVP)
-    pickup_confirmed_at = Column(DateTime(timezone=True), nullable=True)
-    dropoff_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -403,53 +376,3 @@ class SupportMessage(Base):
     
     # Relationships
     conversation = relationship("SupportConversation", back_populates="messages")
-
-
-class ClientHostConversation(Base):
-    """Conversation between a client and a host"""
-    __tablename__ = "client_host_conversations"
-
-    id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
-    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
-    
-    # Unique constraint: one conversation per client-host pair
-    # Note: We'll enforce this in application logic since SQLite has limitations
-    
-    # Status
-    is_read_by_client = Column(Boolean, default=False, nullable=False)  # Client has read latest host message
-    is_read_by_host = Column(Boolean, default=False, nullable=False)  # Host has read latest client message
-    
-    # Metadata
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    last_message_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)  # Last message timestamp
-    
-    # Relationships
-    client = relationship("Client", foreign_keys=[client_id])
-    host = relationship("Host", foreign_keys=[host_id])
-    messages = relationship("ClientHostMessage", back_populates="conversation", cascade="all, delete-orphan")
-
-
-class ClientHostMessage(Base):
-    """Individual messages in a client-host conversation"""
-    __tablename__ = "client_host_messages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    conversation_id = Column(Integer, ForeignKey("client_host_conversations.id"), nullable=False, index=True)
-    
-    # Sender information
-    sender_type = Column(String(20), nullable=False, index=True)  # "client" or "host"
-    sender_id = Column(Integer, nullable=False)  # Client ID or Host ID
-    
-    # Message content
-    message = Column(Text, nullable=False)
-    
-    # Read status (for the recipient)
-    is_read = Column(Boolean, default=False, nullable=False)
-    
-    # Metadata
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    
-    # Relationships
-    conversation = relationship("ClientHostConversation", back_populates="messages")

@@ -4,18 +4,14 @@ Booking endpoints for clients
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_
-from sqlalchemy import select, update
 from typing import Optional, List
-from datetime import datetime, date, timezone
+from datetime import datetime
 import json
 import uuid
-import logging
-
-logger = logging.getLogger(__name__)
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, CarBlockedDate
-from app.auth import get_current_client, get_current_host
+from app.models import Car, Client, Booking, BookingStatus
+from app.auth import get_current_client
 from app.schemas import (
     BookingCreateRequest,
     BookingResponse,
@@ -52,29 +48,8 @@ def booking_to_response(booking: Booking) -> dict:
     """Convert Booking model to BookingResponse dict"""
     car = booking.car
     host = car.host if car else None
-    # Get client (renter) information - may not be loaded in all queries
-    try:
-        client = booking.client if booking.client else None
-    except AttributeError:
-        # Client relationship not loaded, will be None
-        client = None
     
-    # Parse location JSON strings to arrays
-    pickup_location_list = []
-    return_location_list = []
-    if booking.pickup_location:
-        try:
-            pickup_location_list = json.loads(booking.pickup_location) if isinstance(booking.pickup_location, str) else booking.pickup_location
-        except (json.JSONDecodeError, TypeError):
-            pickup_location_list = [booking.pickup_location] if booking.pickup_location else []
-    
-    if booking.return_location:
-        try:
-            return_location_list = json.loads(booking.return_location) if isinstance(booking.return_location, str) else booking.return_location
-        except (json.JSONDecodeError, TypeError):
-            return_location_list = [booking.return_location] if booking.return_location else []
-    
-    response = {
+    return {
         "id": booking.id,
         "booking_id": booking.booking_id,
         "client_id": booking.client_id,
@@ -85,25 +60,19 @@ def booking_to_response(booking: Booking) -> dict:
         "car_model": car.model if car else None,
         "car_year": car.year if car else None,
         "car_make": car.name if car else None,  # Using name as make for now
-        "car_image_urls": parse_image_urls(car.car_images) if car and car.car_images else parse_image_urls(car.image_urls) if car else [],
+        "car_image_urls": parse_image_urls(car.image_urls) if car else [],
         
         # Host details
         "host_id": host.id if host else None,
         "host_name": host.full_name if host else None,
-        
-        # Client (renter) details - for hosts to see who booked
-        "client_name": client.full_name if client else None,
-        "client_email": client.email if client else None,
-        "client_mobile_number": client.mobile_number if client else None,
         
         # Booking dates
         "start_date": booking.start_date,
         "end_date": booking.end_date,
         "pickup_time": booking.pickup_time,
         "return_time": booking.return_time,
-        "pickup_location": pickup_location_list,  # Return as array
-        "return_location": return_location_list,  # Return as array
-        "dropoff_same_as_pickup": booking.dropoff_same_as_pickup if hasattr(booking, 'dropoff_same_as_pickup') else True,
+        "pickup_location": booking.pickup_location,
+        "return_location": booking.return_location,
         
         # Pricing
         "daily_rate": booking.daily_rate,
@@ -123,16 +92,10 @@ def booking_to_response(booking: Booking) -> dict:
         "status_updated_at": booking.status_updated_at,
         "cancellation_reason": booking.cancellation_reason,
         
-        # Pickup and dropoff confirmation
-        "pickup_confirmed_at": booking.pickup_confirmed_at if hasattr(booking, 'pickup_confirmed_at') else None,
-        "dropoff_confirmed_at": booking.dropoff_confirmed_at if hasattr(booking, 'dropoff_confirmed_at') else None,
-        
         # Timestamps
         "created_at": booking.created_at,
         "updated_at": booking.updated_at,
     }
-    
-    return response
 
 
 def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_date: datetime, exclude_booking_id: Optional[int] = None) -> bool:
@@ -154,78 +117,33 @@ def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_da
     return query.first() is not None
 
 
-@router.post("/client/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: BookingCreateRequest,
     current_client: Client = Depends(get_current_client),
     db: Session = Depends(get_db)
 ):
     """
-    Create a new car booking with age validation and double booking prevention.
+    Create a new car booking.
     
-    Validations:
-    - Age restriction check (compares user DOB with car's min_age_requirement)
-    - Car exists and is verified
-    - Date range validation
-    - Double booking prevention using database locking
-    - Minimum/maximum rental days
-    
-    Fields:
-    - pickup_location: Array format (e.g., ["nairobi", "karen", "westside mall"])
-    - dropoff_same_as_pickup: Toggle for same location
-    - drive_type: "self" or "chauffeur"
+    - Validates car exists and is complete
+    - Validates date range doesn't overlap with existing bookings
+    - Validates minimum rental days requirement
+    - Creates booking with 'pending' status
+    - Returns full booking details
     
     Requires client authentication.
     """
-    logger.info(f"📅 [CREATE BOOKING] Request received: client_id={current_client.id}, car_id={request.car_id}")
-    
-    # Verify client has date of birth (required for age validation)
-    if not current_client.date_of_birth:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Date of birth is required to make a booking. Please update your profile."
-        )
-    
-    # Verify car exists and is verified (not just complete)
+    # Verify car exists and is complete
     car = db.query(Car).options(joinedload(Car.host)).filter(
         Car.id == request.car_id,
-        Car.verification_status == "verified",
-        Car.is_hidden == False
+        Car.is_complete == True
     ).first()
     
     if not car:
-        logger.warning(f"📅 [CREATE BOOKING] Car not found or not available: car_id={request.car_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car not found or not available for booking"
-        )
-    
-    # Age validation
-    today = date.today()
-    client_age = today.year - current_client.date_of_birth.year - (
-        (today.month, today.day) < (current_client.date_of_birth.month, current_client.date_of_birth.day)
-    )
-    
-    if car.min_age_requirement and client_age < car.min_age_requirement:
-        logger.warning(f"📅 [CREATE BOOKING] Age restriction failed: client_age={client_age}, required={car.min_age_requirement}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You must be at least {car.min_age_requirement} years old to book this car. Your age is {client_age}."
-        )
-    
-    logger.info(f"📅 [CREATE BOOKING] Age validation passed: client_age={client_age}, required={car.min_age_requirement}")
-    
-    # Convert date to datetime for start and end dates (start of day for start, end of day for end)
-    from datetime import time as dt_time
-    start_datetime = datetime.combine(request.start_date, dt_time.min).replace(tzinfo=timezone.utc)
-    # For end_date, use end of day (23:59:59)
-    end_datetime = datetime.combine(request.end_date, dt_time(23, 59, 59)).replace(tzinfo=timezone.utc)
-    
-    # Validate dates
-    if start_datetime < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Start date cannot be in the past"
+            detail="Car listing not found or not available"
         )
     
     # Calculate rental days
@@ -250,113 +168,61 @@ async def create_booking(
             detail=f"Maximum rental period for this car is {car.max_rental_days} days"
         )
     
-    # DOUBLE BOOKING PREVENTION: Use database transaction with row-level locking
-    # This prevents race conditions when multiple users try to book the same car simultaneously
-    try:
-        # Start a transaction and lock the car row to prevent concurrent bookings
-        # SQLite doesn't support SELECT FOR UPDATE well, so we'll use a different approach
-        # We'll check for overlaps and create the booking atomically
-        
-        # Check for overlapping bookings with a lock (using a subquery to check availability)
-        overlapping_booking = db.query(Booking).filter(
-            Booking.car_id == car.id,
-            Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
-            Booking.start_date < end_datetime,
-            Booking.end_date > start_datetime
-        ).first()
-        
-        if overlapping_booking:
-            logger.warning(f"📅 [CREATE BOOKING] Double booking detected: car_id={car.id}, "
-                          f"existing_booking_id={overlapping_booking.booking_id}")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Car is not available for the selected dates. Please choose different dates."
-            )
-        
-        # Check for blocked dates
-        overlapping_block = db.query(CarBlockedDate).filter(
-            CarBlockedDate.car_id == car.id,
-            CarBlockedDate.start_date < end_datetime,
-            CarBlockedDate.end_date > start_datetime
-        ).first()
-        
-        if overlapping_block:
-            logger.warning(f"📅 [CREATE BOOKING] Blocked dates detected: car_id={car.id}, "
-                          f"blocked_date_id={overlapping_block.id}")
-            reason_msg = f" ({overlapping_block.reason})" if overlapping_block.reason else ""
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Car is not available for the selected dates. These dates are blocked by the host{reason_msg}."
-            )
-        
-        # Calculate pricing
-        base_price = car.daily_rate * rental_days
-        damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if request.damage_waiver_enabled else 0
-        total_price = base_price + damage_waiver_fee
-        
-        # Generate unique booking ID
-        booking_id = generate_booking_id()
-        while db.query(Booking).filter(Booking.booking_id == booking_id).first():
-            booking_id = generate_booking_id()
-        
-        # Prepare location data (store as JSON strings)
-        pickup_location_json = json.dumps(request.pickup_location)
-        if request.dropoff_same_as_pickup:
-            return_location_json = pickup_location_json
-        else:
-            return_location_json = json.dumps(request.return_location) if request.return_location else pickup_location_json
-        
-        # Create booking
-        booking = Booking(
-            booking_id=booking_id,
-            client_id=current_client.id,
-            car_id=car.id,
-            start_date=start_datetime,
-            end_date=end_datetime,
-            pickup_time=request.pickup_time,
-            return_time=request.return_time or request.pickup_time,
-            pickup_location=pickup_location_json,
-            return_location=return_location_json,
-            dropoff_same_as_pickup=request.dropoff_same_as_pickup,
-            daily_rate=car.daily_rate,
-            rental_days=rental_days,
-            base_price=base_price,
-            damage_waiver_fee=damage_waiver_fee,
-            total_price=total_price,
-            damage_waiver_enabled=request.damage_waiver_enabled,
-            drive_type=request.drive_type,
-            check_in_preference="self",  # Default
-            special_requirements=request.special_requirements,
-            status=BookingStatus.PENDING  # Will be changed to CONFIRMED after payment
-        )
-        
-        db.add(booking)
-        db.commit()
-        db.refresh(booking)
-        
-        logger.info(f"📅 [CREATE BOOKING] ✅ Booking created successfully: booking_id={booking_id}, "
-                   f"car_id={car.id}, client_id={current_client.id}")
-        
-        # Load relationships for response
-        booking = db.query(Booking).options(
-            joinedload(Booking.car).joinedload(Car.host)
-        ).filter(Booking.id == booking.id).first()
-        
-        return booking_to_response(booking)
-        
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"📅 [CREATE BOOKING] ❌ Error creating booking: {str(e)}", exc_info=True)
+    # Check for overlapping bookings (prevents double booking)
+    if check_booking_overlap(db, car.id, request.start_date, request.end_date):
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create booking: {str(e)}"
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Car is not available for the selected dates. Please choose different dates."
         )
+    
+    # Calculate pricing
+    base_price = car.daily_rate * rental_days
+    damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if request.damage_waiver_enabled else 0
+    total_price = base_price + damage_waiver_fee
+    
+    # Generate unique booking ID
+    booking_id = generate_booking_id()
+    
+    # Ensure booking ID is unique
+    while db.query(Booking).filter(Booking.booking_id == booking_id).first():
+        booking_id = generate_booking_id()
+    
+    # Create booking
+    booking = Booking(
+        booking_id=booking_id,
+        client_id=current_client.id,
+        car_id=car.id,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        pickup_time=request.pickup_time,
+        return_time=request.return_time,
+        pickup_location=request.pickup_location or car.location_name,
+        return_location=request.return_location or request.pickup_location or car.location_name,
+        daily_rate=car.daily_rate,
+        rental_days=rental_days,
+        base_price=base_price,
+        damage_waiver_fee=damage_waiver_fee,
+        total_price=total_price,
+        damage_waiver_enabled=request.damage_waiver_enabled,
+        drive_type=request.drive_type,
+        check_in_preference=request.check_in_preference,
+        special_requirements=request.special_requirements,
+        status=BookingStatus.PENDING
+    )
+    
+    db.add(booking)
+    db.commit()
+    db.refresh(booking)
+    
+    # Load relationships for response
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.id == booking.id).first()
+    
+    return booking_to_response(booking)
 
 
-@router.get("/client/bookings", response_model=BookingListResponse)
+@router.get("/bookings", response_model=BookingListResponse)
 async def get_my_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -405,7 +271,7 @@ async def get_my_bookings(
     )
 
 
-@router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
+@router.get("/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking_details(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
@@ -435,7 +301,7 @@ async def get_booking_details(
     return booking_to_response(booking)
 
 
-@router.post("/client/bookings/{booking_id}/cancel", response_model=BookingResponse)
+@router.post("/bookings/{booking_id}/cancel", response_model=BookingResponse)
 async def cancel_booking(
     booking_id: str,
     request: Optional[BookingCancelRequest] = None,
@@ -483,7 +349,7 @@ async def cancel_booking(
     return booking_to_response(booking)
 
 
-@router.delete("/client/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
@@ -523,260 +389,3 @@ async def delete_booking(
     db.commit()
     
     return None
-
-
-# ==================== HOST BOOKING ENDPOINTS ====================
-
-@router.get("/host/bookings", response_model=BookingListResponse)
-async def get_host_bookings(
-    skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
-    status: Optional[str] = Query(None, description="Filter by booking status"),
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Get all bookings for cars owned by the authenticated host.
-    
-    - Returns bookings for all cars owned by the host
-    - Returns bookings sorted by creation date (newest first)
-    - Supports filtering by status
-    - Results are paginated
-    - Includes client (renter) information for each booking
-    
-    Requires host authentication.
-    """
-    logger.info(f"📅 [HOST BOOKINGS] Request received: host_id={current_host.id}, status={status}")
-    
-    # Query bookings for host's cars (using join to filter by host_id)
-    query = db.query(Booking).join(Car).options(
-        joinedload(Booking.car).joinedload(Car.host),
-        joinedload(Booking.client)
-    ).filter(Car.host_id == current_host.id)
-    
-    # Filter by status if provided
-    if status:
-        try:
-            status_enum = BookingStatus(status.lower())
-            query = query.filter(Booking.status == status_enum)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}"
-            )
-    
-    # Get total count
-    total = query.count()
-    
-    # Apply pagination and order by newest first
-    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
-    
-    logger.info(f"📅 [HOST BOOKINGS] Found {total} bookings for host_id={current_host.id}")
-    
-    # Convert to response format
-    booking_responses = [booking_to_response(b) for b in bookings]
-    
-    return BookingListResponse(
-        bookings=booking_responses,
-        total=total,
-        skip=skip,
-        limit=limit
-    )
-
-
-@router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
-async def get_host_booking_details(
-    booking_id: str,
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Get detailed information about a specific booking for a host's car.
-    
-    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
-    - Only returns bookings for cars owned by the authenticated host
-    - Includes full client (renter) information for messaging
-    
-    Requires host authentication.
-    """
-    logger.info(f"📅 [HOST BOOKING DETAILS] Request received: host_id={current_host.id}, booking_id={booking_id}")
-    
-    # Get booking with car and client relationships
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host),
-        joinedload(Booking.client)
-    ).filter(
-        Booking.booking_id == booking_id
-    ).first()
-    
-    if not booking:
-        logger.warning(f"📅 [HOST BOOKING DETAILS] Booking not found: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Booking not found"
-        )
-    
-    # Verify the booking is for a car owned by this host
-    if booking.car.host_id != current_host.id:
-        logger.warning(f"📅 [HOST BOOKING DETAILS] Permission denied: booking car owner={booking.car.host_id}, "
-                      f"requesting host={current_host.id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to view this booking"
-        )
-    
-    logger.info(f"📅 [HOST BOOKING DETAILS] ✅ Returning booking details: booking_id={booking_id}, "
-               f"client_id={booking.client_id}, car_id={booking.car_id}")
-    
-    return booking_to_response(booking)
-
-
-@router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
-async def confirm_pickup(
-    booking_id: str,
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Host confirms that the car has been picked up by the renter.
-    
-    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
-    - Only the host who owns the car in this booking can confirm pickup
-    - Updates booking status from CONFIRMED to ACTIVE
-    - Records the pickup confirmation timestamp
-    
-    Requires host authentication.
-    """
-    logger.info(f"📅 [CONFIRM PICKUP] Request received: host_id={current_host.id}, booking_id={booking_id}")
-    
-    # Get booking with car relationship
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host),
-        joinedload(Booking.client)
-    ).filter(
-        Booking.booking_id == booking_id
-    ).first()
-    
-    if not booking:
-        logger.warning(f"📅 [CONFIRM PICKUP] Booking not found: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Booking not found"
-        )
-    
-    # Verify the booking is for a car owned by this host
-    if not booking.car or booking.car.host_id != current_host.id:
-        logger.warning(f"📅 [CONFIRM PICKUP] Unauthorized: host_id={current_host.id}, booking_car_host_id={booking.car.host_id if booking.car else None}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only confirm pickup for bookings of your own cars"
-        )
-    
-    # Check if pickup is already confirmed
-    if booking.pickup_confirmed_at:
-        logger.warning(f"📅 [CONFIRM PICKUP] Already confirmed: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pickup has already been confirmed for this booking"
-        )
-    
-    # Validate booking status - must be CONFIRMED or PENDING
-    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.PENDING]:
-        logger.warning(f"📅 [CONFIRM PICKUP] Invalid status: booking_id={booking_id}, status={booking.status.value}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot confirm pickup for booking with status '{booking.status.value}'. Booking must be CONFIRMED or PENDING."
-        )
-    
-    # Update booking
-    now = datetime.now(timezone.utc)
-    booking.pickup_confirmed_at = now
-    booking.status = BookingStatus.ACTIVE
-    booking.status_updated_at = now
-    
-    db.commit()
-    db.refresh(booking)
-    
-    logger.info(f"📅 [CONFIRM PICKUP] ✅ Pickup confirmed: booking_id={booking_id}, host_id={current_host.id}")
-    
-    return booking_to_response(booking)
-
-
-@router.put("/host/bookings/{booking_id}/confirm-dropoff", response_model=BookingResponse)
-async def confirm_dropoff(
-    booking_id: str,
-    current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
-):
-    """
-    Host confirms that the car has been returned/dropped off by the renter.
-    
-    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
-    - Only the host who owns the car in this booking can confirm dropoff
-    - Updates booking status from ACTIVE to COMPLETED
-    - Records the dropoff confirmation timestamp
-    - Requires that pickup has been confirmed first
-    
-    Requires host authentication.
-    """
-    logger.info(f"📅 [CONFIRM DROPOFF] Request received: host_id={current_host.id}, booking_id={booking_id}")
-    
-    # Get booking with car relationship
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host),
-        joinedload(Booking.client)
-    ).filter(
-        Booking.booking_id == booking_id
-    ).first()
-    
-    if not booking:
-        logger.warning(f"📅 [CONFIRM DROPOFF] Booking not found: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Booking not found"
-        )
-    
-    # Verify the booking is for a car owned by this host
-    if not booking.car or booking.car.host_id != current_host.id:
-        logger.warning(f"📅 [CONFIRM DROPOFF] Unauthorized: host_id={current_host.id}, booking_car_host_id={booking.car.host_id if booking.car else None}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only confirm dropoff for bookings of your own cars"
-        )
-    
-    # Check if dropoff is already confirmed
-    if booking.dropoff_confirmed_at:
-        logger.warning(f"📅 [CONFIRM DROPOFF] Already confirmed: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dropoff has already been confirmed for this booking"
-        )
-    
-    # Validate that pickup was confirmed first
-    if not booking.pickup_confirmed_at:
-        logger.warning(f"📅 [CONFIRM DROPOFF] Pickup not confirmed: booking_id={booking_id}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot confirm dropoff. Pickup must be confirmed first."
-        )
-    
-    # Validate booking status - must be ACTIVE
-    if booking.status != BookingStatus.ACTIVE:
-        logger.warning(f"📅 [CONFIRM DROPOFF] Invalid status: booking_id={booking_id}, status={booking.status.value}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot confirm dropoff for booking with status '{booking.status.value}'. Booking must be ACTIVE."
-        )
-    
-    # Update booking
-    now = datetime.now(timezone.utc)
-    booking.dropoff_confirmed_at = now
-    booking.status = BookingStatus.COMPLETED
-    booking.status_updated_at = now
-    
-    db.commit()
-    db.refresh(booking)
-    
-    logger.info(f"📅 [CONFIRM DROPOFF] ✅ Dropoff confirmed: booking_id={booking_id}, host_id={current_host.id}")
-    
-    return booking_to_response(booking)
