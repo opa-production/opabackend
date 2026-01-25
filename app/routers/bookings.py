@@ -123,6 +123,10 @@ def booking_to_response(booking: Booking) -> dict:
         "status_updated_at": booking.status_updated_at,
         "cancellation_reason": booking.cancellation_reason,
         
+        # Pickup and dropoff confirmation
+        "pickup_confirmed_at": booking.pickup_confirmed_at if hasattr(booking, 'pickup_confirmed_at') else None,
+        "dropoff_confirmed_at": booking.dropoff_confirmed_at if hasattr(booking, 'dropoff_confirmed_at') else None,
+        
         # Timestamps
         "created_at": booking.created_at,
         "updated_at": booking.updated_at,
@@ -607,5 +611,156 @@ async def get_host_booking_details(
     
     logger.info(f"📅 [HOST BOOKING DETAILS] ✅ Returning booking details: booking_id={booking_id}, "
                f"client_id={booking.client_id}, car_id={booking.car_id}")
+    
+    return booking_to_response(booking)
+
+
+@router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
+async def confirm_pickup(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Host confirms that the car has been picked up by the renter.
+    
+    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
+    - Only the host who owns the car in this booking can confirm pickup
+    - Updates booking status from CONFIRMED to ACTIVE
+    - Records the pickup confirmation timestamp
+    
+    Requires host authentication.
+    """
+    logger.info(f"📅 [CONFIRM PICKUP] Request received: host_id={current_host.id}, booking_id={booking_id}")
+    
+    # Get booking with car relationship
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.client)
+    ).filter(
+        Booking.booking_id == booking_id
+    ).first()
+    
+    if not booking:
+        logger.warning(f"📅 [CONFIRM PICKUP] Booking not found: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
+        )
+    
+    # Verify the booking is for a car owned by this host
+    if not booking.car or booking.car.host_id != current_host.id:
+        logger.warning(f"📅 [CONFIRM PICKUP] Unauthorized: host_id={current_host.id}, booking_car_host_id={booking.car.host_id if booking.car else None}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only confirm pickup for bookings of your own cars"
+        )
+    
+    # Check if pickup is already confirmed
+    if booking.pickup_confirmed_at:
+        logger.warning(f"📅 [CONFIRM PICKUP] Already confirmed: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pickup has already been confirmed for this booking"
+        )
+    
+    # Validate booking status - must be CONFIRMED or PENDING
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.PENDING]:
+        logger.warning(f"📅 [CONFIRM PICKUP] Invalid status: booking_id={booking_id}, status={booking.status.value}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot confirm pickup for booking with status '{booking.status.value}'. Booking must be CONFIRMED or PENDING."
+        )
+    
+    # Update booking
+    now = datetime.now(timezone.utc)
+    booking.pickup_confirmed_at = now
+    booking.status = BookingStatus.ACTIVE
+    booking.status_updated_at = now
+    
+    db.commit()
+    db.refresh(booking)
+    
+    logger.info(f"📅 [CONFIRM PICKUP] ✅ Pickup confirmed: booking_id={booking_id}, host_id={current_host.id}")
+    
+    return booking_to_response(booking)
+
+
+@router.put("/host/bookings/{booking_id}/confirm-dropoff", response_model=BookingResponse)
+async def confirm_dropoff(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Host confirms that the car has been returned/dropped off by the renter.
+    
+    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
+    - Only the host who owns the car in this booking can confirm dropoff
+    - Updates booking status from ACTIVE to COMPLETED
+    - Records the dropoff confirmation timestamp
+    - Requires that pickup has been confirmed first
+    
+    Requires host authentication.
+    """
+    logger.info(f"📅 [CONFIRM DROPOFF] Request received: host_id={current_host.id}, booking_id={booking_id}")
+    
+    # Get booking with car relationship
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.client)
+    ).filter(
+        Booking.booking_id == booking_id
+    ).first()
+    
+    if not booking:
+        logger.warning(f"📅 [CONFIRM DROPOFF] Booking not found: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
+        )
+    
+    # Verify the booking is for a car owned by this host
+    if not booking.car or booking.car.host_id != current_host.id:
+        logger.warning(f"📅 [CONFIRM DROPOFF] Unauthorized: host_id={current_host.id}, booking_car_host_id={booking.car.host_id if booking.car else None}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only confirm dropoff for bookings of your own cars"
+        )
+    
+    # Check if dropoff is already confirmed
+    if booking.dropoff_confirmed_at:
+        logger.warning(f"📅 [CONFIRM DROPOFF] Already confirmed: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dropoff has already been confirmed for this booking"
+        )
+    
+    # Validate that pickup was confirmed first
+    if not booking.pickup_confirmed_at:
+        logger.warning(f"📅 [CONFIRM DROPOFF] Pickup not confirmed: booking_id={booking_id}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot confirm dropoff. Pickup must be confirmed first."
+        )
+    
+    # Validate booking status - must be ACTIVE
+    if booking.status != BookingStatus.ACTIVE:
+        logger.warning(f"📅 [CONFIRM DROPOFF] Invalid status: booking_id={booking_id}, status={booking.status.value}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot confirm dropoff for booking with status '{booking.status.value}'. Booking must be ACTIVE."
+        )
+    
+    # Update booking
+    now = datetime.now(timezone.utc)
+    booking.dropoff_confirmed_at = now
+    booking.status = BookingStatus.COMPLETED
+    booking.status_updated_at = now
+    
+    db.commit()
+    db.refresh(booking)
+    
+    logger.info(f"📅 [CONFIRM DROPOFF] ✅ Dropoff confirmed: booking_id={booking_id}, host_id={current_host.id}")
     
     return booking_to_response(booking)

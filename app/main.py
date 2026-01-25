@@ -30,16 +30,38 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",  # Explicitly enable Swagger UI
     redoc_url="/redoc",  # Explicitly enable ReDoc
-    openapi_url="/openapi.json"  # Explicitly enable OpenAPI schema
+    openapi_url="/openapi.json",  # Explicitly enable OpenAPI schema
+    openapi_tags=[
+        {"name": "Host Auth", "description": "Host authentication endpoints"},
+        {"name": "Client Auth", "description": "Client authentication endpoints"},
+        {"name": "Car Management", "description": "Car listing and management"},
+        {"name": "Payment Methods", "description": "Payment method management"},
+        {"name": "Feedback", "description": "User feedback"},
+        {"name": "Support Messages", "description": "Support messaging"},
+        {"name": "Client-Host Messages", "description": "Client-Host messaging"},
+        {"name": "Bookings", "description": "Booking management"},
+        {"name": "Payments", "description": "Payment processing"},
+        {"name": "Media Upload", "description": "File uploads"},
+        {"name": "Admin Auth", "description": "Admin authentication"},
+        {"name": "Admin User Management", "description": "User management"},
+        {"name": "Admin Car Management", "description": "Car verification"},
+        {"name": "Admin Dashboard", "description": "Dashboard statistics"},
+        {"name": "Admin Feedback Management", "description": "Feedback management"},
+        {"name": "Admin Notifications", "description": "Notification broadcasting"},
+        {"name": "Admin Management", "description": "Admin account management"},
+        {"name": "Admin Payment Methods", "description": "Payment method oversight"},
+        {"name": "Admin Support", "description": "Support conversation management"},
+    ]
 )
 
 
 def migrate_database():
     """Add missing columns to existing tables"""
     inspector = inspect(engine)
+    table_names = inspector.get_table_names()  # Cache table names
     
     # Check and add missing columns to hosts table
-    if 'hosts' in inspector.get_table_names():
+    if 'hosts' in table_names:
         columns = [col['name'] for col in inspector.get_columns('hosts')]
         if 'is_active' not in columns:
             # SQLite uses INTEGER for booleans (0 = False, 1 = True)
@@ -64,7 +86,7 @@ def migrate_database():
             print("✓ Added license_document_url column to hosts table")
     
     # Check and add missing columns to clients table
-    if 'clients' in inspector.get_table_names():
+    if 'clients' in table_names:
         columns = [col['name'] for col in inspector.get_columns('clients')]
         if 'is_active' not in columns:
             # SQLite uses INTEGER for booleans (0 = False, 1 = True)
@@ -93,7 +115,7 @@ def migrate_database():
             print("✓ Added gender column to clients table")
     
     # Check and add missing columns to cars table
-    if 'cars' in inspector.get_table_names():
+    if 'cars' in table_names:
         columns = [col['name'] for col in inspector.get_columns('cars')]
         if 'rejection_reason' not in columns:
             with engine.begin() as conn:
@@ -125,7 +147,7 @@ def migrate_database():
             print("✓ Added car_video column to cars table")
     
     # Check and add is_flagged to feedbacks table
-    if 'feedbacks' in inspector.get_table_names():
+    if 'feedbacks' in table_names:
         columns = [col['name'] for col in inspector.get_columns('feedbacks')]
         if 'is_flagged' not in columns:
             with engine.begin() as conn:
@@ -234,11 +256,11 @@ def migrate_database():
                     print("   The table will be recreated on next startup with Base.metadata.create_all()")
     
     # Create notifications table if it doesn't exist
-    if 'notifications' not in inspector.get_table_names():
+    if 'notifications' not in table_names:
         print("✓ Notifications table will be created")
     
     # Migrate support_messages table to new conversation-based schema
-    if 'support_messages' in inspector.get_table_names():
+    if 'support_messages' in table_names:
         columns = [col['name'] for col in inspector.get_columns('support_messages')]
         # Check if it's the old schema (has host_id, subject, admin_response) vs new schema (has conversation_id, sender_type)
         if 'conversation_id' not in columns and 'host_id' in columns:
@@ -249,47 +271,60 @@ def migrate_database():
             print("✓ Dropped old support_messages table (will be recreated with new schema)")
     
     # Ensure support_conversations table exists (created by Base.metadata.create_all)
-    if 'support_conversations' not in inspector.get_table_names():
+    if 'support_conversations' not in table_names:
         print("✓ Support conversations table will be created")
 
 
 @app.on_event("startup")
 async def startup_event():
     """Create database tables on startup and create default super admin"""
+    print("🚀 Starting up...")
+    
     # Run migrations first (may drop old tables)
     migrate_database()
     
     # Then create all tables (will recreate any dropped tables with new schema)
     Base.metadata.create_all(bind=engine)
     
-    # Double-check that support_messages table exists, create if missing
+    # Cache inspector and table names to avoid repeated queries
     inspector = inspect(engine)
-    if 'support_messages' not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+    
+    # Double-check that support_messages table exists, create if missing
+    if 'support_messages' not in table_names:
         print("⚠️  support_messages table missing, creating...")
         from app.models import SupportMessage, SupportConversation
         SupportMessage.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created support_messages table")
     
     # Double-check that client_host_conversations and client_host_messages tables exist
-    if 'client_host_conversations' not in inspector.get_table_names():
+    if 'client_host_conversations' not in table_names:
         print("⚠️  client_host_conversations table missing, creating...")
         from app.models import ClientHostConversation, ClientHostMessage
         ClientHostConversation.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_host_conversations table")
     
-    if 'client_host_messages' not in inspector.get_table_names():
+    if 'client_host_messages' not in table_names:
         print("⚠️  client_host_messages table missing, creating...")
         from app.models import ClientHostMessage
         ClientHostMessage.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_host_messages table")
     
-    # Check and add dropoff_same_as_pickup column to bookings table if missing
-    if 'bookings' in inspector.get_table_names():
+    # Check and add missing columns to bookings table
+    if 'bookings' in table_names:
         columns = [col['name'] for col in inspector.get_columns('bookings')]
         if 'dropoff_same_as_pickup' not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_same_as_pickup INTEGER DEFAULT 1 NOT NULL"))
             print("✓ Added dropoff_same_as_pickup column to bookings table")
+        if 'pickup_confirmed_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_confirmed_at DATETIME"))
+            print("✓ Added pickup_confirmed_at column to bookings table")
+        if 'dropoff_confirmed_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
+            print("✓ Added dropoff_confirmed_at column to bookings table")
     
     # Create default super admin if it doesn't exist
     db = SessionLocal()
@@ -329,6 +364,8 @@ async def startup_event():
         db.rollback()
     finally:
         db.close()
+    
+    print("✅ Startup complete!")
 
 # CORS middleware
 app.add_middleware(

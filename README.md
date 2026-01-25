@@ -89,6 +89,21 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `POST /api/v1/host/upload/vehicle/{car_id}/images` - Upload vehicle images (up to 10)
 - `POST /api/v1/host/upload/vehicle/{car_id}/video` - Upload vehicle video
 
+### Bookings (Requires authentication)
+
+#### Client Booking Endpoints
+- `POST /api/v1/client/bookings` - Create a new booking
+- `GET /api/v1/client/bookings` - Get all bookings for authenticated client
+- `GET /api/v1/client/bookings/{booking_id}` - Get booking details
+- `POST /api/v1/client/bookings/{booking_id}/cancel` - Cancel a booking
+- `DELETE /api/v1/client/bookings/{booking_id}` - Delete a booking
+
+#### Host Booking Endpoints
+- `GET /api/v1/host/bookings` - Get all bookings for host's cars
+- `GET /api/v1/host/bookings/{booking_id}` - Get booking details
+- `PUT /api/v1/host/bookings/{booking_id}/confirm-pickup` - Host confirms car pickup (updates status to ACTIVE)
+- `PUT /api/v1/host/bookings/{booking_id}/confirm-dropoff` - Host confirms car return (updates status to COMPLETED)
+
 ## Development
 
 See `guide.md` for the complete development checklist and project requirements.

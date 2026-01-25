@@ -1390,6 +1390,10 @@ class BookingResponse(BaseModel):
     status_updated_at: Optional[datetime] = None
     cancellation_reason: Optional[str] = None
     
+    # Pickup and dropoff confirmation
+    pickup_confirmed_at: Optional[datetime] = None
+    dropoff_confirmed_at: Optional[datetime] = None
+    
     # Timestamps
     created_at: datetime
     updated_at: Optional[datetime] = None
