@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -203,6 +203,8 @@ class Car(Base):
     host = relationship("Host", back_populates="cars")
     # Relationship to bookings
     bookings = relationship("Booking", back_populates="car", cascade="all, delete-orphan")
+    # Relationship to blocked dates
+    blocked_dates = relationship("CarBlockedDate", back_populates="car", cascade="all, delete-orphan")
 
 
 class BookingStatus(str, enum.Enum):
@@ -213,6 +215,26 @@ class BookingStatus(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+
+
+class CarBlockedDate(Base):
+    """Blocked dates for cars (host-managed calendar)"""
+    __tablename__ = "car_blocked_dates"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    car_id = Column(Integer, ForeignKey("cars.id"), nullable=False, index=True)
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True), nullable=False)
+    reason = Column(String(255), nullable=True)  # Optional reason for blocking
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationship to car
+    car = relationship("Car", back_populates="blocked_dates")
+    
+    # Index for efficient date range queries
+    __table_args__ = (
+        Index('idx_car_blocked_dates_range', 'car_id', 'start_date', 'end_date'),
+    )
 
 
 class Booking(Base):

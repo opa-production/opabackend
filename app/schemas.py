@@ -1264,8 +1264,41 @@ class CarAvailabilityResponse(BaseModel):
     """Car availability response"""
     car_id: int
     available: bool
-    booked_dates: List[dict]  # List of {start_date, end_date} for booked periods
+    booked_dates: List[dict]  # List of {start_date, end_date, status} for booked periods
+    blocked_dates: List[dict]  # List of {start_date, end_date, reason} for blocked periods
     message: str
+
+
+class CarBlockedDateRequest(BaseModel):
+    """Request to block dates for a car"""
+    start_date: datetime = Field(..., description="Start date of blocked period (ISO format)")
+    end_date: datetime = Field(..., description="End date of blocked period (ISO format)")
+    reason: Optional[str] = Field(None, max_length=255, description="Optional reason for blocking")
+    
+    @model_validator(mode='after')
+    def validate_dates(self):
+        if self.end_date <= self.start_date:
+            raise ValueError('end_date must be after start_date')
+        return self
+
+
+class CarBlockedDateResponse(BaseModel):
+    """Blocked date response"""
+    id: int
+    car_id: int
+    start_date: datetime
+    end_date: datetime
+    reason: Optional[str] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class CarBlockedDateListResponse(BaseModel):
+    """List of blocked dates for a car"""
+    blocked_dates: List[CarBlockedDateResponse]
+    total: int
 
 
 # ==================== EXPLORE PAGE SCHEMAS ====================

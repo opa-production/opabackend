@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host
+from app.models import Car, Client, Booking, BookingStatus, Host, CarBlockedDate
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -271,6 +271,22 @@ async def create_booking(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Car is not available for the selected dates. Please choose different dates."
+            )
+        
+        # Check for blocked dates
+        overlapping_block = db.query(CarBlockedDate).filter(
+            CarBlockedDate.car_id == car.id,
+            CarBlockedDate.start_date < end_datetime,
+            CarBlockedDate.end_date > start_datetime
+        ).first()
+        
+        if overlapping_block:
+            logger.warning(f"📅 [CREATE BOOKING] Blocked dates detected: car_id={car.id}, "
+                          f"blocked_date_id={overlapping_block.id}")
+            reason_msg = f" ({overlapping_block.reason})" if overlapping_block.reason else ""
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Car is not available for the selected dates. These dates are blocked by the host{reason_msg}."
             )
         
         # Calculate pricing

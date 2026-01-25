@@ -74,7 +74,12 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `PUT /api/v1/cars/{car_id}/location` - Step 4: Update car location and mark as complete
 - `GET /api/v1/cars/{car_id}` - Get car details by ID
 - `GET /api/v1/cars` - List all cars (with pagination)
+- `GET /api/v1/cars/{car_id}/availability` - Check car availability (public endpoint, includes booked and blocked dates)
 - `GET /api/v1/host/cars` - List all cars belonging to authenticated host
+- `PUT /api/v1/host/cars/{car_id}/toggle-visibility` - Toggle car visibility (show/hide)
+- `POST /api/v1/host/cars/{car_id}/block-dates` - Block dates for a car (make unavailable)
+- `GET /api/v1/host/cars/{car_id}/blocked-dates` - Get all blocked dates for a car
+- `DELETE /api/v1/host/cars/{car_id}/blocked-dates/{blocked_date_id}` - Unblock dates (remove from blocked list)
 
 ### Media Upload (Requires authentication)
 

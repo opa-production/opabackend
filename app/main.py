@@ -310,6 +310,13 @@ async def startup_event():
         ClientHostMessage.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_host_messages table")
     
+    # Double-check that car_blocked_dates table exists
+    if 'car_blocked_dates' not in table_names:
+        print("⚠️  car_blocked_dates table missing, creating...")
+        from app.models import CarBlockedDate
+        CarBlockedDate.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created car_blocked_dates table")
+    
     # Check and add missing columns to bookings table
     if 'bookings' in table_names:
         columns = [col['name'] for col in inspector.get_columns('bookings')]

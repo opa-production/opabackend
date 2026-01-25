@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
-from app.models import Car, Host, Booking, BookingStatus, VerificationStatus
+from app.models import Car, Host, Booking, BookingStatus, VerificationStatus, CarBlockedDate
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     CarListingResponse,
@@ -28,6 +28,9 @@ from app.schemas import (
     CarMediaUrlsRequest,
     CarExploreItemResponse,
     CarExploreListResponse,
+    CarBlockedDateRequest,
+    CarBlockedDateResponse,
+    CarBlockedDateListResponse,
 )
 
 router = APIRouter()
@@ -907,14 +910,20 @@ async def get_car_availability(
     - **car_id**: The unique identifier of the car
     - **start_date**: Optional start date to check specific range
     - **end_date**: Optional end date to check specific range
-    - Returns list of booked date ranges and availability status
+    - Returns list of booked date ranges, blocked date ranges, and availability status
+    
+    Only returns availability for verified and visible cars (verification_status = 'verified', is_hidden = False).
     """
-    # Verify car exists
-    car = db.query(Car).filter(Car.id == car_id, Car.is_complete == True).first()
+    # Verify car exists and is verified/visible (same logic as car details endpoint)
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.verification_status == VerificationStatus.VERIFIED.value,
+        Car.is_hidden == False
+    ).first()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found"
+            detail="Car not found or not available"
         )
     
     # Get all active bookings for this car
@@ -923,7 +932,12 @@ async def get_car_availability(
         Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE])
     )
     
-    # If checking specific date range, filter to relevant bookings
+    # Get all blocked dates for this car
+    blocked_dates_query = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id
+    )
+    
+    # If checking specific date range, filter to relevant bookings and blocked dates
     if start_date and end_date:
         bookings_query = bookings_query.filter(
             and_(
@@ -931,8 +945,15 @@ async def get_car_availability(
                 Booking.end_date > start_date
             )
         )
+        blocked_dates_query = blocked_dates_query.filter(
+            and_(
+                CarBlockedDate.start_date < end_date,
+                CarBlockedDate.end_date > start_date
+            )
+        )
     
     bookings = bookings_query.order_by(Booking.start_date).all()
+    blocked_dates = blocked_dates_query.order_by(CarBlockedDate.start_date).all()
     
     # Build booked dates list
     booked_dates = [
@@ -944,23 +965,35 @@ async def get_car_availability(
         for booking in bookings
     ]
     
-    # Check if specific range is available
+    # Build blocked dates list
+    blocked_dates_list = [
+        {
+            "start_date": blocked.start_date.isoformat(),
+            "end_date": blocked.end_date.isoformat(),
+            "reason": blocked.reason
+        }
+        for blocked in blocked_dates
+    ]
+    
+    # Check if specific range is available (considering both bookings and blocked dates)
     available = True
     message = "Car is available"
     
     if start_date and end_date:
-        if len(booked_dates) > 0:
+        if len(booked_dates) > 0 or len(blocked_dates_list) > 0:
             available = False
             message = "Car is not available for the selected dates"
         else:
             message = "Car is available for the selected dates"
-    elif len(booked_dates) > 0:
-        message = f"Car has {len(booked_dates)} upcoming booking(s)"
+    elif len(booked_dates) > 0 or len(blocked_dates_list) > 0:
+        total_unavailable = len(booked_dates) + len(blocked_dates_list)
+        message = f"Car has {total_unavailable} unavailable period(s)"
     
     return CarAvailabilityResponse(
         car_id=car_id,
         available=available,
         booked_dates=booked_dates,
+        blocked_dates=blocked_dates_list,
         message=message
     )
 
@@ -1012,6 +1045,154 @@ async def list_my_cars(
     """
     cars = db.query(Car).filter(Car.host_id == current_host.id).order_by(Car.created_at.desc()).all()
     return [_car_to_response(car) for car in cars]
+
+
+@router.post("/host/cars/{car_id}/block-dates", response_model=CarBlockedDateResponse, status_code=status.HTTP_201_CREATED)
+async def block_car_dates(
+    car_id: int,
+    request: CarBlockedDateRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Block dates for a car (make unavailable for booking).
+    
+    - **car_id**: The unique identifier of the car
+    - **start_date**: Start date of blocked period (ISO format)
+    - **end_date**: End date of blocked period (ISO format)
+    - **reason**: Optional reason for blocking (e.g., "Maintenance", "Personal use")
+    
+    Host can block single days or date ranges. Blocked dates prevent bookings.
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(Car.id == car_id, Car.host_id == current_host.id).first()
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to manage this car"
+        )
+    
+    # Validate dates are in the future
+    now = datetime.now(request.start_date.tzinfo if request.start_date.tzinfo else None)
+    if request.start_date < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot block dates in the past"
+        )
+    
+    # Check for overlapping bookings
+    overlapping_booking = db.query(Booking).filter(
+        Booking.car_id == car_id,
+        Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+        Booking.start_date < request.end_date,
+        Booking.end_date > request.start_date
+    ).first()
+    
+    if overlapping_booking:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot block dates that overlap with existing bookings"
+        )
+    
+    # Check for overlapping blocked dates
+    overlapping_block = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id,
+        CarBlockedDate.start_date < request.end_date,
+        CarBlockedDate.end_date > request.start_date
+    ).first()
+    
+    if overlapping_block:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="These dates are already blocked"
+        )
+    
+    # Create blocked date entry
+    blocked_date = CarBlockedDate(
+        car_id=car_id,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        reason=request.reason
+    )
+    
+    db.add(blocked_date)
+    db.commit()
+    db.refresh(blocked_date)
+    
+    return blocked_date
+
+
+@router.get("/host/cars/{car_id}/blocked-dates", response_model=CarBlockedDateListResponse)
+async def get_car_blocked_dates(
+    car_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all blocked dates for a car.
+    
+    - **car_id**: The unique identifier of the car
+    
+    Returns all blocked date ranges for the car.
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(Car.id == car_id, Car.host_id == current_host.id).first()
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to view this car"
+        )
+    
+    # Get all blocked dates
+    blocked_dates = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id
+    ).order_by(CarBlockedDate.start_date).all()
+    
+    return CarBlockedDateListResponse(
+        blocked_dates=blocked_dates,
+        total=len(blocked_dates)
+    )
+
+
+@router.delete("/host/cars/{car_id}/blocked-dates/{blocked_date_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unblock_car_dates(
+    car_id: int,
+    blocked_date_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Unblock dates for a car (remove from blocked list).
+    
+    - **car_id**: The unique identifier of the car
+    - **blocked_date_id**: The unique identifier of the blocked date entry
+    
+    Removes the blocked date entry, making those dates available for booking again.
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(Car.id == car_id, Car.host_id == current_host.id).first()
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to manage this car"
+        )
+    
+    # Get blocked date entry
+    blocked_date = db.query(CarBlockedDate).filter(
+        CarBlockedDate.id == blocked_date_id,
+        CarBlockedDate.car_id == car_id
+    ).first()
+    
+    if not blocked_date:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blocked date entry not found"
+        )
+    
+    db.delete(blocked_date)
+    db.commit()
+    
+    return None
 
 
 @router.put("/host/cars/{car_id}/toggle-visibility", response_model=CarResponse)
