@@ -1187,7 +1187,8 @@ class CarAvailabilityResponse(BaseModel):
     """Car availability response"""
     car_id: int
     available: bool
-    booked_dates: List[dict]  # List of {start_date, end_date} for booked periods
+    booked_dates: List[dict]  # List of {start_date, end_date, status} for booked periods
+    next_available_date: Optional[str] = None  # ISO format date string for next available date
     message: str
 
 

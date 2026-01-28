@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import json
 import logging
 
@@ -898,10 +898,16 @@ async def get_car_availability(
             detail="Car listing not found or not available"
         )
     
-    # Get all active bookings for this car
+    # Get current date (date only, no time)
+    today = date.today()
+    today_datetime = datetime.combine(today, datetime.min.time())
+    
+    # Get all active bookings for this car that haven't ended yet
     bookings_query = db.query(Booking).filter(
         Booking.car_id == car_id,
-        Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE])
+        Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+        # Only include bookings that haven't ended yet (end_date >= today)
+        Booking.end_date >= today_datetime
     )
     
     # If checking specific date range, filter to relevant bookings
@@ -925,23 +931,60 @@ async def get_car_availability(
         for booking in bookings
     ]
     
+    # Check if today is booked
+    today_is_booked = any(
+        booking.start_date.date() <= today <= booking.end_date.date()
+        for booking in bookings
+    )
+    
+    # Calculate next available date
+    next_available_date = None
+    if len(bookings) == 0:
+        # No bookings, available today
+        next_available_date = today.isoformat()
+    else:
+        # Find the latest end_date among all bookings
+        latest_end_date = max(booking.end_date.date() for booking in bookings)
+        
+        if today_is_booked:
+            # Today is booked, next available is the day after the latest booking ends
+            next_available_date = (latest_end_date + timedelta(days=1)).isoformat()
+        else:
+            # Today is not booked, available today
+            next_available_date = today.isoformat()
+    
     # Check if specific range is available
     available = True
     message = "Car is available"
     
     if start_date and end_date:
-        if len(booked_dates) > 0:
+        # Check if the requested range overlaps with any booking
+        range_overlaps = any(
+            booking.start_date < end_date and booking.end_date > start_date
+            for booking in bookings
+        )
+        if range_overlaps:
             available = False
             message = "Car is not available for the selected dates"
         else:
             message = "Car is available for the selected dates"
-    elif len(booked_dates) > 0:
-        message = f"Car has {len(booked_dates)} upcoming booking(s)"
+    else:
+        # No specific date range provided - check if car is available today
+        if today_is_booked:
+            available = False
+            message = f"Car is currently booked. {len(booked_dates)} active booking(s)"
+        elif len(booked_dates) > 0:
+            available = True
+            message = f"Car is available today. {len(booked_dates)} upcoming booking(s)"
+        else:
+            available = True
+            message = "Car is available"
     
     return CarAvailabilityResponse(
         car_id=car_id,
         available=available,
         booked_dates=booked_dates,
+        next_available_date=next_available_date,
         message=message
     )
 
