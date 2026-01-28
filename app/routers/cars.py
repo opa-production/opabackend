@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
-from app.models import Car, Host, Booking, BookingStatus, VerificationStatus
+from app.models import Car, Host, Booking, BookingStatus, VerificationStatus, CarBlockedDate
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     CarListingResponse,
@@ -1080,3 +1080,161 @@ async def toggle_car_visibility(
     db.refresh(db_car)
     
     return _car_to_response(db_car)
+
+
+# ==================== BLOCKED DATES MANAGEMENT ====================
+
+@router.get("/host/cars/{car_id}/blocked-dates")
+async def get_car_blocked_dates(
+    car_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all blocked dates for a car.
+    
+    - Only the car owner (host) can view blocked dates
+    - Returns list of blocked dates with reasons
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id
+    ).first()
+    
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to access it"
+        )
+    
+    # Get all blocked dates for this car
+    blocked_dates = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id
+    ).order_by(CarBlockedDate.blocked_date).all()
+    
+    return {
+        "car_id": car_id,
+        "blocked_dates": [
+            {
+                "id": bd.id,
+                "blocked_date": bd.blocked_date.isoformat(),
+                "reason": bd.reason,
+                "created_at": bd.created_at.isoformat() if bd.created_at else None
+            }
+            for bd in blocked_dates
+        ],
+        "total": len(blocked_dates)
+    }
+
+
+@router.post("/host/cars/{car_id}/blocked-dates")
+async def add_car_blocked_date(
+    car_id: int,
+    blocked_date: date = Query(..., description="Date to block (YYYY-MM-DD)"),
+    reason: Optional[str] = Query(None, description="Reason for blocking (optional)"),
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Add a blocked date for a car.
+    
+    - Only the car owner (host) can add blocked dates
+    - Prevents bookings on this date
+    - Can specify optional reason (e.g., "Maintenance", "Unavailable")
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id
+    ).first()
+    
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to access it"
+        )
+    
+    # Check if date is already blocked
+    existing = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id,
+        CarBlockedDate.blocked_date == blocked_date
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date {blocked_date.isoformat()} is already blocked"
+        )
+    
+    # Check if date is in the past
+    if blocked_date < date.today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot block dates in the past"
+        )
+    
+    # Create blocked date
+    blocked_date_obj = CarBlockedDate(
+        car_id=car_id,
+        blocked_date=blocked_date,
+        reason=reason.strip() if reason else None
+    )
+    
+    db.add(blocked_date_obj)
+    db.commit()
+    db.refresh(blocked_date_obj)
+    
+    return {
+        "message": f"Date {blocked_date.isoformat()} blocked successfully",
+        "blocked_date": {
+            "id": blocked_date_obj.id,
+            "blocked_date": blocked_date_obj.blocked_date.isoformat(),
+            "reason": blocked_date_obj.reason,
+            "created_at": blocked_date_obj.created_at.isoformat() if blocked_date_obj.created_at else None
+        }
+    }
+
+
+@router.delete("/host/cars/{car_id}/blocked-dates/{blocked_date_id}")
+async def remove_car_blocked_date(
+    car_id: int,
+    blocked_date_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Remove a blocked date for a car.
+    
+    - Only the car owner (host) can remove blocked dates
+    """
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id
+    ).first()
+    
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to access it"
+        )
+    
+    # Find the blocked date
+    blocked_date_obj = db.query(CarBlockedDate).filter(
+        CarBlockedDate.id == blocked_date_id,
+        CarBlockedDate.car_id == car_id
+    ).first()
+    
+    if not blocked_date_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blocked date not found"
+        )
+    
+    db.delete(blocked_date_obj)
+    db.commit()
+    
+    return {
+        "message": f"Blocked date {blocked_date_obj.blocked_date.isoformat()} removed successfully"
+    }
