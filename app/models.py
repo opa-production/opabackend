@@ -87,7 +87,7 @@ class Host(Base):
     # Relationship to feedback
     feedbacks = relationship("Feedback", back_populates="host", cascade="all, delete-orphan")
     # Relationship to host ratings
-    host_ratings = relationship("HostRating", foreign_keys="[HostRating.host_id]", cascade="all, delete-orphan")
+    host_ratings = relationship("HostRating", back_populates="host", cascade="all, delete-orphan")
 
 
 class Client(Base):
@@ -268,7 +268,7 @@ class Booking(Base):
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include host ratings relationship
-Client.host_ratings = relationship("HostRating", foreign_keys="[HostRating.client_id]", cascade="all, delete-orphan")
+Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
 
 
 class Feedback(Base):
@@ -312,8 +312,8 @@ class HostRating(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    host = relationship("Host", foreign_keys=[host_id])
-    client = relationship("Client", foreign_keys=[client_id])
+    host = relationship("Host", back_populates="host_ratings", foreign_keys=[host_id])
+    client = relationship("Client", back_populates="host_ratings", foreign_keys=[client_id])
     booking = relationship("Booking", foreign_keys=[booking_id])
     
     # Unique constraint: one rating per client per host (or per booking if booking_id is provided)

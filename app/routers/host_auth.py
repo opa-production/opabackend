@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Host
+from app.models import Host, Notification
 from app.schemas import (
     HostRegisterRequest,
     HostRegisterResponse,
@@ -12,7 +12,9 @@ from app.schemas import (
     HostProfileUpdateRequest,
     HostProfileResponse,
     RefreshTokenRequest,
-    TokenPairResponse
+    TokenPairResponse,
+    HostNotificationResponse,
+    HostNotificationListResponse
 )
 from app.auth import (
     get_password_hash,
@@ -218,6 +220,80 @@ async def update_host_profile(
     db.refresh(current_host)
     
     return current_host
+
+
+@router.get("/host/notifications", response_model=HostNotificationListResponse)
+async def get_host_notifications(
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all notifications for the authenticated host
+    
+    Returns all admin notifications sent to this host, ordered by creation date (newest first).
+    Includes unread count.
+    """
+    # Get all notifications for this host
+    notifications = db.query(Notification).filter(
+        Notification.recipient_type == "host",
+        Notification.recipient_id == current_host.id
+    ).order_by(Notification.created_at.desc()).all()
+    
+    # Count unread notifications
+    unread_count = db.query(Notification).filter(
+        Notification.recipient_type == "host",
+        Notification.recipient_id == current_host.id,
+        Notification.is_read == False
+    ).count()
+    
+    # Build response
+    notification_list = [HostNotificationResponse(
+        id=notification.id,
+        title=notification.title,
+        message=notification.message,
+        notification_type=notification.notification_type,
+        sender_name=notification.sender_name,
+        is_read=notification.is_read,
+        created_at=notification.created_at
+    ) for notification in notifications]
+    
+    return HostNotificationListResponse(
+        notifications=notification_list,
+        total=len(notification_list),
+        unread_count=unread_count
+    )
+
+
+@router.put("/host/notifications/{notification_id}/read")
+async def mark_host_notification_as_read(
+    notification_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Mark a notification as read
+    
+    - **notification_id**: ID of the notification to mark as read
+    - Only notifications belonging to the authenticated host can be marked as read
+    """
+    # Find the notification
+    notification = db.query(Notification).filter(
+        Notification.id == notification_id,
+        Notification.recipient_type == "host",
+        Notification.recipient_id == current_host.id
+    ).first()
+    
+    if not notification:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found"
+        )
+    
+    # Mark as read
+    notification.is_read = True
+    db.commit()
+    
+    return {"message": "Notification marked as read"}
 
 
 # Social Auth Placeholders
