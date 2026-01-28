@@ -1318,3 +1318,74 @@ class BookingListResponse(BaseModel):
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
+
+
+# ==================== CLIENT-HOST MESSAGING SCHEMAS ====================
+
+class ClientHostMessageRequest(BaseModel):
+    """Request to send a message"""
+    message: str = Field(..., min_length=1, max_length=2000, description="Message content (1-2000 characters)")
+
+
+class ClientHostMessageResponse(BaseModel):
+    """Response for a client-host message"""
+    id: int
+    conversation_id: int
+    sender_type: str  # "client" or "host"
+    sender_id: int
+    sender_name: Optional[str] = None
+    sender_avatar_url: Optional[str] = None
+    message: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClientHostConversationResponse(BaseModel):
+    """Response for a client-host conversation"""
+    id: int
+    client_id: int
+    client_name: str
+    client_email: str
+    client_avatar_url: Optional[str] = None
+    host_id: int
+    host_name: str
+    host_email: str
+    host_avatar_url: Optional[str] = None
+    is_read_by_client: bool
+    is_read_by_host: bool
+    messages: List[ClientHostMessageResponse]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientHostConversationListResponse(BaseModel):
+    """Response for a list of client-host conversations"""
+    conversations: List[ClientHostConversationResponse]
+
+
+# ==================== PAYMENT SCHEMAS ====================
+
+class PaymentRequest(BaseModel):
+    """Request to process a payment"""
+    booking_id: str = Field(..., description="The booking ID to pay for (e.g., BK-12345678)")
+    payment_method_id: int = Field(..., description="ID of the payment method to use")
+
+
+class PaymentResponse(BaseModel):
+    """Response for a payment processing"""
+    success: bool
+    booking_id: str
+    amount_paid: float
+    payment_method_type: str
+    payment_method_name: str
+    transaction_id: str
+    message: str
+    paid_at: datetime
+    booking: dict  # BookingResponse as dict (to avoid circular import)

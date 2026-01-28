@@ -117,7 +117,7 @@ def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_da
     return query.first() is not None
 
 
-@router.post("/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/client/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: BookingCreateRequest,
     current_client: Client = Depends(get_current_client),
@@ -222,7 +222,7 @@ async def create_booking(
     return booking_to_response(booking)
 
 
-@router.get("/bookings", response_model=BookingListResponse)
+@router.get("/client/bookings", response_model=BookingListResponse)
 async def get_my_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -271,7 +271,7 @@ async def get_my_bookings(
     )
 
 
-@router.get("/bookings/{booking_id}", response_model=BookingResponse)
+@router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking_details(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
@@ -301,7 +301,7 @@ async def get_booking_details(
     return booking_to_response(booking)
 
 
-@router.post("/bookings/{booking_id}/cancel", response_model=BookingResponse)
+@router.post("/client/bookings/{booking_id}/cancel", response_model=BookingResponse)
 async def cancel_booking(
     booking_id: str,
     request: Optional[BookingCancelRequest] = None,
@@ -349,7 +349,7 @@ async def cancel_booking(
     return booking_to_response(booking)
 
 
-@router.delete("/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/client/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),

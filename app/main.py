@@ -19,7 +19,7 @@ from app.admin import (
     admins as admin_admins,
     payment_methods as admin_payment_methods,
     support as admin_support,
-    bookings as admin_bookings
+    # bookings as admin_bookings  # TODO: Create admin bookings router
 )
 from app.models import Admin
 from app.auth import get_password_hash, get_admin_by_email
@@ -410,7 +410,7 @@ app.include_router(admin_notifications.router, prefix="/api/v1", tags=["Admin No
 app.include_router(admin_admins.router, prefix="/api/v1", tags=["Admin Management"])
 app.include_router(admin_payment_methods.router, prefix="/api/v1", tags=["Admin Payment Methods"])
 app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"])
-app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
+# app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])  # TODO: Create admin bookings router
 
 
 @app.get("/")

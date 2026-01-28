@@ -376,3 +376,68 @@ class SupportMessage(Base):
     
     # Relationships
     conversation = relationship("SupportConversation", back_populates="messages")
+
+
+class ClientHostConversation(Base):
+    """Conversation between a client and a host"""
+    __tablename__ = "client_host_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    
+    # Read status
+    is_read_by_client = Column(Boolean, default=False, nullable=False)
+    is_read_by_host = Column(Boolean, default=False, nullable=False)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_message_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    # Relationships
+    client = relationship("Client", foreign_keys=[client_id])
+    host = relationship("Host", foreign_keys=[host_id])
+    messages = relationship("ClientHostMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class ClientHostMessage(Base):
+    """Individual messages in a client-host conversation"""
+    __tablename__ = "client_host_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("client_host_conversations.id"), nullable=False, index=True)
+    
+    # Sender information
+    sender_type = Column(String(20), nullable=False, index=True)  # "client" or "host"
+    sender_id = Column(Integer, nullable=False)  # Client ID or Host ID
+    
+    # Message content
+    message = Column(Text, nullable=False)
+    
+    # Read status (for the recipient)
+    is_read = Column(Boolean, default=False, nullable=False)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    # Relationships
+    conversation = relationship("ClientHostConversation", back_populates="messages")
+
+
+class CarBlockedDate(Base):
+    """Blocked dates for cars (maintenance, unavailable dates)"""
+    __tablename__ = "car_blocked_dates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    car_id = Column(Integer, ForeignKey("cars.id"), nullable=False, index=True)
+    
+    # Blocked date range
+    blocked_date = Column(Date, nullable=False, index=True)
+    reason = Column(Text, nullable=True)  # Optional reason for blocking
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    car = relationship("Car", foreign_keys=[car_id])

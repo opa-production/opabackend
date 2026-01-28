@@ -826,8 +826,7 @@ async def get_car_details(
     car = db.query(Car).options(joinedload(Car.host)).filter(
         Car.id == car_id,
         Car.verification_status == VerificationStatus.VERIFIED.value,
-        Car.is_hidden == False,
-        Car.is_complete == True
+        Car.is_hidden == False
     ).first()
     
     if not car:
@@ -887,12 +886,16 @@ async def get_car_availability(
     - **end_date**: Optional end date to check specific range
     - Returns list of booked date ranges and availability status
     """
-    # Verify car exists
-    car = db.query(Car).filter(Car.id == car_id, Car.is_complete == True).first()
+    # Verify car exists and is verified
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.verification_status == VerificationStatus.VERIFIED.value,
+        Car.is_hidden == False
+    ).first()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found"
+            detail="Car listing not found or not available"
         )
     
     # Get all active bookings for this car
