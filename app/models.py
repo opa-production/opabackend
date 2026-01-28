@@ -86,6 +86,8 @@ class Host(Base):
     payment_methods = relationship("PaymentMethod", back_populates="host", cascade="all, delete-orphan")
     # Relationship to feedback
     feedbacks = relationship("Feedback", back_populates="host", cascade="all, delete-orphan")
+    # Relationship to host ratings
+    host_ratings = relationship("HostRating", foreign_keys="[HostRating.host_id]", cascade="all, delete-orphan")
 
 
 class Client(Base):
@@ -265,6 +267,8 @@ class Booking(Base):
 
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
+# Update Client model to include host ratings relationship
+Client.host_ratings = relationship("HostRating", foreign_keys="[HostRating.client_id]", cascade="all, delete-orphan")
 
 
 class Feedback(Base):
@@ -286,6 +290,37 @@ class Feedback(Base):
     
     # Relationship to host
     host = relationship("Host", foreign_keys=[host_id])
+
+
+class HostRating(Base):
+    """Client ratings for hosts"""
+    __tablename__ = "host_ratings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True, index=True)  # Optional: link to booking
+    
+    # Rating (1-5 stars)
+    rating = Column(Integer, nullable=False)  # 1 to 5
+    
+    # Review content
+    review = Column(Text, nullable=True)  # Optional text review
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    host = relationship("Host", foreign_keys=[host_id])
+    client = relationship("Client", foreign_keys=[client_id])
+    booking = relationship("Booking", foreign_keys=[booking_id])
+    
+    # Unique constraint: one rating per client per host (or per booking if booking_id is provided)
+    __table_args__ = (
+        # Allow multiple ratings per client-host pair, but one per booking
+        # We'll enforce this in the API logic
+    )
 
 
 class Admin(Base):

@@ -450,6 +450,50 @@ class FeedbackListResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== HOST RATING SCHEMAS ====================
+
+class HostRatingCreateRequest(BaseModel):
+    """Request to create a host rating"""
+    host_id: int = Field(..., description="ID of the host being rated")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="Optional: ID of the completed booking this rating is for")
+
+
+class HostRatingUpdateRequest(BaseModel):
+    """Request to update a host rating"""
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+
+
+class HostRatingResponse(BaseModel):
+    """Host rating response schema"""
+    id: int
+    host_id: int
+    client_id: int
+    booking_id: Optional[int] = None
+    rating: int
+    review: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    # Client info (for display)
+    client_name: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class HostRatingListResponse(BaseModel):
+    """List of host ratings response"""
+    ratings: List[HostRatingResponse]
+    total: int
+    average_rating: Optional[float] = None
+    
+    class Config:
+        from_attributes = True
+
+
 # Support Message Schemas
 class SupportMessageRequest(BaseModel):
     """Request to send a message in support conversation"""
