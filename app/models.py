@@ -467,8 +467,12 @@ class CarBlockedDate(Base):
     id = Column(Integer, primary_key=True, index=True)
     car_id = Column(Integer, ForeignKey("cars.id"), nullable=False, index=True)
     
-    # Blocked date range
-    blocked_date = Column(Date, nullable=False, index=True)
+    # Blocked date range (table has start_date and end_date as NOT NULL)
+    start_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    
+    # Single blocked date (nullable, for backward compatibility)
+    blocked_date = Column(Date, nullable=True, index=True)
     reason = Column(Text, nullable=True)  # Optional reason for blocking
     
     # Metadata

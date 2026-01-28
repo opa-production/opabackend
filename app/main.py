@@ -322,11 +322,21 @@ async def startup_event():
     else:
         # Check and add missing columns to car_blocked_dates table
         columns = [col['name'] for col in inspector.get_columns('car_blocked_dates')]
-        if 'blocked_date' not in columns:
+        
+        # Handle old schema with start_date - migrate data if needed
+        if 'start_date' in columns and 'blocked_date' not in columns:
+            with engine.begin() as conn:
+                # Add blocked_date column
+                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
+                # Migrate data from start_date to blocked_date
+                conn.execute(text("UPDATE car_blocked_dates SET blocked_date = DATE(start_date) WHERE blocked_date IS NULL"))
+            print("✓ Migrated start_date to blocked_date in car_blocked_dates table")
+        elif 'blocked_date' not in columns:
             with engine.begin() as conn:
                 # Add as nullable first (SQLite limitation)
                 conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
             print("✓ Added blocked_date column to car_blocked_dates table")
+        
         if 'reason' not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN reason TEXT"))

@@ -219,6 +219,27 @@ class CarMediaRequest(BaseModel):
         return v
 
 
+class CarBlockedDateRequest(BaseModel):
+    """Request to block a date or date range for a car"""
+    start_date: Optional[datetime] = Field(None, description="Start date to block (ISO format)")
+    end_date: Optional[datetime] = Field(None, description="End date to block (ISO format)")
+    blocked_date: Optional[date] = Field(None, description="Single date to block (YYYY-MM-DD) - alternative to start_date/end_date")
+    reason: Optional[str] = Field(None, max_length=500, description="Optional reason for blocking")
+    
+    @model_validator(mode='after')
+    def validate_dates(self):
+        # If blocked_date is provided, use it
+        if self.blocked_date:
+            return self
+        
+        # If start_date is provided, use it (client sends start_date and end_date)
+        if self.start_date:
+            self.blocked_date = self.start_date.date()
+            return self
+        
+        raise ValueError("Either 'blocked_date' or 'start_date' must be provided")
+
+
 class CarMediaUrlsRequest(BaseModel):
     """Alternative request schema that accepts 'files' as primary field (for app compatibility)"""
     files: Optional[List[str]] = Field(default=None, description="List of image URLs (optional, will be stored in car_images)")

@@ -3,7 +3,7 @@ Car listing endpoints for clients (read-only browsing)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from typing import Optional, List
 from datetime import datetime, date, timedelta
 import json
@@ -28,6 +28,7 @@ from app.schemas import (
     CarMediaUrlsRequest,
     CarExploreItemResponse,
     CarExploreListResponse,
+    CarBlockedDateRequest,
 )
 
 router = APIRouter()
@@ -1084,6 +1085,79 @@ async def toggle_car_visibility(
 
 # ==================== BLOCKED DATES MANAGEMENT ====================
 
+# Helper function to add blocked date (shared by both endpoints)
+async def _add_blocked_date_internal(
+    car_id: int,
+    blocked_date: date,
+    reason: Optional[str],
+    current_host: Host,
+    db: Session
+):
+    """Internal helper to add a blocked date"""
+    # Verify car exists and belongs to host
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id
+    ).first()
+    
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to access it"
+        )
+    
+    # Check if date is already blocked (check both blocked_date and start_date)
+    blocked_datetime = datetime.combine(blocked_date, datetime.min.time())
+    existing = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id,
+        or_(
+            CarBlockedDate.blocked_date == blocked_date,
+            and_(
+                func.date(CarBlockedDate.start_date) <= blocked_date,
+                func.date(CarBlockedDate.end_date) >= blocked_date
+            )
+        )
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date {blocked_date.isoformat()} is already blocked"
+        )
+    
+    # Check if date is in the past
+    if blocked_date < date.today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot block dates in the past"
+        )
+    
+    # Create blocked date
+    # Convert date to datetime for start_date and end_date (table requires them)
+    blocked_datetime = datetime.combine(blocked_date, datetime.min.time())
+    blocked_date_obj = CarBlockedDate(
+        car_id=car_id,
+        start_date=blocked_datetime,
+        end_date=blocked_datetime,
+        blocked_date=blocked_date,  # Also store as date for compatibility
+        reason=reason.strip() if reason else None
+    )
+    
+    db.add(blocked_date_obj)
+    db.commit()
+    db.refresh(blocked_date_obj)
+    
+    return {
+        "message": f"Date {blocked_date.isoformat()} blocked successfully",
+        "blocked_date": {
+            "id": blocked_date_obj.id,
+            "blocked_date": blocked_date_obj.blocked_date.isoformat(),
+            "reason": blocked_date_obj.reason,
+            "created_at": blocked_date_obj.created_at.isoformat() if blocked_date_obj.created_at else None
+        }
+    }
+
+
 @router.get("/host/cars/{car_id}/blocked-dates")
 async def get_car_blocked_dates(
     car_id: int,
@@ -1108,18 +1182,19 @@ async def get_car_blocked_dates(
             detail="Car not found or you don't have permission to access it"
         )
     
-    # Get all blocked dates for this car (filter out NULL blocked_date rows from old schema)
+    # Get all blocked dates for this car
     blocked_dates = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id,
-        CarBlockedDate.blocked_date.isnot(None)  # Filter out rows with NULL blocked_date
-    ).order_by(CarBlockedDate.blocked_date).all()
+        CarBlockedDate.car_id == car_id
+    ).order_by(CarBlockedDate.start_date).all()
     
     return {
         "car_id": car_id,
         "blocked_dates": [
             {
                 "id": bd.id,
-                "blocked_date": bd.blocked_date.isoformat() if bd.blocked_date else None,
+                "blocked_date": bd.blocked_date.isoformat() if bd.blocked_date else bd.start_date.date().isoformat(),
+                "start_date": bd.start_date.isoformat() if bd.start_date else None,
+                "end_date": bd.end_date.isoformat() if bd.end_date else None,
                 "reason": bd.reason,
                 "created_at": bd.created_at.isoformat() if bd.created_at else None
             }
@@ -1132,8 +1207,7 @@ async def get_car_blocked_dates(
 @router.post("/host/cars/{car_id}/blocked-dates")
 async def add_car_blocked_date(
     car_id: int,
-    blocked_date: date = Query(..., description="Date to block (YYYY-MM-DD)"),
-    reason: Optional[str] = Query(None, description="Reason for blocking (optional)"),
+    request: CarBlockedDateRequest,
     current_host: Host = Depends(get_current_host),
     db: Session = Depends(get_db)
 ):
@@ -1144,57 +1218,19 @@ async def add_car_blocked_date(
     - Prevents bookings on this date
     - Can specify optional reason (e.g., "Maintenance", "Unavailable")
     """
-    # Verify car exists and belongs to host
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id
-    ).first()
-    
-    if not car:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car not found or you don't have permission to access it"
-        )
-    
-    # Check if date is already blocked
-    existing = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id,
-        CarBlockedDate.blocked_date == blocked_date
-    ).first()
-    
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Date {blocked_date.isoformat()} is already blocked"
-        )
-    
-    # Check if date is in the past
-    if blocked_date < date.today():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot block dates in the past"
-        )
-    
-    # Create blocked date
-    blocked_date_obj = CarBlockedDate(
-        car_id=car_id,
-        blocked_date=blocked_date,
-        reason=reason.strip() if reason else None
-    )
-    
-    db.add(blocked_date_obj)
-    db.commit()
-    db.refresh(blocked_date_obj)
-    
-    return {
-        "message": f"Date {blocked_date.isoformat()} blocked successfully",
-        "blocked_date": {
-            "id": blocked_date_obj.id,
-            "blocked_date": blocked_date_obj.blocked_date.isoformat(),
-            "reason": blocked_date_obj.reason,
-            "created_at": blocked_date_obj.created_at.isoformat() if blocked_date_obj.created_at else None
-        }
-    }
+    return await _add_blocked_date_internal(car_id, request.blocked_date, request.reason, current_host, db)
+
+
+# Alias endpoint for client compatibility (block-dates vs blocked-dates)
+@router.post("/host/cars/{car_id}/block-dates")
+async def add_car_blocked_date_alias(
+    car_id: int,
+    request: CarBlockedDateRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """Alias for /blocked-dates endpoint for client compatibility"""
+    return await _add_blocked_date_internal(car_id, request.blocked_date, request.reason, current_host, db)
 
 
 @router.delete("/host/cars/{car_id}/blocked-dates/{blocked_date_id}")
