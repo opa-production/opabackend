@@ -1,5 +1,5 @@
 """
-Booking endpoints for clients
+Booking endpoints for clients (and hosts)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
@@ -10,8 +10,8 @@ import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus
-from app.auth import get_current_client
+from app.models import Car, Client, Booking, BookingStatus, Host
+from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
     BookingResponse,
@@ -346,6 +346,212 @@ async def cancel_booking(
     db.commit()
     db.refresh(booking)
     
+    return booking_to_response(booking)
+
+
+# ==================== CLIENT COMPLETED BOOKINGS ====================
+
+@router.get("/client/bookings/completed", response_model=BookingListResponse)
+async def get_my_completed_bookings(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db)
+):
+    """
+    Convenience endpoint to get only **completed** bookings for the current client.
+
+    - Uses the same shape as `/client/bookings`
+    - Results are paginated and sorted by creation date (newest first)
+    """
+    query = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(
+        Booking.client_id == current_client.id,
+        Booking.status == BookingStatus.COMPLETED,
+    )
+
+    total = query.count()
+    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    booking_responses = [booking_to_response(b) for b in bookings]
+
+    return BookingListResponse(
+        bookings=booking_responses,
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+# ==================== HOST BOOKINGS ====================
+
+@router.get("/host/bookings", response_model=BookingListResponse)
+async def get_host_bookings(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
+    status: Optional[str] = Query(None, description="Filter by booking status"),
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get bookings for the current authenticated host.
+
+    - Returns bookings where the car belongs to the host
+    - Supports filtering by status
+    - Results are paginated and sorted by creation date (newest first)
+    """
+    query = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(Car.host_id == current_host.id)
+    )
+
+    if status:
+        try:
+            status_enum = BookingStatus(status.lower())
+            query = query.filter(Booking.status == status_enum)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}",
+            )
+
+    total = query.count()
+    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    booking_responses = [booking_to_response(b) for b in bookings]
+
+    return BookingListResponse(
+        bookings=booking_responses,
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/host/bookings/completed", response_model=BookingListResponse)
+async def get_host_completed_bookings(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Convenience endpoint to get only **completed** bookings for the current host.
+
+    - Returns bookings where the car belongs to the host
+    - Results are paginated and sorted by creation date (newest first)
+    """
+    query = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(
+            Car.host_id == current_host.id,
+            Booking.status == BookingStatus.COMPLETED,
+        )
+    )
+
+    total = query.count()
+    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    booking_responses = [booking_to_response(b) for b in bookings]
+
+    return BookingListResponse(
+        bookings=booking_responses,
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
+async def get_host_booking_details(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get detailed information about a specific booking for a host.
+
+    - Only returns bookings where the car belongs to the authenticated host
+    """
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    return booking_to_response(booking)
+
+
+@router.post("/host/bookings/{booking_id}/complete", response_model=BookingResponse)
+async def complete_booking_as_host(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Mark a booking as **completed** from the host side (e.g., after drop‑off confirmation).
+
+    - Only the host who owns the car can complete the booking
+    - Only `confirmed` or `active` bookings can be completed
+    """
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Only confirmed or active bookings can be marked as completed by the host. "
+                f"Current status is '{booking.status.value}'."
+            ),
+        )
+
+    booking.status = BookingStatus.COMPLETED
+    booking.status_updated_at = datetime.utcnow()
+    booking.cancellation_reason = None
+
+    db.commit()
+    db.refresh(booking)
+
     return booking_to_response(booking)
 
 
