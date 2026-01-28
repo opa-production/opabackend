@@ -1108,9 +1108,10 @@ async def get_car_blocked_dates(
             detail="Car not found or you don't have permission to access it"
         )
     
-    # Get all blocked dates for this car
+    # Get all blocked dates for this car (filter out NULL blocked_date rows from old schema)
     blocked_dates = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id
+        CarBlockedDate.car_id == car_id,
+        CarBlockedDate.blocked_date.isnot(None)  # Filter out rows with NULL blocked_date
     ).order_by(CarBlockedDate.blocked_date).all()
     
     return {
@@ -1118,7 +1119,7 @@ async def get_car_blocked_dates(
         "blocked_dates": [
             {
                 "id": bd.id,
-                "blocked_date": bd.blocked_date.isoformat(),
+                "blocked_date": bd.blocked_date.isoformat() if bd.blocked_date else None,
                 "reason": bd.reason,
                 "created_at": bd.created_at.isoformat() if bd.created_at else None
             }

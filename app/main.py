@@ -319,6 +319,22 @@ async def startup_event():
         from app.models import CarBlockedDate
         CarBlockedDate.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created car_blocked_dates table")
+    else:
+        # Check and add missing columns to car_blocked_dates table
+        columns = [col['name'] for col in inspector.get_columns('car_blocked_dates')]
+        if 'blocked_date' not in columns:
+            with engine.begin() as conn:
+                # Add as nullable first (SQLite limitation)
+                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
+            print("✓ Added blocked_date column to car_blocked_dates table")
+        if 'reason' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN reason TEXT"))
+            print("✓ Added reason column to car_blocked_dates table")
+        if 'created_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at DATETIME"))
+            print("✓ Added created_at column to car_blocked_dates table")
     
     # Check and add missing columns to bookings table
     if 'bookings' in table_names:
