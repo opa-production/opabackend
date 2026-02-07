@@ -11,6 +11,9 @@ def generate_access_token():
     consumer_secret = os.getenv("CONSUMER_SECRET")
     url = os.getenv("MPESA_TOKEN_URL")
 
+    if not all([consumer_key, consumer_secret, url]):
+        raise Exception("M-Pesa configuration missing: CONSUMER_KEY, CONSUMER_SECRET, or MPESA_TOKEN_URL")
+
     try:
         encoded_credentials = base64.b64encode(f"{consumer_key}:{consumer_secret}".encode()).decode()
 
@@ -19,15 +22,12 @@ def generate_access_token():
             "Content-Type": "application/json"
         }
 
-        # Send the request and parse the response
-        response = requests.get(url, headers=headers).json()
-        print(response)
+        response = requests.get(url, headers=headers).json() # type: ignore
 
-        # Check for errors and return the access token
         if "access_token" in response:
             return response["access_token"]
         else:
-            raise Exception("Failed to get access token: " + response["error_description"])
+            raise Exception("Failed to get access token: " + response.get("error_description", "Unknown error"))
     except Exception as e:
         raise Exception("Failed to get access token: " + str(e)) 
 
@@ -35,15 +35,21 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
     token = generate_access_token()
     print(token)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    shortCode = os.getenv("MPESA_SHORTCODE") #sandbox -174379
+    shortCode = os.getenv("MPESA_SHORTCODE") 
     passkey = os.getenv("MPESA_PASSKEY")
+    
+    if not all([shortCode, passkey]):
+        raise Exception("M-Pesa configuration missing: MPESA_SHORTCODE or MPESA_PASSKEY")
+
+    shortCode = str(shortCode)
+    passkey = str(passkey)
+    
     stk_password = base64.b64encode((shortCode + passkey + timestamp).encode('utf-8')).decode('utf-8')
     
-    #choose one depending on you development environment
-    #sandbox
     url = os.getenv("MPESA_STK_URL")
-    #live
-    # url = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+    
+    if not url:
+        raise Exception("M-Pesa configuration missing: MPESA_STK_URL")
     
     headers = {
         'Authorization': 'Bearer '+token,
@@ -67,7 +73,6 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
     
     try:
         response = requests.post(url, json=requestBody, headers=headers)
-        print(response.json())
         return response.json()
     except Exception as e:
-        print('Error:', str(e))
+        return {"ResponseCode": "1", "ResponseDescription": str(e)}

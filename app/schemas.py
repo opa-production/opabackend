@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
 from typing import Optional, List, Literal
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import json
 import re
 from enum import Enum
@@ -1316,7 +1316,7 @@ class BookingCreateRequest(BaseModel):
     def validate_dates(self):
         if self.start_date >= self.end_date:
             raise ValueError('End date must be after start date')
-        if self.start_date < datetime.now():
+        if self.start_date < datetime.now(timezone.utc):
             raise ValueError('Start date cannot be in the past')
         return self
 
