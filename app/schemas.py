@@ -1440,18 +1440,23 @@ class ClientHostConversationListResponse(BaseModel):
 
 class PaymentRequest(BaseModel):
     """Request to process a payment"""
-    booking_id: str = Field(..., description="The booking ID to pay for (e.g., BK-12345678)")
-    payment_method_id: int = Field(..., description="ID of the payment method to use")
-
+    BusinessShortCode: str
+    Password: str
+    Timestamp: str
+    Amount: str
+    PartyA: str
+    PartyB: str
+    TransactionType: str
+    PhoneNumber: str
+    TransactionDesc: str
+    AccountReference: str
+    CallBackUrl: str
 
 class PaymentResponse(BaseModel):
     """Response for a payment processing"""
-    success: bool
-    booking_id: str
-    amount_paid: float
-    payment_method_type: str
-    payment_method_name: str
-    transaction_id: str
-    message: str
-    paid_at: datetime
-    booking: dict  # BookingResponse as dict (to avoid circular import)
+    MerchantRequestID: str
+    CheckoutRequestID: str
+    Response: str
+    ResponseDescription: str
+    CustomerMessage: str
+
