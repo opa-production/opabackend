@@ -294,7 +294,7 @@ async def update_car_status(
             detail="Car not found"
         )
     
-    car.verification_status = request.verification_status.value
+    car.verification_status = request.verification_status
     
     if request.verification_status == VerificationStatus.DENIED:
         car.rejection_reason = request.rejection_reason

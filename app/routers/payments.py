@@ -100,6 +100,7 @@ async def process_payment(
 
         transaction_id = f"TXN-{booking.booking_id}"
         payment_message = "Payment processed successfully. Your booking is now confirmed."
+        print(payment_method.mpesa_number)
 
         # If payment method is M-Pesa, call STK Push
         if payment_method.method_type == PaymentMethodType.MPESA:
@@ -117,7 +118,7 @@ async def process_payment(
             
             mpesa_response = sendStkPush(
                 amount=amount_str, 
-                PhoneNumber=str(payment_method.mpesa_number),
+                PhoneNumber="254799503165",#str(payment_method.mpesa_number),
                 AccountReference=str(booking.booking_id),
                 TransactionDesc=f"Payment for booking {booking.booking_id}"
             )
