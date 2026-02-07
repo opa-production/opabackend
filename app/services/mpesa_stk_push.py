@@ -31,7 +31,7 @@ def generate_access_token():
     except Exception as e:
         raise Exception("Failed to get access token: " + str(e)) 
 
-def sendStkPush(amount: str, PhoneNumber: str):
+def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
     token = generate_access_token()
     print(token)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
@@ -60,9 +60,9 @@ def sendStkPush(amount: str, PhoneNumber: str):
         "PartyA": PhoneNumber,
         "PartyB": shortCode,
         "PhoneNumber": PhoneNumber,
-        "CallBackURL": "https://fruity-weeks-care.loca.lt/mpesa/callback",
-        "AccountReference": "account",
-        "TransactionDesc": "test"
+        "CallBackURL": os.getenv("MPESA_CALLBACK_URL", "https://fruity-weeks-care.loca.lt/mpesa/callback"),
+        "AccountReference": AccountReference,
+        "TransactionDesc": TransactionDesc
     }
     
     try:

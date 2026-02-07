@@ -1440,6 +1440,23 @@ class ClientHostConversationListResponse(BaseModel):
 
 class PaymentRequest(BaseModel):
     """Request to process a payment"""
+    booking_id: str = Field(..., description="The booking ID to pay for (e.g., 'BK-12345678')")
+    payment_method_id: int = Field(..., description="ID of the payment method to use")
+
+class PaymentResponse(BaseModel):
+    """Response for a payment processing"""
+    success: bool
+    booking_id: str
+    amount_paid: float
+    payment_method_type: str
+    payment_method_name: str
+    transaction_id: str
+    message: str
+    paid_at: datetime
+    booking: BookingResponse
+
+class MpesaStkPushRequest(BaseModel):
+    """Internal schema for M-Pesa STK Push request"""
     BusinessShortCode: str
     Password: str
     Timestamp: str
@@ -1452,11 +1469,11 @@ class PaymentRequest(BaseModel):
     AccountReference: str
     CallBackUrl: str
 
-class PaymentResponse(BaseModel):
-    """Response for a payment processing"""
+class MpesaStkPushResponse(BaseModel):
+    """Internal schema for M-Pesa STK Push response"""
     MerchantRequestID: str
     CheckoutRequestID: str
-    Response: str
+    ResponseCode: str
     ResponseDescription: str
     CustomerMessage: str
 
