@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Union
 from datetime import datetime, date, timezone
 import json
 import re
@@ -1298,6 +1298,15 @@ class BookingStatusEnum(str, Enum):
     REJECTED = "rejected"
 
 
+def _location_to_str(v: Union[str, List[str], None]) -> Optional[str]:
+    """Convert location to string - accepts array (e.g. from address picker) or string"""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v) if v else None
+    return str(v) if v else None
+
+
 class BookingCreateRequest(BaseModel):
     """Request to create a new booking"""
     car_id: int = Field(..., description="ID of the car to book")
@@ -1311,13 +1320,26 @@ class BookingCreateRequest(BaseModel):
     drive_type: Optional[str] = Field("self", description="'self' or 'withDriver'")
     check_in_preference: Optional[str] = Field("self", description="'self' or 'assisted'")
     special_requirements: Optional[str] = Field(None, max_length=2000)
+    dropoff_same_as_pickup: Optional[bool] = Field(None, description="If true, return_location is same as pickup")
 
-    @model_validator(mode='after')
-    def validate_dates(self):
+    @field_validator("pickup_location", "return_location", mode="before")
+    @classmethod
+    def parse_location(cls, v: Union[str, List[str], None]) -> Optional[str]:
+        return _location_to_str(v)
+
+    @model_validator(mode="after")
+    def validate_dates_and_return_location(self):
         if self.start_date >= self.end_date:
-            raise ValueError('End date must be after start date')
-        if self.start_date < datetime.now(timezone.utc):
-            raise ValueError('Start date cannot be in the past')
+            raise ValueError("End date must be after start date")
+        now = datetime.now(timezone.utc)
+        start = self.start_date
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start < now:
+            raise ValueError("Start date cannot be in the past")
+        # When dropoff_same_as_pickup, use pickup_location for return_location if empty
+        if self.dropoff_same_as_pickup and not self.return_location and self.pickup_location:
+            self.return_location = self.pickup_location
         return self
 
 

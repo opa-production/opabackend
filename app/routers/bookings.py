@@ -10,7 +10,7 @@ import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host
+from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -126,7 +126,7 @@ async def create_booking(
     """
     Create a new car booking.
     
-    - Validates car exists and is complete
+    - Validates car exists and is verified
     - Validates date range doesn't overlap with existing bookings
     - Validates minimum rental days requirement
     - Creates booking with 'pending' status
@@ -134,16 +134,16 @@ async def create_booking(
     
     Requires client authentication.
     """
-    # Verify car exists and is complete
+    # Verify car exists and is verified
     car = db.query(Car).options(joinedload(Car.host)).filter(
         Car.id == request.car_id,
-        Car.is_complete == True
+        Car.verification_status == VerificationStatus.VERIFIED.value
     ).first()
     
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found or not available"
+            detail="Car listing not found or not verified"
         )
     
     # Calculate rental days

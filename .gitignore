@@ -32,5 +32,6 @@ Thumbs.db
 # Project specific
 backup_connected_branch/
 admin-web/
+admin-website/
 
 
