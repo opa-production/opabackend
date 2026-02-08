@@ -7,13 +7,14 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Host, Client, Car, VerificationStatus
+from app.models import Host, Client, Car, Booking, VerificationStatus
 
 router = APIRouter()
+ACTIVITY_LIMIT = 30
 
 
 @router.get("/admin/dashboard/stats")
@@ -78,14 +79,94 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.get("/admin/dashboard/activity")
-def get_recent_activity() -> Dict[str, List[Dict[str, Any]]]:
+def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
     Recent platform activity for the dashboard.
 
     For now this returns an empty list so the UI shows
     “No recent activity” instead of a 404 error.
     """
-    return {"activities": []}
+    activities: List[Dict[str, Any]] = []
+
+    # Recent host registrations
+    hosts = db.query(Host).order_by(Host.created_at.desc()).limit(10).all()
+    for h in hosts:
+        activities.append({
+            "type": "host_registration",
+            "entity_type": "host",
+            "entity_id": h.id,
+            "entity_name": h.full_name,
+            "description": f"Host {h.full_name} registered",
+            "timestamp": h.created_at.isoformat() if h.created_at else "",
+        })
+
+    # Recent client registrations
+    clients = db.query(Client).order_by(Client.created_at.desc()).limit(10).all()
+    for c in clients:
+        activities.append({
+            "type": "client_registration",
+            "entity_type": "client",
+            "entity_id": c.id,
+            "entity_name": c.full_name,
+            "description": f"Client {c.full_name} registered",
+            "timestamp": c.created_at.isoformat() if c.created_at else "",
+        })
+
+    # Recent car submissions
+    cars = db.query(Car).order_by(Car.created_at.desc()).limit(10).all()
+    for car in cars:
+        activities.append({
+            "type": "car_submission",
+            "entity_type": "car",
+            "entity_id": car.id,
+            "entity_name": car.name or f"Car #{car.id}",
+            "description": f"Car '{car.name or 'Untitled'}' submitted for verification",
+            "timestamp": car.created_at.isoformat() if car.created_at else "",
+        })
+
+    # Car status changes (verified/rejected)
+    cars_updated = (
+        db.query(Car)
+        .filter(Car.updated_at.isnot(None))
+        .order_by(Car.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    for car in cars_updated:
+        status = car.verification_status or "awaiting"
+        activities.append({
+            "type": "car_status_change",
+            "entity_type": "car",
+            "entity_id": car.id,
+            "entity_name": car.name or f"Car #{car.id}",
+            "description": f"Car '{car.name or 'Untitled'}' {status}",
+            "timestamp": car.updated_at.isoformat() if car.updated_at else "",
+        })
+
+    # Recent bookings
+    bookings = (
+        db.query(Booking)
+        .options(joinedload(Booking.car))
+        .order_by(Booking.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    for b in bookings:
+        car_name = b.car.name if b.car else f"Car #{b.car_id}"
+        activities.append({
+            "type": "booking_created",
+            "entity_type": "car",
+            "entity_id": b.id,
+            "entity_name": car_name,
+            "description": f"New booking {b.booking_id} created",
+            "timestamp": b.created_at.isoformat() if b.created_at else "",
+        })
+
+    # Sort by timestamp descending and take top N
+    activities.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    activities = activities[:ACTIVITY_LIMIT]
+
+    return {"activities": activities, "total": len(activities)}
 
 
 @router.get("/admin/dashboard/verification-queue")
