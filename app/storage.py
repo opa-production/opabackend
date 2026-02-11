@@ -13,13 +13,19 @@ from typing import Optional
 import logging
 
 try:
-    from supabase import create_client, Client as SupabaseClient
+    from supabase import Client as SupabaseClient
+    from supabase import create_client as original_create_client
 except ImportError:
     SupabaseClient = None
     create_client = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+def create_client(*args, **kwargs):
+    # Remove 'proxy' if it's in kwargs
+    kwargs.pop("proxy", None)
+    return original_create_client(*args, **kwargs)
 
 # ==================== SUPABASE CONFIGURATION ====================
 # Load from environment variables for security
