@@ -6,7 +6,6 @@ from datetime import datetime
 
 load_dotenv()
 
-# generate an access token
 def generate_access_token():
     consumer_key = os.getenv("CONSUMER_KEY")
     consumer_secret = os.getenv("CONSUMER_SECRET")
