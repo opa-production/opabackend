@@ -33,7 +33,6 @@ def generate_access_token():
 
 def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
     token = generate_access_token()
-    # print(token)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     shortCode = os.getenv("MPESA_SHORTCODE") 
     passkey = os.getenv("MPESA_PASSKEY")
