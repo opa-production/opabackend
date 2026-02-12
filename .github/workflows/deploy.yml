@@ -2,7 +2,7 @@ name: Deploy To Namecheap VPS
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   deploy:
