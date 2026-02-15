@@ -38,19 +38,19 @@ def verify_google_token(token: str) -> dict:
     Raises:
         HTTPException: If token is invalid or expired
     """
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google authentication is not configured. Set GOOGLE_CLIENT_ID in .env",
+        )
     try:
-        # Specify the CLIENT_ID of the app that accesses the backend:
         idinfo = id_token.verify_oauth2_token(
-            token, 
-            google_requests.Request(), 
+            token,
+            google_requests.Request(),
             settings.GOOGLE_CLIENT_ID
         )
-
-        # ID token is valid. Get the user's Google Account ID from the decoded token.
-        # userid = idinfo['sub']
         return idinfo
     except ValueError as e:
-        # Invalid token
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid Google token: {str(e)}",
