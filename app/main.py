@@ -87,6 +87,10 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE hosts ADD COLUMN license_document_url VARCHAR(500)"))
             print("✓ Added license_document_url column to hosts table")
+        if 'google_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN google_id VARCHAR(255)"))
+            print("✓ Added google_id column to hosts table")
     
     # Check and add missing columns to clients table
     if 'clients' in table_names:
@@ -116,6 +120,10 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN gender VARCHAR(20)"))
             print("✓ Added gender column to clients table")
+        if 'google_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN google_id VARCHAR(255)"))
+            print("✓ Added google_id column to clients table")
     
     # Check and add missing columns to cars table
     if 'cars' in table_names:

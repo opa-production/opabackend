@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import jwt, JWTError
 import bcrypt
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Host, Client, Admin
 from app.schemas import TokenData
+from app.config import settings
 
 # JWT settings
 SECRET_KEY = "your-secret-key-change-in-production"  # Should be in environment variables
@@ -20,6 +23,39 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7  # 7 days for refresh tokens
 security = HTTPBearer()
 client_security = HTTPBearer()
 admin_security = HTTPBearer()
+
+
+def verify_google_token(token: str) -> dict:
+    """
+    Verify a Google ID token.
+    
+    Args:
+        token: The Google ID token string
+    
+    Returns:
+        Decoded token payload (contains email, name, sub/google_id, etc.)
+    
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    try:
+        # Specify the CLIENT_ID of the app that accesses the backend:
+        idinfo = id_token.verify_oauth2_token(
+            token, 
+            google_requests.Request(), 
+            settings.GOOGLE_CLIENT_ID
+        )
+
+        # ID token is valid. Get the user's Google Account ID from the decoded token.
+        # userid = idinfo['sub']
+        return idinfo
+    except ValueError as e:
+        # Invalid token
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid Google token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

@@ -8,6 +8,7 @@ from app.schemas import (
     ClientRegisterRequest,
     ClientRegisterResponse,
     ClientLoginRequest,
+    GoogleLoginRequest,
     ClientLoginResponseWithRefresh,
     ClientProfileUpdateRequest,
     ClientProfileResponse,
@@ -21,6 +22,7 @@ from app.schemas import (
 from app.auth import (
     get_password_hash,
     verify_password,
+    verify_google_token,
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
@@ -433,12 +435,96 @@ async def delete_driving_license(
     return {"message": "Driving license deleted successfully"}
 
 
-# Social Auth Placeholders
-# TODO: Implement "Continue with Google" integration
-# @router.post("/client/auth/google")
-# async def client_google_auth():
-#     """Continue with Google authentication for clients"""
-#     pass
+@router.post("/client/auth/google", response_model=ClientLoginResponseWithRefresh)
+async def client_google_auth(
+    request: GoogleLoginRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Continue with Google authentication for clients.
+    
+    If the user doesn't exist, a new account is created.
+    If the user exists but hasn't linked Google, it will be linked if the email matches.
+    
+    Returns:
+    - access_token: Short-lived JWT for API access
+    - refresh_token: Long-lived JWT for refreshing access tokens
+    - expires_in: Access token expiration time in seconds
+    - client: Client profile information
+    """
+    # Verify Google token
+    idinfo = verify_google_token(request.id_token)
+    
+    google_id = idinfo['sub']
+    email = idinfo['email']
+    full_name = idinfo.get('name', '')
+    avatar_url = idinfo.get('picture')
+
+    # 1. Try to find by google_id
+    client = db.query(Client).filter(Client.google_id == google_id).first()
+    
+    if not client:
+        # 2. Try to find by email
+        client = db.query(Client).filter(Client.email == email).first()
+        
+        if client:
+            # Link Google account to existing email account
+            client.google_id = google_id
+            if not client.avatar_url and avatar_url:
+                client.avatar_url = avatar_url
+            db.commit()
+        else:
+            # 3. Create new client
+            client = Client(
+                full_name=full_name,
+                email=email,
+                google_id=google_id,
+                avatar_url=avatar_url,
+                is_active=True
+            )
+            db.add(client)
+            db.commit()
+            db.refresh(client)
+            
+            # Create welcome notification from CEO
+            welcome_message = (
+                f"Hey {client.full_name}! Welcome to Ardena. I'm Deon, the founder. "
+                f"We built this platform to make car rental simple, affordable, and convenient for you. "
+                f"I'm so glad you've joined our community. You're in great hands with our support team, "
+                f"but I also want to make sure you have my direct line: +254702248984. "
+                f"Don't hesitate to say hi or ask a question. Happy renting!"
+            )
+            
+            welcome_notification = Notification(
+                recipient_type="client",
+                recipient_id=client.id,
+                title="Welcome Message from CEO",
+                message=welcome_message,
+                notification_type="info",
+                sender_name="Deon, CEO Ardena"
+            )
+            db.add(welcome_notification)
+            db.commit()
+
+    if not client.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive"
+        )
+
+    # Create tokens
+    token_data = {"sub": str(client.id), "role": "client"}
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(data=token_data)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "client": client
+    }
 
 
 # TODO: Implement "Continue with Apple" integration

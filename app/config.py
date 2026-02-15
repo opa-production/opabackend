@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Email configuration
     RESEND_FROM_EMAIL: Optional[str] = "onboarding@resend.dev"  # Default, can be overridden via env
     
+    # Google Auth
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    
     # Frontend URL for password reset links
     FRONTEND_URL: Optional[str] = "https://yourapp.com"  # Base URL for reset password links
     
