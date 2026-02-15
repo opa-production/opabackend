@@ -22,7 +22,7 @@ def generate_access_token():
             "Content-Type": "application/json"
         }
 
-        response = requests.get(url, headers=headers).json() # type: ignore
+        response = requests.get(url, headers=headers).json()
 
         if "access_token" in response:
             return response["access_token"]

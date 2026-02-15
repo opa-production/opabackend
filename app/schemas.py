@@ -1461,9 +1461,13 @@ class ClientHostConversationListResponse(BaseModel):
 # ==================== PAYMENT SCHEMAS ====================
 
 class PaymentRequest(BaseModel):
-    """Request to process a payment"""
-    booking_id: str = Field(..., description="The booking ID to pay for (e.g., 'BK-12345678')")
-    payment_method_id: int = Field(..., description="ID of the payment method to use")
+    """Request to process a payment. Accepts both snake_case and camelCase.
+    booking_id can be either the string ID (e.g. 'BK-ABC12345') or the numeric database id.
+    """
+    booking_id: Union[str, int] = Field(..., description="Booking ID (string like 'BK-ABC12345') or numeric id", alias="bookingId")
+    payment_method_id: int = Field(..., description="ID of the payment method to use", alias="paymentMethodId")
+
+    model_config = {"populate_by_name": True}
 
 class PaymentResponse(BaseModel):
     """Response for a payment processing"""

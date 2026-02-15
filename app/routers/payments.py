@@ -45,12 +45,14 @@ async def process_payment(
                f"booking_id={request.booking_id}, payment_method_id={request.payment_method_id}")
     
     # Verify booking exists and belongs to client
-    booking = db.query(Booking).options(
-        joinedload(Booking.car)
-    ).filter(
-        Booking.booking_id == request.booking_id,
+    # Accept both string booking_id (e.g. "BK-ABC12345") and numeric id
+    booking_query = db.query(Booking).options(joinedload(Booking.car)).filter(
         Booking.client_id == current_client.id
-    ).first()
+    )
+    if isinstance(request.booking_id, int):
+        booking = booking_query.filter(Booking.id == request.booking_id).first()
+    else:
+        booking = booking_query.filter(Booking.booking_id == request.booking_id).first()
     
     if not booking:
         logger.warning(f"💳 [PROCESS PAYMENT] Booking not found: booking_id={request.booking_id}, client_id={current_client.id}")
@@ -116,9 +118,16 @@ async def process_payment(
             logger.info(f" [MPESA STK PUSH] Initiating for booking={booking.booking_id}, "
                        f"number={payment_method.mpesa_number}, amount={amount_str}")
             
+            # Ensure M-Pesa number has country code (254 for Kenya) if missing
+            mpesa_phone = str(payment_method.mpesa_number).strip()
+            if mpesa_phone.startswith("0"):
+                mpesa_phone = "254" + mpesa_phone[1:]
+            elif not mpesa_phone.startswith("254"):
+                mpesa_phone = "254" + mpesa_phone
+
             mpesa_response = sendStkPush(
-                amount=amount_str, 
-                PhoneNumber="254799503165",#str(payment_method.mpesa_number),
+                amount=amount_str,
+                PhoneNumber=mpesa_phone,
                 AccountReference=str(booking.booking_id),
                 TransactionDesc=f"Payment for booking {booking.booking_id}"
             )
