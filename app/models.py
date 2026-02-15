@@ -61,7 +61,8 @@ class Host(Base):
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
+    hashed_password = Column(String(255), nullable=True)
+    google_id = Column(String(255), unique=True, index=True, nullable=True)
     
     # Profile fields
     bio = Column(Text, nullable=True)
@@ -97,7 +98,8 @@ class Client(Base):
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
+    hashed_password = Column(String(255), nullable=True)
+    google_id = Column(String(255), unique=True, index=True, nullable=True)
     
     # Profile fields
     bio = Column(Text, nullable=True)

@@ -131,6 +131,11 @@ class ClientLoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    """Request for Google Authentication"""
+    id_token: str = Field(..., description="The ID token received from Google")
+
+
 class ClientLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

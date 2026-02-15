@@ -8,6 +8,7 @@ from app.schemas import (
     HostRegisterRequest,
     HostRegisterResponse,
     HostLoginRequest,
+    GoogleLoginRequest,
     HostLoginResponseWithRefresh,
     HostProfileUpdateRequest,
     HostProfileResponse,
@@ -19,6 +20,7 @@ from app.schemas import (
 from app.auth import (
     get_password_hash,
     verify_password,
+    verify_google_token,
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
@@ -296,12 +298,76 @@ async def mark_host_notification_as_read(
     return {"message": "Notification marked as read"}
 
 
-# Social Auth Placeholders
-# TODO: Implement "Continue with Google" integration
-# @router.post("/host/auth/google")
-# async def host_google_auth():
-#     """Continue with Google authentication for hosts"""
-#     pass
+@router.post("/host/auth/google", response_model=HostLoginResponseWithRefresh)
+async def host_google_auth(
+    request: GoogleLoginRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Continue with Google authentication for hosts.
+    
+    If the host doesn't exist, a new account is created.
+    If the host exists but hasn't linked Google, it will be linked if the email matches.
+    
+    Returns:
+    - access_token: Short-lived JWT for API access
+    - refresh_token: Long-lived JWT for refreshing access tokens
+    - expires_in: Access token expiration time in seconds
+    - host: Host profile information
+    """
+    # Verify Google token
+    idinfo = verify_google_token(request.id_token)
+    
+    google_id = idinfo['sub']
+    email = idinfo['email']
+    full_name = idinfo.get('name', '')
+    avatar_url = idinfo.get('picture')
+
+    # 1. Try to find by google_id
+    host = db.query(Host).filter(Host.google_id == google_id).first()
+    
+    if not host:
+        # 2. Try to find by email
+        host = db.query(Host).filter(Host.email == email).first()
+        
+        if host:
+            # Link Google account to existing email account
+            host.google_id = google_id
+            if not host.avatar_url and avatar_url:
+                host.avatar_url = avatar_url
+            db.commit()
+        else:
+            # 3. Create new host
+            host = Host(
+                full_name=full_name,
+                email=email,
+                google_id=google_id,
+                avatar_url=avatar_url,
+                is_active=True
+            )
+            db.add(host)
+            db.commit()
+            db.refresh(host)
+
+    if not host.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive"
+        )
+
+    # Create tokens
+    token_data = {"sub": str(host.id), "role": "host"}
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(data=token_data)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "host": host
+    }
 
 
 # TODO: Implement "Continue with Apple" integration
