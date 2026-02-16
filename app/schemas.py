@@ -136,6 +136,24 @@ class GoogleLoginRequest(BaseModel):
     id_token: str = Field(..., description="The ID token received from Google")
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Request to send password reset email"""
+    email: EmailStr = Field(..., description="Email address of the account")
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request to reset password with token from email"""
+    token: str = Field(..., description="Reset token from the email link")
+    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+    new_password_confirmation: str = Field(..., min_length=8, description="Confirm new password")
+
+    @model_validator(mode='after')
+    def passwords_match(self):
+        if self.new_password != self.new_password_confirmation:
+            raise ValueError('Passwords do not match')
+        return self
+
+
 class ClientLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

@@ -4,11 +4,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Client, DrivingLicense, Notification
+from app.config import settings
 from app.schemas import (
     ClientRegisterRequest,
     ClientRegisterResponse,
     ClientLoginRequest,
     GoogleLoginRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
     ClientLoginResponseWithRefresh,
     ClientProfileUpdateRequest,
     ClientProfileResponse,
@@ -26,6 +29,8 @@ from app.auth import (
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
+    create_password_reset_token,
+    verify_password_reset_token,
     get_client_by_email,
     get_current_client,
     ACCESS_TOKEN_EXPIRE_MINUTES
@@ -140,6 +145,88 @@ async def login_client(
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
         "client": client
     }
+
+
+@router.post("/client/auth/forgot-password")
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Request a password reset email.
+    
+    If the email exists, sends a reset link. Always returns success to prevent
+    email enumeration. The link expires in 1 hour.
+    
+    - **email**: Registered email address
+    """
+    client = get_client_by_email(db, request.email)
+    if not client:
+        # Don't reveal if email exists - same response for both cases
+        return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+    if not settings.RESEND_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service is not configured. Please try again later.",
+        )
+
+    reset_token = create_password_reset_token(client.id)
+    base_url = (settings.FRONTEND_URL or "https://yourapp.com").rstrip("/")
+    reset_link = f"{base_url}/reset-password?token={reset_token}"
+
+    try:
+        import resend
+        resend.api_key = settings.RESEND_API_KEY or ""
+        resend.Emails.send({
+            "from": settings.RESEND_FROM_EMAIL or "Ardena <onboarding@resend.dev>",
+            "to": [client.email],
+            "subject": "Reset your Ardena password",
+            "html": f"""
+            <p>Hi {client.full_name},</p>
+            <p>You requested to reset your password for your Ardena account.</p>
+            <p>Click the link below to set a new password (link expires in 1 hour):</p>
+            <p><a href="{reset_link}">{reset_link}</a></p>
+            <p>If you didn't request this, you can safely ignore this email.</p>
+            <p>— The Ardena Team</p>
+            """,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send reset email. Please try again later.",
+        )
+
+    return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+
+@router.post("/client/auth/reset-password")
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Reset password using the token from the forgot-password email.
+    
+    - **token**: Reset token from the email link
+    - **new_password**: New password (min 8 characters)
+    - **new_password_confirmation**: Must match new_password
+    """
+    payload = verify_password_reset_token(request.token)
+    client_id = int(payload["sub"])
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link.",
+        )
+
+    client.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    db.refresh(client)
+
+    return {"message": "Password has been reset successfully. You can now log in with your new password."}
 
 
 @router.post("/client/auth/logout")

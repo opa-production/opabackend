@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Host, Client, Car, Booking, VerificationStatus
+from app.models import Host, Client, Car, Booking, VerificationStatus, BookingStatus
 
 router = APIRouter()
 ACTIVITY_LIMIT = 30
@@ -200,4 +200,83 @@ def get_verification_queue_stats(db: Session = Depends(get_db)) -> Dict[str, Any
         "verified_cars": verified,
         "rejected_cars": denied,
         "generated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+COMMISSION_RATE = 0.15  # 15% platform commission
+
+
+@router.get("/admin/dashboard/revenue")
+def get_revenue_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Revenue statistics for admin dashboard.
+    - money_in: Total from confirmed/active/completed bookings
+    - commission: Platform commission (15%)
+    - host_payout: Money paid to hosts
+    - monthly_breakdown: Revenue by month for charts
+    """
+    from datetime import timedelta
+
+    paid_statuses = [BookingStatus.CONFIRMED.value, BookingStatus.ACTIVE.value, BookingStatus.COMPLETED.value]
+    result = (
+        db.query(func.sum(Booking.total_price))
+        .filter(Booking.status.in_(paid_statuses))
+        .scalar()
+    )
+    money_in = float(result or 0)
+    paid_bookings_count = (
+        db.query(func.count(Booking.id))
+        .filter(Booking.status.in_(paid_statuses))
+        .scalar()
+        or 0
+    )
+    commission_amount = round(money_in * COMMISSION_RATE, 2)
+    host_payout = round(money_in - commission_amount, 2)
+
+    # Monthly breakdown (last 6 months)
+    now = datetime.utcnow()
+    monthly_data = []
+    for i in range(5, -1, -1):
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        for _ in range(i):
+            if month_start.month == 1:
+                month_start = month_start.replace(year=month_start.year - 1, month=12)
+            else:
+                month_start = month_start.replace(month=month_start.month - 1)
+        month_end = month_start + timedelta(days=32)
+        month_end = month_end.replace(day=1) - timedelta(seconds=1)
+
+        month_total = (
+            db.query(func.coalesce(func.sum(Booking.total_price), 0))
+            .filter(
+                Booking.status.in_(paid_statuses),
+                Booking.created_at >= month_start,
+                Booking.created_at <= month_end,
+            )
+            .scalar()
+        )
+        month_count = (
+            db.query(func.count(Booking.id))
+            .filter(
+                Booking.status.in_(paid_statuses),
+                Booking.created_at >= month_start,
+                Booking.created_at <= month_end,
+            )
+            .scalar()
+            or 0
+        )
+        monthly_data.append({
+            "month": month_start.strftime("%b %Y"),
+            "label": month_start.strftime("%b"),
+            "revenue": float(month_total or 0),
+            "booking_count": int(month_count),
+        })
+
+    return {
+        "money_in": round(money_in, 2),
+        "paid_bookings_count": int(paid_bookings_count),
+        "commission_rate": COMMISSION_RATE,
+        "commission": commission_amount,
+        "host_payout": host_payout,
+        "monthly_breakdown": monthly_data,
     }

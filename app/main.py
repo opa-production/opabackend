@@ -1,6 +1,30 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+import time
+import logging
 from dotenv import load_dotenv
+
+# Request logging - logs every API call with status code
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        duration = (time.time() - start) * 1000
+        path = request.url.path
+        method = request.method
+        status = response.status_code
+        # Color-style prefixes for visibility: 2xx=OK, 3xx=redirect, 4xx=client err, 5xx=server err
+        if 200 <= status < 300:
+            prefix = "200"
+        elif 400 <= status < 500:
+            prefix = "4xx"
+        else:
+            prefix = str(status)
+        logging.info(f"{method} {path} -> {status} ({duration:.0f}ms)")
+        print(f"INFO: {method} {path} -> {status} ({duration:.0f}ms)")
+        return response
 
 # Load environment variables from .env file
 load_dotenv()
@@ -410,6 +434,9 @@ async def startup_event():
         db.close()
     
     print("✅ Startup complete!")
+
+# Request logging (add first so it runs last = closest to handler)
+app.add_middleware(RequestLoggingMiddleware)
 
 # CORS middleware
 app.add_middleware(

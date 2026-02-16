@@ -14,10 +14,10 @@ from app.schemas import TokenData
 from app.config import settings
 
 # JWT settings
-SECRET_KEY = "your-secret-key-change-in-production"  # Should be in environment variables
+SECRET_KEY = "your-secret-key-change-in-production" 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours (1440 minutes) - more reasonable for mobile apps
-REFRESH_TOKEN_EXPIRE_DAYS = 7  # 7 days for refresh tokens
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  
+REFRESH_TOKEN_EXPIRE_DAYS = 7 
 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()
@@ -109,6 +109,39 @@ def create_refresh_token(data: dict) -> str:
     })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def create_password_reset_token(client_id: int) -> str:
+    """Create JWT for password reset (1 hour expiry)"""
+    to_encode = {
+        "sub": str(client_id),
+        "type": "password_reset",
+        "exp": datetime.utcnow() + timedelta(hours=1),
+        "iat": datetime.utcnow(),
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> dict:
+    """Verify and decode a password reset token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "password_reset":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid token type",
+            )
+        return payload
+    except JWTError as e:
+        error_msg = str(e)
+        if "expired" in error_msg.lower():
+            detail = "Password reset link has expired. Please request a new one."
+        else:
+            detail = "Invalid or expired reset link."
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        )
 
 
 def verify_refresh_token(token: str) -> dict:
