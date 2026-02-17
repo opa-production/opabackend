@@ -49,10 +49,13 @@ def booking_to_response(booking: Booking) -> dict:
     car = booking.car
     host = car.host if car else None
     
+    client = getattr(booking, "client", None)
     return {
         "id": booking.id,
         "booking_id": booking.booking_id,
         "client_id": booking.client_id,
+        "client_name": client.full_name if client else None,
+        "client_email": client.email if client else None,
         "car_id": booking.car_id,
         
         # Car details

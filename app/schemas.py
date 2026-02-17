@@ -8,10 +8,12 @@ from enum import Enum
 
 # Host Auth Schemas
 class HostRegisterRequest(BaseModel):
-    full_name: str = Field(..., min_length=1, max_length=255)
+    full_name: str = Field(..., min_length=1, max_length=255, alias="fullName")
     email: EmailStr
     password: str = Field(..., min_length=8)
-    password_confirmation: str = Field(..., min_length=8)
+    password_confirmation: str = Field(..., min_length=8, alias="passwordConfirmation")
+
+    model_config = {"populate_by_name": True}
 
     @model_validator(mode='after')
     def passwords_match(self):
@@ -59,6 +61,8 @@ class HostProfileResponse(BaseModel):
 class HostLoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+    model_config = {"populate_by_name": True}
 
 
 class HostLoginResponse(BaseModel):
@@ -129,6 +133,8 @@ class ClientProfileResponse(BaseModel):
 class ClientLoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+    model_config = {"populate_by_name": True}
 
 
 class GoogleLoginRequest(BaseModel):
@@ -1371,6 +1377,8 @@ class BookingResponse(BaseModel):
     id: int
     booking_id: str
     client_id: int
+    client_name: Optional[str] = None   # Renter's name (for host views)
+    client_email: Optional[str] = None  # Renter's email (for host contact)
     car_id: int
     
     # Car details (denormalized for convenience)
