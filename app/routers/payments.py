@@ -342,12 +342,26 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             db.commit()
             logger.info(f"[MPESA CALLBACK] ✅ Payment Successful: Receipt={receipt}, CheckoutRequestID={checkout_request_id}, booking_id={booking.booking_id if booking else None}")
         else:
-            # User cancelled, insufficient funds, or other failure
+            # User cancelled (1032), timeout/generic failure (2029), insufficient funds, or other failure
+            # 1032 = Request cancelled by user; 2029 = often "unresolved reason" e.g. timeout or network/operator issue
             payment.status = PaymentStatus.CANCELLED if result_code == 1032 else PaymentStatus.FAILED
             payment.result_code = result_code
-            payment.result_desc = result_desc
+            # Store user-friendly message for status API (UI can show this)
+            if result_code == 1032:
+                payment.result_desc = "Payment cancelled. You can try again when ready."
+            elif result_code == 2029:
+                payment.result_desc = "Payment timed out or failed. Please try again."
+            else:
+                payment.result_desc = result_desc or "Payment failed. Please try again."
             db.commit()
-            logger.warning(f"[MPESA CALLBACK] ❌ Payment Failed/Cancelled: {result_desc} (Code: {result_code}, CheckoutRequestID: {checkout_request_id})")
+            logger.warning(
+                f"[MPESA CALLBACK] ❌ Payment Failed/Cancelled: {result_desc} (Code: {result_code}, CheckoutRequestID: {checkout_request_id})"
+            )
+            if result_code == 2029:
+                logger.info(
+                    "[MPESA CALLBACK] Code 2029: usually timeout (user didn't complete in time), network/operator issue, "
+                    "or wrong env (sandbox vs live). Ensure MPESA_* URLs and shortcode match the customer's network."
+                )
             
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:

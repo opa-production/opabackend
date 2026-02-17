@@ -130,6 +130,19 @@ If the admin panel or mobile app can't reach the backend (no logs appear):
    - Ensure the app's API base URL is `http://YOUR_PC_IP:8001/api/v1` (not `localhost` or production)
    - Test with `curl http://YOUR_PC_IP:8001/api/v1/ping` from your phone's network or another device
 
+## M-Pesa STK callback result codes
+
+When a payment fails in production, the callback receives a `ResultCode` from Safaricom:
+
+| Code | Meaning | What to do |
+|------|---------|------------|
+| **0** | Success | Booking is confirmed. |
+| **1032** | User cancelled | Customer dismissed the STK prompt. They can retry. |
+| **2029** | Unresolved reason (often timeout) | Usually: customer didn’t enter PIN in time (~60s), network/operator issue, or sandbox vs live mismatch. Backend stores a user-friendly message; ensure `MPESA_*` URLs and shortcode match the customer’s network (sandbox vs live). |
+| Other | e.g. insufficient funds | Raw `ResultDesc` is stored and returned in `GET /client/payments/status`. |
+
+The backend maps **1032** and **2029** to short, user-friendly messages for the status API so the app can show “Payment cancelled” or “Payment timed out. Please try again.” instead of the raw Safaricom text.
+
 ## Production deployment
 
 - **Python 3.9:** The code uses `Optional[X]` instead of `X | None` so it runs on Python 3.9 (e.g. CentOS/RHEL default). If you see `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`, ensure production runs this repo version (those hints were already fixed).
