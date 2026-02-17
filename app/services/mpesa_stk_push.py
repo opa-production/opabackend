@@ -65,7 +65,7 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
         "PartyA": PhoneNumber,
         "PartyB": shortCode,
         "PhoneNumber": PhoneNumber,
-        "CallBackURL": os.getenv("MPESA_CALLBACK_URL", "https://fruity-weeks-care.loca.lt/mpesa/callback"),
+        "CallBackURL": os.getenv("MPESA_CALLBACK_URL"),
         "AccountReference": AccountReference,
         "TransactionDesc": TransactionDesc
     }
