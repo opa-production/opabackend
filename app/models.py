@@ -54,6 +54,43 @@ class PaymentMethod(Base):
     client = relationship("Client", foreign_keys=[client_id], back_populates="payment_methods")
 
 
+class PaymentStatus(str, enum.Enum):
+    """Status of an M-Pesa STK push / payment attempt"""
+    PENDING = "pending"       # STK sent, waiting for user to enter PIN / complete
+    COMPLETED = "completed"   # User paid successfully
+    CANCELLED = "cancelled"   # User cancelled on phone
+    FAILED = "failed"        # e.g. insufficient funds, timeout, declined
+
+
+class Payment(Base):
+    """Tracks a single payment attempt (e.g. M-Pesa STK push). Enables UI to poll status."""
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+
+    # M-Pesa STK: Safaricom checkout id (unique per push)
+    checkout_request_id = Column(String(255), unique=True, nullable=True, index=True)
+    amount = Column(Float, nullable=False)
+    # Status: pending -> completed | cancelled | failed (set by callback or timeout)
+    status = Column(SQLEnum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
+    # From M-Pesa callback when not success
+    result_code = Column(Integer, nullable=True)   # Safaricom ResultCode
+    result_desc = Column(String(500), nullable=True)  # e.g. "Insufficient funds", "User cancelled"
+    # From M-Pesa callback on success
+    mpesa_receipt_number = Column(String(100), nullable=True)
+    mpesa_phone = Column(String(20), nullable=True)
+    mpesa_transaction_date = Column(String(50), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    booking = relationship("Booking", back_populates="payments")
+    client = relationship("Client", back_populates="payments")
+
+
 class Host(Base):
     """Car owners/rental hosts"""
     __tablename__ = "hosts"
@@ -89,6 +126,38 @@ class Host(Base):
     feedbacks = relationship("Feedback", back_populates="host", cascade="all, delete-orphan")
     # Relationship to host ratings
     host_ratings = relationship("HostRating", back_populates="host", cascade="all, delete-orphan")
+    # Relationship to withdrawals
+    withdrawals = relationship("Withdrawal", back_populates="host", cascade="all, delete-orphan")
+
+
+class WithdrawalStatus(str, enum.Enum):
+    """Status of a host withdrawal request"""
+    PENDING = "pending"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
+class Withdrawal(Base):
+    """Host withdrawal request: amount and payment details for admin to process."""
+    __tablename__ = "withdrawals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    status = Column(SQLEnum(WithdrawalStatus), default=WithdrawalStatus.PENDING, nullable=False)
+    # Where to send: mpesa, bank, etc.
+    payment_method_type = Column(String(20), nullable=False)  # mpesa, bank
+    payment_details = Column(Text, nullable=True)  # JSON: e.g. {"mpesa_number":"254..."} or {"bank_name":"...","account_number":"..."}
+    # Admin processing
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    processed_by_admin_id = Column(Integer, ForeignKey("admins.id"), nullable=True, index=True)
+    admin_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    host = relationship("Host", back_populates="withdrawals")
+    processed_by = relationship("Admin", foreign_keys=[processed_by_admin_id])
 
 
 class Client(Base):
@@ -265,10 +334,12 @@ class Booking(Base):
     # Relationships
     client = relationship("Client", back_populates="bookings")
     car = relationship("Car", back_populates="bookings")
+    payments = relationship("Payment", back_populates="booking", cascade="all, delete-orphan")
 
 
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
+Client.payments = relationship("Payment", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include host ratings relationship
 Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
 

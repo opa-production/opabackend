@@ -202,7 +202,7 @@ async def get_rejected_cars(
 ):
     """Get rejected cars"""
     query = db.query(Car).join(Host).filter(
-        Car.verification_status == VerificationStatus.REJECTED.value
+        Car.verification_status == VerificationStatus.DENIED.value
     )
     total = query.count()
     skip = (page - 1) * limit
@@ -500,117 +500,6 @@ async def reject_car(
         created_at=car.created_at,
         updated_at=car.updated_at
     )
-
-
-@router.get("/admin/cars/awaiting", response_model=PaginatedCarListResponse)
-async def get_cars_awaiting_verification(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
-):
-    """Get cars awaiting verification"""
-    query = db.query(Car).join(Host).filter(
-        Car.verification_status == VerificationStatus.AWAITING.value
-    )
-    
-    total = query.count()
-    
-    skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
-    
-    car_list = [
-        AdminCarListResponse(
-            id=car.id,
-            host_id=car.host_id,
-            host_name=car.host.full_name,
-            name=car.name,
-            model=car.model,
-            year=car.year,
-            verification_status=VerificationStatus(car.verification_status),
-            is_hidden=car.is_hidden,
-            created_at=car.created_at
-        )
-        for car in cars
-    ]
-    
-    pagination = calculate_pagination(page, limit, total)
-    
-    return PaginatedCarListResponse(cars=car_list, **pagination)
-
-
-@router.get("/admin/cars/verified", response_model=PaginatedCarListResponse)
-async def get_verified_cars(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
-):
-    """Get verified cars"""
-    query = db.query(Car).join(Host).filter(
-        Car.verification_status == VerificationStatus.VERIFIED.value
-    )
-    
-    total = query.count()
-    
-    skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
-    
-    car_list = [
-        AdminCarListResponse(
-            id=car.id,
-            host_id=car.host_id,
-            host_name=car.host.full_name,
-            name=car.name,
-            model=car.model,
-            year=car.year,
-            verification_status=VerificationStatus(car.verification_status),
-            is_hidden=car.is_hidden,
-            created_at=car.created_at
-        )
-        for car in cars
-    ]
-    
-    pagination = calculate_pagination(page, limit, total)
-    
-    return PaginatedCarListResponse(cars=car_list, **pagination)
-
-
-@router.get("/admin/cars/rejected", response_model=PaginatedCarListResponse)
-async def get_rejected_cars(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
-):
-    """Get rejected cars"""
-    query = db.query(Car).join(Host).filter(
-        Car.verification_status == VerificationStatus.DENIED.value
-    )
-    
-    total = query.count()
-    
-    skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
-    
-    car_list = [
-        AdminCarListResponse(
-            id=car.id,
-            host_id=car.host_id,
-            host_name=car.host.full_name,
-            name=car.name,
-            model=car.model,
-            year=car.year,
-            verification_status=VerificationStatus(car.verification_status),
-            is_hidden=car.is_hidden,
-            created_at=car.created_at
-        )
-        for car in cars
-    ]
-    
-    pagination = calculate_pagination(page, limit, total)
-    
-    return PaginatedCarListResponse(cars=car_list, **pagination)
 
 
 # ==================== CAR CONTENT MANAGEMENT ====================

@@ -271,6 +271,16 @@ async def get_my_bookings(
     )
 
 
+def _client_booking_query(db: Session, booking_id_param: str, client_id: int):
+    """Resolve booking by either numeric id or string booking_id (e.g. BK-ABC12345). Returns query with client filter."""
+    base = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.client_id == client_id)
+    if booking_id_param.isdigit():
+        return base.filter(Booking.id == int(booking_id_param)).first()
+    return base.filter(Booking.booking_id == booking_id_param).first()
+
+
 @router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking_details(
     booking_id: str,
@@ -279,25 +289,18 @@ async def get_booking_details(
 ):
     """
     Get detailed information about a specific booking.
-    
-    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
+
+    - **booking_id**: The unique booking identifier (e.g. BK-12345678) **or** the numeric database id (e.g. 5)
     - Only returns bookings owned by the authenticated client
-    
+
     Requires client authentication.
     """
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
-    ).filter(
-        Booking.booking_id == booking_id,
-        Booking.client_id == current_client.id
-    ).first()
-    
+    booking = _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found"
         )
-    
     return booking_to_response(booking)
 
 
@@ -310,20 +313,14 @@ async def cancel_booking(
 ):
     """
     Cancel an existing booking.
-    
-    - **booking_id**: The unique booking identifier (e.g., BK-12345678)
+
+    - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id
     - Only pending or confirmed bookings can be cancelled
     - Only the booking owner can cancel
-    
+
     Requires client authentication.
     """
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
-    ).filter(
-        Booking.booking_id == booking_id,
-        Booking.client_id == current_client.id
-    ).first()
-    
+    booking = _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -563,17 +560,13 @@ async def delete_booking(
 ):
     """
     Delete a booking (soft delete by cancelling).
-    
-    This is an alternative endpoint that cancels the booking.
+
+    **booking_id** can be the string (e.g. BK-12345678) or numeric id.
     Use POST /bookings/{booking_id}/cancel for more control.
-    
+
     Requires client authentication.
     """
-    booking = db.query(Booking).filter(
-        Booking.booking_id == booking_id,
-        Booking.client_id == current_client.id
-    ).first()
-    
+    booking = _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1426,6 +1426,96 @@ class BookingListResponse(BaseModel):
     limit: int
 
 
+# ==================== HOST EARNINGS SCHEMAS ====================
+
+
+class HostEarningsSummaryResponse(BaseModel):
+    """Summary of host earnings for home/dashboard: net earnings, commission, withdrawable."""
+    total_gross: float = Field(..., description="Total amount received from paid bookings (before commission)")
+    commission_rate: float = Field(..., description="Platform commission rate (e.g. 0.15 for 15%)")
+    commission_amount: float = Field(..., description="Total commission deducted")
+    net_earnings: float = Field(..., description="Host earnings after commission (total_gross - commission)")
+    withdrawable: float = Field(..., description="Amount available to withdraw (same as net_earnings for now)")
+    paid_bookings_count: int = Field(..., description="Number of paid (confirmed/active/completed) bookings")
+
+
+class HostTransactionItem(BaseModel):
+    """Single transaction (paid booking) for host earnings list."""
+    booking_id: str
+    car_name: Optional[str] = None
+    client_name: Optional[str] = None
+    amount: float = Field(..., description="Booking total (gross)")
+    commission_amount: float
+    net_amount: float
+    paid_at: Optional[datetime] = None
+    mpesa_receipt_number: Optional[str] = None
+
+
+class HostTransactionListResponse(BaseModel):
+    """Paginated list of host transactions (earnings per booking)."""
+    transactions: List[HostTransactionItem]
+    total: int
+    skip: int
+    limit: int
+
+
+# ==================== WITHDRAWAL SCHEMAS ====================
+
+
+class WithdrawalCreateRequest(BaseModel):
+    """Host request to withdraw earnings."""
+    amount: float = Field(..., gt=0, description="Amount to withdraw")
+    payment_method_type: str = Field(..., description="mpesa or bank")
+    mpesa_number: Optional[str] = Field(None, description="M-Pesa phone number (e.g. 254712345678) when payment_method_type is mpesa")
+    bank_name: Optional[str] = Field(None, description="Bank name when payment_method_type is bank")
+    account_number: Optional[str] = Field(None, description="Account number when payment_method_type is bank")
+    account_name: Optional[str] = Field(None, description="Account holder name (optional)")
+
+    @model_validator(mode="after")
+    def validate_payment_details(self):
+        if self.payment_method_type.lower() == "mpesa":
+            if not self.mpesa_number or not str(self.mpesa_number).strip():
+                raise ValueError("mpesa_number is required when payment_method_type is mpesa")
+        elif self.payment_method_type.lower() == "bank":
+            if not self.bank_name or not self.account_number:
+                raise ValueError("bank_name and account_number are required when payment_method_type is bank")
+        return self
+
+
+class WithdrawalResponse(BaseModel):
+    """Single withdrawal response (host or admin)."""
+    id: int
+    host_id: int
+    host_name: Optional[str] = None
+    host_email: Optional[str] = None
+    amount: float
+    status: str
+    payment_method_type: str
+    payment_details: Optional[str] = None  # JSON string for display
+    processed_at: Optional[datetime] = None
+    processed_by_admin_id: Optional[int] = None
+    admin_notes: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WithdrawalListResponse(BaseModel):
+    """Paginated list of withdrawals."""
+    withdrawals: List[WithdrawalResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class WithdrawalUpdateRequest(BaseModel):
+    """Admin update: set status and optional notes."""
+    status: str = Field(..., description="completed, rejected, or cancelled")
+    admin_notes: Optional[str] = Field(None, max_length=2000)
+
+
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
@@ -1503,6 +1593,29 @@ class PaymentResponse(BaseModel):
     message: str
     paid_at: datetime
     booking: BookingResponse
+
+
+class PaymentStatusEnum(str, Enum):
+    """Payment attempt status (for UI polling)"""
+    PENDING = "pending"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class PaymentStatusResponse(BaseModel):
+    """Response for GET payment status – UI polls this after STK push."""
+    checkout_request_id: str
+    booking_id: str
+    status: PaymentStatusEnum
+    message: Optional[str] = None  # e.g. "Insufficient funds", "User cancelled"
+    amount: float
+    paid_at: Optional[datetime] = None  # Set when status is completed
+    mpesa_receipt_number: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 
 class MpesaStkPushRequest(BaseModel):
     """Internal schema for M-Pesa STK Push request"""

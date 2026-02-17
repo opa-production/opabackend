@@ -1,19 +1,35 @@
 """
 Payment processing endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timezone
+from typing import Optional
 import logging
 
 from app.database import get_db
-from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType
+from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus
 from app.auth import get_current_client
-from app.schemas import PaymentRequest, PaymentResponse
+from app.schemas import PaymentRequest, PaymentResponse, PaymentStatusResponse, PaymentStatusEnum
 from app.services.mpesa_stk_push import sendStkPush
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _payment_to_status_response(payment: Payment) -> PaymentStatusResponse:
+    """Build PaymentStatusResponse from Payment model."""
+    status_enum = PaymentStatusEnum(payment.status.value)
+    message = payment.result_desc if payment.status != PaymentStatus.PENDING else None
+    return PaymentStatusResponse(
+        checkout_request_id=payment.checkout_request_id or "",
+        booking_id=payment.booking.booking_id,
+        status=status_enum,
+        message=message,
+        amount=payment.amount,
+        paid_at=payment.updated_at if payment.status == PaymentStatus.COMPLETED else None,
+        mpesa_receipt_number=payment.mpesa_receipt_number,
+    )
 
 
 @router.post("/client/payments/process", response_model=PaymentResponse, status_code=status.HTTP_200_OK)
@@ -102,9 +118,8 @@ async def process_payment(
 
         transaction_id = f"TXN-{booking.booking_id}"
         payment_message = "Payment processed successfully. Your booking is now confirmed."
-        print(payment_method.mpesa_number)
 
-        # If payment method is M-Pesa, call STK Push
+        # If payment method is M-Pesa, call STK Push and create pending payment (do not confirm booking yet)
         if payment_method.method_type == PaymentMethodType.MPESA:
             if not payment_method.mpesa_number:
                 raise HTTPException(
@@ -140,17 +155,32 @@ async def process_payment(
                     detail=f"M-Pesa STK Push failed: {error_desc}"
                 )
             
-            transaction_id = mpesa_response.get("CheckoutRequestID", transaction_id)
-            payment_message = "M-Pesa STK Push initiated. Please check your phone to complete the payment."
-        
-        # Update booking status to CONFIRMED
-        booking.status = BookingStatus.CONFIRMED # type: ignore
-        booking.status_updated_at = datetime.now(timezone.utc) # type: ignore
+            checkout_request_id = mpesa_response.get("CheckoutRequestID")
+            transaction_id = checkout_request_id or transaction_id
+            
+            # Create pending payment so callback (and UI polling) can update status
+            payment = Payment(
+                booking_id=booking.id,
+                client_id=current_client.id,
+                checkout_request_id=checkout_request_id,
+                amount=float(booking.total_price),
+                status=PaymentStatus.PENDING,
+            )
+            db.add(payment)
+            db.commit()
+            db.refresh(payment)
+            
+            payment_message = "M-Pesa STK Push initiated. Please check your phone to complete the payment. You can poll GET /client/payments/status?checkout_request_id=... for status."
+            # Do NOT set booking to CONFIRMED here; callback will do it when payment succeeds.
+        else:
+            # Non-M-Pesa (e.g. card): confirm booking immediately
+            booking.status = BookingStatus.CONFIRMED # type: ignore
+            booking.status_updated_at = datetime.now(timezone.utc) # type: ignore
         
         db.commit()
         db.refresh(booking)
         
-        logger.info(f"💳 [PROCESS PAYMENT] ✅ Payment processed successfully: booking_id={request.booking_id}, "
+        logger.info(f"💳 [PROCESS PAYMENT] ✅ Request processed: booking_id={request.booking_id}, "
                    f"amount={booking.total_price}, status={booking.status.value}")
         
         # Reload booking with relationships for response
@@ -191,6 +221,66 @@ async def process_payment(
         )
 
 
+@router.get("/client/payments/status", response_model=PaymentStatusResponse)
+async def get_payment_status(
+    checkout_request_id: Optional[str] = Query(None, description="M-Pesa CheckoutRequestID returned from process payment"),
+    booking_id: Optional[str] = Query(None, description="Booking ID (e.g. BK-ABC12345); returns latest payment for this booking"),
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Get status of an M-Pesa STK push payment. Poll this after initiating payment to detect:
+    - **pending**: User has not yet completed or cancelled.
+    - **completed**: Payment successful; booking is confirmed.
+    - **cancelled**: User cancelled on phone (ResultCode 1032).
+    - **failed**: e.g. insufficient funds, timeout (see `message` for reason).
+    
+    Provide either `checkout_request_id` (from the process payment response) or `booking_id`.
+    """
+    if not checkout_request_id and not booking_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either checkout_request_id or booking_id",
+        )
+    
+    if checkout_request_id:
+        payment = (
+            db.query(Payment)
+            .options(joinedload(Payment.booking))
+            .filter(
+                Payment.checkout_request_id == checkout_request_id,
+                Payment.client_id == current_client.id,
+            )
+            .first()
+        )
+    else:
+        booking = (
+            db.query(Booking)
+            .filter(
+                Booking.client_id == current_client.id,
+                Booking.booking_id == booking_id,
+            )
+            .first()
+        )
+        if not booking:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+        payment = (
+            db.query(Payment)
+            .options(joinedload(Payment.booking))
+            .filter(Payment.booking_id == booking.id, Payment.client_id == current_client.id)
+            .order_by(Payment.created_at.desc())
+            .first()
+        )
+    
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No payment found for this request or booking",
+        )
+    
+    return _payment_to_status_response(payment)
+
+
 def parse_mpesa_metadata(metadata_items):
     """Parse M-Pesa callback metadata into a dictionary"""
     parsed = {}
@@ -205,7 +295,8 @@ def parse_mpesa_metadata(metadata_items):
 async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
     """
     M-Pesa STK Push Callback URL.
-    This endpoint is called by Safaricom after the user completes or cancels the STK push.
+    Called by Safaricom after the user completes, cancels, or fails (e.g. insufficient funds) the STK push.
+    Updates the Payment record and, on success, confirms the booking.
     """
     try:
         data = await request.json()
@@ -216,24 +307,50 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         result_desc = stk_callback.get("ResultDesc")
         checkout_request_id = stk_callback.get("CheckoutRequestID")
         
+        if not checkout_request_id:
+            logger.warning("[MPESA CALLBACK] No CheckoutRequestID in callback")
+            return {"ResultCode": 0, "ResultDesc": "Success"}
+        
+        payment = db.query(Payment).filter(
+            Payment.checkout_request_id == checkout_request_id,
+            Payment.status == PaymentStatus.PENDING,
+        ).first()
+        
+        if not payment:
+            logger.warning(f"[MPESA CALLBACK] No pending payment for CheckoutRequestID={checkout_request_id}")
+            return {"ResultCode": 0, "ResultDesc": "Success"}
+        
         if result_code == 0:
             metadata = stk_callback.get("CallbackMetadata", {}).get("Item", [])
             parsed_metadata = parse_mpesa_metadata(metadata)
-            amount = parsed_metadata.get("Amount")
             receipt = parsed_metadata.get("MpesaReceiptNumber")
             phone = parsed_metadata.get("PhoneNumber")
             transaction_date = parsed_metadata.get("TransactionDate")
             
-            logger.info(f"[MPESA CALLBACK] ✅ Payment Successful: "
-                       f"Receipt={receipt}, Amount={amount}, Phone={phone}, "
-                       f"Date={transaction_date}, CheckoutRequestID={checkout_request_id}")
+            payment.status = PaymentStatus.COMPLETED
+            payment.result_code = result_code
+            payment.result_desc = result_desc
+            payment.mpesa_receipt_number = str(receipt) if receipt else None
+            payment.mpesa_phone = str(phone) if phone else None
+            payment.mpesa_transaction_date = str(transaction_date) if transaction_date else None
             
-            # Note: Ideally, you would find the booking by checkout_request_id or account_reference
-            # and update its status here. For now, we log the success.
+            booking = db.query(Booking).filter(Booking.id == payment.booking_id).first()
+            if booking and booking.status == BookingStatus.PENDING:
+                booking.status = BookingStatus.CONFIRMED
+                booking.status_updated_at = datetime.now(timezone.utc)
+            
+            db.commit()
+            logger.info(f"[MPESA CALLBACK] ✅ Payment Successful: Receipt={receipt}, CheckoutRequestID={checkout_request_id}, booking_id={booking.booking_id if booking else None}")
         else:
+            # User cancelled, insufficient funds, or other failure
+            payment.status = PaymentStatus.CANCELLED if result_code == 1032 else PaymentStatus.FAILED
+            payment.result_code = result_code
+            payment.result_desc = result_desc
+            db.commit()
             logger.warning(f"[MPESA CALLBACK] ❌ Payment Failed/Cancelled: {result_desc} (Code: {result_code}, CheckoutRequestID: {checkout_request_id})")
             
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:
+        db.rollback()
         logger.error(f"[MPESA CALLBACK] ❌ Error processing callback: {str(e)}", exc_info=True)
         return {"ResultCode": 0, "ResultDesc": "Success"}
