@@ -130,6 +130,45 @@ If the admin panel or mobile app can't reach the backend (no logs appear):
    - Ensure the app's API base URL is `http://YOUR_PC_IP:8001/api/v1` (not `localhost` or production)
    - Test with `curl http://YOUR_PC_IP:8001/api/v1/ping` from your phone's network or another device
 
+## M-Pesa production (live): STK never appears on phone
+
+If **no STK push appears on the customer’s phone** but the callback returns (e.g. 2029), production is almost certainly still using **sandbox**.
+
+- **Sandbox** (`sandbox.safaricom.co.ke`, shortcode `174379`) is for testing only. Real phones on the live M-Pesa network **do not** receive STK pushes from sandbox.
+- **Production** must use **live** Daraja credentials and **live** URLs.
+
+**Production `.env` – two ways to configure:**
+
+**Option A – Explicit URLs (any env var names):**
+```env
+MPESA_TOKEN_URL=https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials
+MPESA_STK_URL=https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest
+MPESA_CALLBACK_URL=https://api.ardena.xyz/api/v1/mpesa/callback
+MPESA_SHORTCODE=6792295
+# For STK push, can use MPESA_EXPRESS_SHORTCODE (e.g. 4239478) if different from MPESA_SHORTCODE
+MPESA_PASSKEY=<your-live-passkey>
+CONSUMER_KEY=<your-live-consumer-key>
+CONSUMER_SECRET=<your-live-consumer-secret>
+```
+
+**Option B – Use MPESA_ENVIRONMENT (backend picks live URLs):**
+```env
+MPESA_ENVIRONMENT=production
+MPESA_CALLBACK_URL=https://api.ardena.xyz/api/v1/mpesa/callback
+MPESA_CONSUMER_KEY=<your-live-consumer-key>
+MPESA_CONSUMER_SECRET=<your-live-consumer-secret>
+MPESA_PASSKEY=<your-live-passkey>
+# Till number: use MPESA_EXPRESS_SHORTCODE for STK (e.g. 4239478), set type for TransactionType
+MPESA_EXPRESS_SHORTCODE=4239478
+MPESA_SHORTCODE=6792295
+MPESA_SHORTCODE_TYPE=till_number
+```
+
+- **Credentials:** Either `CONSUMER_KEY`/`CONSUMER_SECRET` or `MPESA_CONSUMER_KEY`/`MPESA_CONSUMER_SECRET`.
+- **Shortcode for STK:** Uses `MPESA_EXPRESS_SHORTCODE` when set, else `MPESA_SHORTCODE`. For Till use `MPESA_SHORTCODE_TYPE=till_number` (uses CustomerBuyGoodsOnline).
+- **Callback:** `MPESA_CALLBACK_URL` must be a **public HTTPS** URL (e.g. `https://api.ardena.xyz/api/v1/mpesa/callback`).
+- On startup, the backend warns if it’s using sandbox so you can set `MPESA_ENVIRONMENT=production` or live URLs.
+
 ## M-Pesa STK callback result codes
 
 When a payment fails in production, the callback receives a `ResultCode` from Safaricom:

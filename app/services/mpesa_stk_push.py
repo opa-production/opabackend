@@ -8,20 +8,44 @@ from datetime import datetime
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Production checklist for M-Pesa STK:
-# 1. Use correct env: SANDBOX = MPESA_TOKEN_URL/MPESA_STK_URL for sandbox, LIVE URLs for production.
-# 2. MPESA_CALLBACK_URL must be a PUBLIC HTTPS URL (Safaricom must reach it). No localhost.
-# 3. In prod, CONSUMER_KEY/CONSUMER_SECRET/SHORTCODE/PASSKEY must be for the environment (sandbox vs live).
-# 4. If STK never arrives: check server logs for token/STK HTTP status (401/404/500) and response body.
+# Supported env vars (either naming works):
+#   CONSUMER_KEY or MPESA_CONSUMER_KEY
+#   CONSUMER_SECRET or MPESA_CONSUMER_SECRET
+#   MPESA_TOKEN_URL, MPESA_STK_URL (optional if MPESA_ENVIRONMENT is set)
+#   MPESA_ENVIRONMENT = 'production' | 'sandbox' -> picks live or sandbox URLs when *_URL not set
+#   MPESA_SHORTCODE or MPESA_EXPRESS_SHORTCODE (express used for STK push when set)
+#   MPESA_PASSKEY, MPESA_CALLBACK_URL (required)
+#   MPESA_SHORTCODE_TYPE = 'till_number' | 'paybill' -> Till uses CustomerBuyGoodsOnline
+
+LIVE_TOKEN_URL = "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
+LIVE_STK_URL = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+SANDBOX_TOKEN_URL = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
+SANDBOX_STK_URL = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+
+
+def _get_token_url():
+    url = os.getenv("MPESA_TOKEN_URL")
+    if url:
+        return url
+    env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
+    return LIVE_TOKEN_URL if env in ("production", "live") else SANDBOX_TOKEN_URL
+
+
+def _get_stk_url():
+    url = os.getenv("MPESA_STK_URL")
+    if url:
+        return url
+    env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
+    return LIVE_STK_URL if env in ("production", "live") else SANDBOX_STK_URL
 
 
 def generate_access_token():
-    consumer_key = os.getenv("CONSUMER_KEY")
-    consumer_secret = os.getenv("CONSUMER_SECRET")
-    url = os.getenv("MPESA_TOKEN_URL")
+    consumer_key = os.getenv("MPESA_CONSUMER_KEY") or os.getenv("CONSUMER_KEY")
+    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") or os.getenv("CONSUMER_SECRET")
+    url = _get_token_url()
 
     if not all([consumer_key, consumer_secret, url]):
-        raise Exception("M-Pesa configuration missing: CONSUMER_KEY, CONSUMER_SECRET, or MPESA_TOKEN_URL")
+        raise Exception("M-Pesa configuration missing: CONSUMER_KEY/MPESA_CONSUMER_KEY, CONSUMER_SECRET/MPESA_CONSUMER_SECRET, or MPESA_TOKEN_URL/MPESA_ENVIRONMENT")
 
     try:
         encoded_credentials = base64.b64encode(f"{consumer_key}:{consumer_secret}".encode()).decode()
@@ -41,12 +65,14 @@ def generate_access_token():
 def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
     token = generate_access_token()
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    shortCode = os.getenv("MPESA_SHORTCODE")
+    # STK push: prefer MPESA_EXPRESS_SHORTCODE when set (till/paybill used for express), else MPESA_SHORTCODE
+    shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
     passkey = os.getenv("MPESA_PASSKEY")
     callback_url = os.getenv("MPESA_CALLBACK_URL")
+    shortcode_type = (os.getenv("MPESA_SHORTCODE_TYPE") or "paybill").strip().lower()
 
-    if not all([shortCode, passkey]):
-        raise Exception("M-Pesa configuration missing: MPESA_SHORTCODE or MPESA_PASSKEY")
+    if not shortCode or not passkey:
+        raise Exception("M-Pesa configuration missing: MPESA_EXPRESS_SHORTCODE/MPESA_SHORTCODE or MPESA_PASSKEY")
     if not callback_url or not callback_url.startswith("http"):
         logger.error("[MPESA] MPESA_CALLBACK_URL missing or invalid (must be public HTTPS URL)")
         raise Exception("M-Pesa configuration missing or invalid: MPESA_CALLBACK_URL (must be a public HTTPS URL)")
@@ -54,16 +80,17 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
     shortCode = str(shortCode)
     passkey = str(passkey)
     stk_password = base64.b64encode((shortCode + passkey + timestamp).encode('utf-8')).decode('utf-8')
-    url = os.getenv("MPESA_STK_URL")
-    if not url:
-        raise Exception("M-Pesa configuration missing: MPESA_STK_URL")
+    url = _get_stk_url()
+
+    # Till number uses CustomerBuyGoodsOnline; Paybill uses CustomerPayBillOnline
+    transaction_type = "CustomerBuyGoodsOnline" if shortcode_type == "till_number" else "CustomerPayBillOnline"
 
     headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
     requestBody = {
         "BusinessShortCode": shortCode,
         "Password": stk_password,
         "Timestamp": timestamp,
-        "TransactionType": "CustomerPayBillOnline",
+        "TransactionType": transaction_type,
         "Amount": amount,
         "PartyA": PhoneNumber,
         "PartyB": shortCode,

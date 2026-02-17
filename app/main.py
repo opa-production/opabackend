@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+import os
 import time
 import logging
 from dotenv import load_dotenv
@@ -444,6 +445,18 @@ async def startup_event():
     finally:
         db.close()
     
+    # Warn if M-Pesa is configured for sandbox (real customers will never receive STK)
+    mpesa_token_url = (os.getenv("MPESA_TOKEN_URL") or "").strip()
+    mpesa_env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
+    using_sandbox = "sandbox" in mpesa_token_url.lower() or (
+        not mpesa_token_url and mpesa_env not in ("production", "live")
+    )
+    if using_sandbox:
+        print("=" * 60)
+        print("⚠️  M-PESA SANDBOX DETECTED – Real customers will NOT receive STK push")
+        print("   Set MPESA_ENVIRONMENT=production (and live credentials) for production.")
+        print("   See README 'M-Pesa production (live)' section.")
+        print("=" * 60)
     print("✅ Startup complete!")
 
 # Ensure all error responses are valid JSON (avoids "JSON parse error" in production)
