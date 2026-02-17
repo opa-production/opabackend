@@ -521,6 +521,17 @@ async def health_check():
     return {"status": "healthy", "service": "Car Rental API"}
 
 
+@app.get("/api/v1/ping")
+async def api_ping():
+    """
+    Simple JSON ping. Use this to verify the app is hitting the correct API.
+    If you get a JSON parse error when calling this, the base URL is wrong
+    or a proxy is returning HTML (e.g. 404/502 page). Correct base URL
+    should be the host that serves this response, e.g. https://api.yourdomain.com
+    """
+    return {"ok": True, "api": "v1", "message": "pong"}
+
+
 @app.get("/api")
 async def api_info():
     """API information endpoint"""
