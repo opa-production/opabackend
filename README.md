@@ -89,6 +89,52 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `POST /api/v1/host/upload/vehicle/{car_id}/images` - Upload vehicle images (up to 10)
 - `POST /api/v1/host/upload/vehicle/{car_id}/video` - Upload vehicle video
 
+## Troubleshooting: Backend not reachable
+
+If the admin panel or mobile app can't reach the backend (no logs appear):
+
+1. **Verify backend is running and listening:**
+   ```bash
+   # Check if port 8001 is listening
+   netstat -an | findstr :8001  # Windows
+   # or
+   lsof -i :8001  # Mac/Linux
+   ```
+   You should see the port listening on `0.0.0.0:8001` (all interfaces).
+
+2. **Test connectivity from browser/terminal:**
+   - Open: `http://localhost:8001/api/v1/ping` → should return JSON
+   - Open: `http://192.168.88.249:8001/api/v1/ping` (use your PC's IP) → should return JSON
+   - If `localhost` works but IP doesn't, the server might only be listening on `127.0.0.1`. Restart with `--host 0.0.0.0`.
+
+3. **Check Windows Firewall:**
+   - Windows Firewall may block incoming connections on port 8001
+   - Add an inbound rule to allow port 8001, or temporarily disable firewall to test
+
+4. **Verify IP address:**
+   - Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux)
+   - Use the IPv4 address shown (e.g., `192.168.88.249`)
+   - Ensure your phone/device is on the same WiFi network
+
+5. **Check backend logs:**
+   - The backend logs every request with `[REQUEST] METHOD /path from IP`
+   - If you see no logs, requests aren't reaching the server (firewall/network issue)
+   - If you see logs but the app still fails, check CORS or authentication
+
+6. **Admin panel API detection:**
+   - Open `admin-web/index.html` in a browser
+   - The login page shows "API: ... ✓ OK" or "✗ unreachable" at the bottom
+   - If it shows production URL (`https://api.ardena.xyz`), open from `http://localhost:5500/index.html` instead of `file://`
+
+7. **Expo Go / Mobile app:**
+   - Ensure the app's API base URL is `http://YOUR_PC_IP:8001/api/v1` (not `localhost` or production)
+   - Test with `curl http://YOUR_PC_IP:8001/api/v1/ping` from your phone's network or another device
+
+## Production deployment
+
+- **Python 3.9:** The code uses `Optional[X]` instead of `X | None` so it runs on Python 3.9 (e.g. CentOS/RHEL default). If you see `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`, ensure production runs this repo version (those hints were already fixed).
+- **Supabase "proxy" error:** If workers fail with `__init__() got an unexpected keyword argument 'proxy'`, it is usually a version mismatch between `supabase-py`, `gotrue`, and `httpx`. The app will still start (Supabase init is caught); media uploads will fail until you pin compatible versions, e.g. `httpx>=0.26` and matching supabase/gotrue. See [supabase-py#949](https://github.com/supabase/supabase-py/issues/949).
+
 ## Development
 
 See `guide.md` for the complete development checklist and project requirements.

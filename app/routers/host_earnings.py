@@ -5,6 +5,7 @@ Powers the host app home/dashboard: net earnings, commission, withdrawable amoun
 transactions list, and withdrawal requests.
 """
 import json
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -251,7 +252,7 @@ def host_create_withdrawal(
 def host_list_my_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    status_filter: str | None = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
     current_host: Host = Depends(get_current_host),
     db: Session = Depends(get_db),
 ):

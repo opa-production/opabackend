@@ -3,6 +3,7 @@ Admin Withdrawal Management endpoints.
 
 Admins can list all withdrawal requests, view details, and mark as completed/rejected/cancelled.
 """
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from sqlalchemy.orm import Session, joinedload
@@ -38,8 +39,8 @@ def _withdrawal_to_response(w: Withdrawal) -> WithdrawalResponse:
 def list_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    status_filter: str | None = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
-    host_id: int | None = Query(None, description="Filter by host ID"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
+    host_id: Optional[int] = Query(None, description="Filter by host ID"),
     current_admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):

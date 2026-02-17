@@ -12,10 +12,16 @@ from dotenv import load_dotenv
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start = time.time()
-        response = await call_next(request)
-        duration = (time.time() - start) * 1000
+        # Log incoming request details
+        origin = request.headers.get("origin", "none")
+        client_host = request.client.host if request.client else "unknown"
         path = request.url.path
         method = request.method
+        print(f"[REQUEST] {method} {path} from {client_host} (origin: {origin})")
+        logging.info(f"[REQUEST] {method} {path} from {client_host} (origin: {origin})")
+        
+        response = await call_next(request)
+        duration = (time.time() - start) * 1000
         status = response.status_code
         # Color-style prefixes for visibility: 2xx=OK, 3xx=redirect, 4xx=client err, 5xx=server err
         if 200 <= status < 300:
@@ -464,18 +470,16 @@ async def generic_exception_handler(request: Request, exc: Exception):
 app.add_middleware(RequestLoggingMiddleware)
 
 # CORS middleware
+# Note: "*" wildcard doesn't work with allow_credentials=True in browsers.
+# For development, we allow all origins by not restricting (but credentials may still work per-origin).
+# In production, list specific allowed origins.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8081",  # Expo default
-        "http://localhost:19000",  # Expo web
-        "http://localhost:19006",  # Expo web alternative
-        "exp://localhost:8081",   # Expo client
-        "*"  # Allow all for development - RESTRICT IN PRODUCTION
-    ],
+    allow_origins=["*"],  # Allow all origins (browsers may still restrict credentials with *)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],  # Expose all headers to client
 )
 
 # Include routers
@@ -522,14 +526,23 @@ async def health_check():
 
 
 @app.get("/api/v1/ping")
-async def api_ping():
+async def api_ping(request: Request):
     """
     Simple JSON ping. Use this to verify the app is hitting the correct API.
     If you get a JSON parse error when calling this, the base URL is wrong
     or a proxy is returning HTML (e.g. 404/502 page). Correct base URL
     should be the host that serves this response, e.g. https://api.yourdomain.com
     """
-    return {"ok": True, "api": "v1", "message": "pong"}
+    origin = request.headers.get("origin", "none")
+    client_host = request.client.host if request.client else "unknown"
+    return {
+        "ok": True,
+        "api": "v1",
+        "message": "pong",
+        "server_host": str(request.url.hostname),
+        "client_ip": client_host,
+        "origin": origin
+    }
 
 
 @app.get("/api")

@@ -35,10 +35,20 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         "environment variables. Media uploads will fail until configured."
     )
 elif create_client is not None:
-    # Initialize Supabase client with service role key for backend operations
+    # Initialize Supabase client with service role key for backend operations.
+    # On some servers, gotrue/httpx version mismatch causes "unexpected keyword argument 'proxy'";
+    # try with only url/key so the app can start (media uploads will fail until deps are fixed).
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
         logger.info("Supabase client initialized successfully")
+    except TypeError as e:
+        if "proxy" in str(e):
+            logger.warning(
+                "Supabase client rejected 'proxy' (often gotrue/httpx version mismatch). "
+                "Pin supabase-py, gotrue, and httpx to compatible versions. Media uploads disabled."
+            )
+        else:
+            raise
     except Exception as e:
         logger.error(f"Failed to initialize Supabase client: {e}")
 
