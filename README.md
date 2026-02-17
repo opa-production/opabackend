@@ -165,8 +165,9 @@ MPESA_SHORTCODE_TYPE=till_number
 ```
 
 - **Credentials:** Either `CONSUMER_KEY`/`CONSUMER_SECRET` or `MPESA_CONSUMER_KEY`/`MPESA_CONSUMER_SECRET`.
-- **Shortcode for STK:** Uses `MPESA_EXPRESS_SHORTCODE` when set, else `MPESA_SHORTCODE`. For Till use `MPESA_SHORTCODE_TYPE=till_number` (uses CustomerBuyGoodsOnline).
+- **Shortcode for STK:** Sandbox always uses `MPESA_SHORTCODE` (e.g. 174379). Live uses `MPESA_EXPRESS_SHORTCODE` when set, else `MPESA_SHORTCODE`. For live Till use `MPESA_SHORTCODE_TYPE=till_number`.
 - **Callback:** `MPESA_CALLBACK_URL` must be a **public HTTPS** URL (e.g. `https://api.ardena.xyz/api/v1/mpesa/callback`).
+- **Sandbox:** Use sandbox URLs or `MPESA_ENVIRONMENT=sandbox` (or leave unset). Do **not** set `MPESA_ENVIRONMENT=production` in the same .env you use for sandbox testing, or the backend will use live URLs and sandbox will fail. For local sandbox you can **omit** `MPESA_CALLBACK_URL`; the backend will use a placeholder so the STK still sends (callbacks won’t reach your app until you set a public URL, e.g. ngrok).
 - On startup, the backend warns if it’s using sandbox so you can set `MPESA_ENVIRONMENT=production` or live URLs.
 
 ## M-Pesa STK callback result codes

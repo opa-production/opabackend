@@ -39,6 +39,12 @@ def _get_stk_url():
     return LIVE_STK_URL if env in ("production", "live") else SANDBOX_STK_URL
 
 
+def _is_live():
+    """True if we're using live Daraja URLs (for shortcode/transaction-type logic)."""
+    token_url = _get_token_url()
+    return "api.safaricom.co.ke" in token_url
+
+
 def generate_access_token():
     consumer_key = os.getenv("MPESA_CONSUMER_KEY") or os.getenv("CONSUMER_KEY")
     consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") or os.getenv("CONSUMER_SECRET")
@@ -65,25 +71,35 @@ def generate_access_token():
 def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
     token = generate_access_token()
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    # STK push: prefer MPESA_EXPRESS_SHORTCODE when set (till/paybill used for express), else MPESA_SHORTCODE
-    shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
+    # Sandbox uses Paybill 174379 -> prefer MPESA_SHORTCODE. Live Till -> prefer MPESA_EXPRESS_SHORTCODE.
+    if _is_live():
+        shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
+    else:
+        shortCode = os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_EXPRESS_SHORTCODE")
     passkey = os.getenv("MPESA_PASSKEY")
     callback_url = os.getenv("MPESA_CALLBACK_URL")
     shortcode_type = (os.getenv("MPESA_SHORTCODE_TYPE") or "paybill").strip().lower()
 
     if not shortCode or not passkey:
-        raise Exception("M-Pesa configuration missing: MPESA_EXPRESS_SHORTCODE/MPESA_SHORTCODE or MPESA_PASSKEY")
-    if not callback_url or not callback_url.startswith("http"):
-        logger.error("[MPESA] MPESA_CALLBACK_URL missing or invalid (must be public HTTPS URL)")
-        raise Exception("M-Pesa configuration missing or invalid: MPESA_CALLBACK_URL (must be a public HTTPS URL)")
+        raise Exception("M-Pesa configuration missing: MPESA_SHORTCODE (sandbox) or MPESA_EXPRESS_SHORTCODE/MPESA_SHORTCODE (live) and MPESA_PASSKEY")
+
+    # Callback URL: required for production (must be public HTTPS). For sandbox/local dev, allow missing and use a placeholder so STK still fires.
+    if not callback_url or not callback_url.strip().startswith("http"):
+        if _is_live():
+            logger.error("[MPESA] MPESA_CALLBACK_URL missing or invalid (must be public HTTPS URL)")
+            raise Exception("M-Pesa configuration missing or invalid: MPESA_CALLBACK_URL (must be a public HTTPS URL)")
+        callback_url = "https://sandbox.safaricom.co.ke/mpesa/callback"  # placeholder so sandbox STK request succeeds
+        logger.warning("[MPESA] MPESA_CALLBACK_URL not set; using sandbox placeholder. STK will send but callback won't reach your server. Set MPESA_CALLBACK_URL to a public URL (e.g. ngrok) for full flow.")
 
     shortCode = str(shortCode)
     passkey = str(passkey)
     stk_password = base64.b64encode((shortCode + passkey + timestamp).encode('utf-8')).decode('utf-8')
     url = _get_stk_url()
 
-    # Till number uses CustomerBuyGoodsOnline; Paybill uses CustomerPayBillOnline
-    transaction_type = "CustomerBuyGoodsOnline" if shortcode_type == "till_number" else "CustomerPayBillOnline"
+    # Sandbox is always Paybill (174379). Live Till uses CustomerBuyGoodsOnline.
+    transaction_type = (
+        "CustomerBuyGoodsOnline" if (_is_live() and shortcode_type == "till_number") else "CustomerPayBillOnline"
+    )
 
     headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
     requestBody = {
