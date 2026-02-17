@@ -107,6 +107,7 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
             logger.error(
                 f"[MPESA] STK push request failed: status={response.status_code}, url={url}, body={body_text[:500]}"
             )
+            print(f"[MPESA] STK push request failed: status={response}, url={url}, body={body_text[:500]}")
             try:
                 data = response.json()
                 return {
