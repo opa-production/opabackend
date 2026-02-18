@@ -15,7 +15,10 @@ from app.schemas import (
     RefreshTokenRequest,
     TokenPairResponse,
     HostNotificationResponse,
-    HostNotificationListResponse
+    HostNotificationListResponse,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    HostChangePasswordRequest,
 )
 from app.auth import (
     get_password_hash,
@@ -24,10 +27,14 @@ from app.auth import (
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
+    create_password_reset_token,
+    verify_password_reset_token,
     get_host_by_email,
     get_current_host,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
+from app.config import settings
+from app.services.email_welcome import send_welcome_email_host
 
 router = APIRouter()
 
@@ -64,7 +71,10 @@ async def register_host(
     db.add(db_host)
     db.commit()
     db.refresh(db_host)
-    
+
+    # Send welcome email (non-blocking; registration succeeds even if email fails)
+    send_welcome_email_host(db_host.email, db_host.full_name)
+
     return db_host
 
 
@@ -222,6 +232,117 @@ async def update_host_profile(
     db.refresh(current_host)
     
     return current_host
+
+
+@router.post("/host/auth/forgot-password")
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Request a password reset email for hosts.
+    
+    If the email exists, sends a reset link. Always returns success to prevent
+    email enumeration. The link expires in 1 hour.
+    
+    - **email**: Registered email address
+    """
+    host = get_host_by_email(db, request.email)
+    if not host:
+        # Don't reveal if email exists - same response for both cases
+        return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+    if not settings.RESEND_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service is not configured. Please try again later.",
+        )
+
+    reset_token = create_password_reset_token(host.id)
+    base_url = (settings.FRONTEND_URL or "https://yourapp.com").rstrip("/")
+    reset_link = f"{base_url}/reset-password?token={reset_token}"
+
+    try:
+        import resend
+        resend.api_key = settings.RESEND_API_KEY or ""
+        resend.Emails.send({
+            "from": settings.RESEND_FROM_EMAIL or "Ardena Group Team <onboarding@resend.dev>",
+            "to": [host.email],
+            "subject": "Reset your Ardena host password",
+            "html": f"""
+            <p>Hi {host.full_name},</p>
+            <p>You requested to reset your password for your Ardena host account.</p>
+            <p>Click the link below to set a new password (link expires in 1 hour):</p>
+            <p><a href="{reset_link}">{reset_link}</a></p>
+            <p>If you didn't request this, you can safely ignore this email.</p>
+            <p>— The Ardena Group Team</p>
+            """,
+        })
+    except Exception as e:
+        # Log but do not break: e.g. Resend domain not verified yet, or testing limits
+        import logging
+        logging.getLogger(__name__).warning("Failed to send host password reset email: %s", e)
+        # Still return success so API does not return 500; user won't get email until domain is ready
+
+    return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+
+@router.post("/host/auth/reset-password")
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Reset host password using the token from the forgot-password email.
+    
+    - **token**: Reset token from the email link
+    - **new_password**: New password (min 8 characters)
+    - **new_password_confirmation**: Must match new_password
+    """
+    payload = verify_password_reset_token(request.token)
+    host_id = int(payload["sub"])
+
+    host = db.query(Host).filter(Host.id == host_id).first()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link.",
+        )
+
+    host.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    db.refresh(host)
+
+    return {"message": "Password has been reset successfully. You can now log in with your new password."}
+
+
+@router.put("/host/change-password")
+async def change_password(
+    request: HostChangePasswordRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Change host password (when logged in).
+    
+    Requires current password verification.
+    
+    - **current_password**: Current password
+    - **new_password**: New password (min 8 characters)
+    - **new_password_confirmation**: Must match new_password
+    """
+    # Verify current password
+    if not verify_password(request.current_password, current_host.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    
+    # Update password
+    current_host.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    
+    return {"message": "Password changed successfully"}
 
 
 @router.get("/host/notifications", response_model=HostNotificationListResponse)

@@ -12,6 +12,7 @@ from app.schemas import (
     GoogleLoginRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    ClientChangePasswordRequest,
     ClientLoginResponseWithRefresh,
     ClientProfileUpdateRequest,
     ClientProfileResponse,
@@ -35,6 +36,7 @@ from app.auth import (
     get_current_client,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
+from app.services.email_welcome import send_welcome_email_client
 
 router = APIRouter()
 
@@ -92,7 +94,10 @@ async def register_client(
     
     db.add(welcome_notification)
     db.commit()
-    
+
+    # Send welcome email (non-blocking; registration succeeds even if email fails)
+    send_welcome_email_client(db_client.email, db_client.full_name)
+
     return db_client
 
 
@@ -192,10 +197,10 @@ async def forgot_password(
             """,
         })
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send reset email. Please try again later.",
-        )
+        # Log but do not break: e.g. Resend domain not verified yet, or testing limits
+        import logging
+        logging.getLogger(__name__).warning("Failed to send client password reset email: %s", e)
+        # Still return success so API does not return 500; user won't get email until domain is ready
 
     return {"message": "If an account exists with this email, you will receive a password reset link."}
 
@@ -358,6 +363,35 @@ async def update_client_profile(
     db.refresh(current_client)
     
     return current_client
+
+
+@router.put("/client/change-password")
+async def change_password(
+    request: ClientChangePasswordRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db)
+):
+    """
+    Change client password (when logged in).
+    
+    Requires current password verification.
+    
+    - **current_password**: Current password
+    - **new_password**: New password (min 8 characters)
+    - **new_password_confirmation**: Must match new_password
+    """
+    # Verify current password
+    if not verify_password(request.current_password, current_client.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    
+    # Update password
+    current_client.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    
+    return {"message": "Password changed successfully"}
 
 
 # ==================== DRIVING LICENSE ENDPOINTS ====================
