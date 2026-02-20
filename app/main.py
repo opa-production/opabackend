@@ -41,7 +41,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, host_earnings
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, host_earnings, subscribers as subscribers_router
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -54,6 +54,7 @@ from app.admin import (
     support as admin_support,
     bookings as admin_bookings,
     withdrawals as admin_withdrawals,
+    subscribers as admin_subscribers,
 )
 from app.models import Admin
 from app.auth import get_password_hash, get_admin_by_email
@@ -90,6 +91,8 @@ app = FastAPI(
         {"name": "Admin Support", "description": "Support conversation management"},
         {"name": "Admin Bookings", "description": "Booking management and oversight"},
         {"name": "Admin Withdrawals", "description": "View and process host withdrawal requests"},
+        {"name": "Newsletter", "description": "Public subscribe / unsubscribe"},
+        {"name": "Admin Subscribers", "description": "Newsletter subscriber list and send email to all"},
     ]
 )
 
@@ -508,6 +511,7 @@ app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
+app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
 app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
 app.include_router(admin_cars.router, prefix="/api/v1", tags=["Admin Car Management"])
@@ -519,6 +523,7 @@ app.include_router(admin_payment_methods.router, prefix="/api/v1", tags=["Admin 
 app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"])
 app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
+app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
 
 
 @app.get("/")

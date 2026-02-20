@@ -553,3 +553,14 @@ class CarBlockedDate(Base):
     
     # Relationships
     car = relationship("Car", foreign_keys=[car_id])
+
+
+class Subscriber(Base):
+    """Newsletter / marketing email subscribers (website signup)."""
+    __tablename__ = "subscribers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    is_subscribed = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    unsubscribed_at = Column(DateTime(timezone=True), nullable=True)

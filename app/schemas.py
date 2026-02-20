@@ -1211,6 +1211,45 @@ class PaginatedAdminListResponse(BaseModel):
     total_pages: int
 
 
+# ==================== NEWSLETTER SUBSCRIBERS ====================
+
+class SubscribeRequest(BaseModel):
+    """Request to subscribe to newsletter (public)."""
+    email: EmailStr = Field(..., description="Email to subscribe")
+
+
+class UnsubscribeRequest(BaseModel):
+    """Request to unsubscribe from newsletter (public)."""
+    email: EmailStr = Field(..., description="Email to unsubscribe")
+
+
+class SubscriberItemResponse(BaseModel):
+    """Single subscriber (admin list)."""
+    id: int
+    email: str
+    is_subscribed: bool
+    created_at: Optional[datetime] = None
+    unsubscribed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SubscriberListResponse(BaseModel):
+    """Paginated subscriber list (admin)."""
+    subscribers: List[SubscriberItemResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+class AdminSendNewsletterRequest(BaseModel):
+    """Send newsletter email to all subscribers (admin)."""
+    subject: str = Field(..., min_length=1, max_length=500)
+    body_html: str = Field(..., min_length=1, description="HTML body of the email")
+
+
 # ==================== TOKEN SCHEMAS ====================
 
 class RefreshTokenRequest(BaseModel):

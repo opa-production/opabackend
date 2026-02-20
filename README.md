@@ -101,6 +101,19 @@ SENDGRID_FROM_EMAIL=Ardena Group Team <hello@ardena.xyz>
 - **SENDGRID_API_KEY:** Create an API key in [SendGrid Dashboard](https://app.sendgrid.com/settings/api_keys) (e.g. "Restricted Access" → Mail Send only).
 - **SENDGRID_FROM_EMAIL:** Use a verified sender (Single Sender or domain-authenticated address like `hello@ardena.xyz`). Default is `Ardena Group Team <hello@ardena.xyz>` if not set.
 
+### Newsletter subscribers
+
+- **Public (website):**
+  - `POST /api/v1/subscribe` – body `{ "email": "user@example.com" }` – subscribe to newsletter
+  - `POST /api/v1/unsubscribe` – body `{ "email": "user@example.com" }` – unsubscribe
+- **Admin (Bearer token):**
+  - `GET /api/v1/admin/subscribers` – list subscribers (paginated; optional `subscribed_only=true`)
+  - `GET /api/v1/admin/subscribers/count` – total subscribed count
+  - `POST /api/v1/admin/subscribers/send` – body `{ "subject": "...", "body_html": "..." }` – send email to all subscribed addresses
+
+Include an unsubscribe link in your newsletter (e.g. `https://yoursite.com/unsubscribe?email={{email}}` that POSTs to `/api/v1/unsubscribe`).  
+Admin UI: open or link to **admin-web/subscribers.html** for the subscribers page (count, list, send to all).
+
 ## Troubleshooting: Backend not reachable
 
 If the admin panel or mobile app can't reach the backend (no logs appear):
