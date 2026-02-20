@@ -14,11 +14,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
-    # Resend API configuration
-    RESEND_API_KEY: Optional[str] = None
+    # SendGrid API configuration
+    SENDGRID_API_KEY: Optional[str] = None
     
-    # Email configuration
-    RESEND_FROM_EMAIL: Optional[str] = "onboarding@resend.dev"  # Default, can be overridden via env
+    # Email from address (verified sender in SendGrid, e.g. hello@ardena.xyz)
+    SENDGRID_FROM_EMAIL: Optional[str] = "Ardena Group Team <hello@ardena.xyz>"
     
     # Google Auth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -46,14 +46,13 @@ else:
     logger.warning(f".env file not found at: {env_file_path}")
 
 # Log environment variable loading status (without exposing the actual key)
-if settings.RESEND_API_KEY:
-    logger.info(f"RESEND_API_KEY loaded successfully (length: {len(settings.RESEND_API_KEY)})")
+if settings.SENDGRID_API_KEY:
+    logger.info(f"SENDGRID_API_KEY loaded successfully (length: {len(settings.SENDGRID_API_KEY)})")
 else:
-    logger.warning("RESEND_API_KEY not found in settings, trying os.environ...")
-    # Try to load from os.environ as fallback
-    env_key = os.getenv("RESEND_API_KEY")
+    logger.warning("SENDGRID_API_KEY not found in settings, trying os.environ...")
+    env_key = os.getenv("SENDGRID_API_KEY")
     if env_key:
-        settings.RESEND_API_KEY = env_key
-        logger.info(f"RESEND_API_KEY loaded from os.environ (length: {len(env_key)})")
+        settings.SENDGRID_API_KEY = env_key
+        logger.info(f"SENDGRID_API_KEY loaded from os.environ (length: {len(env_key)})")
     else:
-        logger.error("RESEND_API_KEY not found in .env file or environment variables")
+        logger.error("SENDGRID_API_KEY not found in .env file or environment variables")

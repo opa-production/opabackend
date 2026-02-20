@@ -89,16 +89,17 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `POST /api/v1/host/upload/vehicle/{car_id}/images` - Upload vehicle images (up to 10)
 - `POST /api/v1/host/upload/vehicle/{car_id}/video` - Upload vehicle video
 
-## Email (Resend)
+## Email (SendGrid)
 
-Welcome emails and password-reset emails use Resend. **No code changes** are required to use your own domain.
+Welcome emails and password-reset emails use [SendGrid](https://sendgrid.com/). Add these to your **.env**:
 
-- **Before domain verification:** Resend only allows sending to the account owner’s email (testing mode).
-- **After your domain is verified** (e.g. `ardena.xyz` in [Resend Domains](https://resend.com/domains)): set this in your **.env** (local and production):
-  ```env
-  RESEND_FROM_EMAIL="Ardena Group Team <hello@ardena.xyz>"
-  ```
-  Use any address on your verified domain (`hello@`, `noreply@`, etc.). Restart the app so it picks up the new value. Welcome and password-reset emails will then be sent to any recipient.
+```env
+SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxxxx
+SENDGRID_FROM_EMAIL=Ardena Group Team <hello@ardena.xyz>
+```
+
+- **SENDGRID_API_KEY:** Create an API key in [SendGrid Dashboard](https://app.sendgrid.com/settings/api_keys) (e.g. "Restricted Access" → Mail Send only).
+- **SENDGRID_FROM_EMAIL:** Use a verified sender (Single Sender or domain-authenticated address like `hello@ardena.xyz`). Default is `Ardena Group Team <hello@ardena.xyz>` if not set.
 
 ## Troubleshooting: Backend not reachable
 

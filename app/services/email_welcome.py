@@ -1,6 +1,5 @@
 """
-Welcome emails for new clients and hosts via Resend.
-Sent after registration; different copy for clients (renters) vs hosts (car owners).
+Email sending via SendGrid: welcome emails and generic send for password reset etc.
 """
 import logging
 from app.config import settings
@@ -8,35 +7,41 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 FROM_NAME = "Ardena Group Team"
-DEFAULT_FROM = "Ardena Group Team <onboarding@resend.dev>"
+DEFAULT_FROM = "Ardena Group Team <hello@ardena.xyz>"
 
 
-def _send_email(to: str, subject: str, html: str) -> bool:
-    """Send one email via Resend. Returns True on success, False on failure (logs error)."""
-    if not settings.RESEND_API_KEY:
-        logger.warning("[Welcome Email] RESEND_API_KEY not set; skipping send")
+def send_email(to: str, subject: str, html: str) -> bool:
+    """
+    Send one email via SendGrid.
+    Returns True on success, False on failure (logs error).
+    Use this for welcome emails, password reset, etc.
+    """
+    if not settings.SENDGRID_API_KEY:
+        logger.warning("[Email] SENDGRID_API_KEY not set; skipping send")
         return False
+    from_email = settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
     try:
-        import resend
-        resend.api_key = settings.RESEND_API_KEY
-        from_email = settings.RESEND_FROM_EMAIL or DEFAULT_FROM
-        resend.Emails.send({
-            "from": from_email,
-            "to": [to],
-            "subject": subject,
-            "html": html,
-        })
-        logger.info(f"[Welcome Email] Sent to {to}: {subject}")
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        message = Mail(
+            from_email=from_email,
+            to_emails=to,
+            subject=subject,
+            html_content=html,
+        )
+        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
+        sg.send(message)
+        logger.info(f"[Email] Sent to {to}: {subject}")
         return True
     except Exception as e:
-        logger.exception(f"[Welcome Email] Failed to send to {to}: {e}")
+        logger.exception(f"[Email] Failed to send to {to}: {e}")
         return False
 
 
 def send_welcome_email_client(to_email: str, full_name: str) -> bool:
     """
     Send welcome email to a new client (car renter).
-    Emotional, reassuring copy from Ardena Group Team.
     """
     subject = "Welcome to Ardena — Your journey starts here"
     first_name = full_name.split()[0] if full_name else "there"
@@ -51,13 +56,12 @@ def send_welcome_email_client(to_email: str, full_name: str) -> bool:
       <p style="margin-top: 24px;">With warmth,<br><strong>The Ardena Group Team</strong></p>
     </div>
     """
-    return _send_email(to_email, subject, html)
+    return send_email(to_email, subject, html)
 
 
 def send_welcome_email_host(to_email: str, full_name: str) -> bool:
     """
     Send welcome email to a new host (car owner).
-    Emotional, empowering copy from Ardena Group Team.
     """
     subject = "Welcome to Ardena — Your car, your impact"
     first_name = full_name.split()[0] if full_name else "there"
@@ -71,4 +75,4 @@ def send_welcome_email_host(to_email: str, full_name: str) -> bool:
       <p style="margin-top: 24px;">With gratitude,<br><strong>The Ardena Group Team</strong></p>
     </div>
     """
-    return _send_email(to_email, subject, html)
+    return send_email(to_email, subject, html)

@@ -36,7 +36,7 @@ from app.auth import (
     get_current_client,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from app.services.email_welcome import send_welcome_email_client
+from app.services.email_welcome import send_welcome_email_client, send_email
 
 router = APIRouter()
 
@@ -170,7 +170,7 @@ async def forgot_password(
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
 
-    if not settings.RESEND_API_KEY:
+    if not settings.SENDGRID_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service is not configured. Please try again later.",
@@ -180,27 +180,18 @@ async def forgot_password(
     base_url = (settings.FRONTEND_URL or "https://yourapp.com").rstrip("/")
     reset_link = f"{base_url}/reset-password?token={reset_token}"
 
-    try:
-        import resend
-        resend.api_key = settings.RESEND_API_KEY or ""
-        resend.Emails.send({
-            "from": settings.RESEND_FROM_EMAIL or "Ardena <onboarding@resend.dev>",
-            "to": [client.email],
-            "subject": "Reset your Ardena password",
-            "html": f"""
-            <p>Hi {client.full_name},</p>
-            <p>You requested to reset your password for your Ardena account.</p>
-            <p>Click the link below to set a new password (link expires in 1 hour):</p>
-            <p><a href="{reset_link}">{reset_link}</a></p>
-            <p>If you didn't request this, you can safely ignore this email.</p>
-            <p>— The Ardena Team</p>
-            """,
-        })
-    except Exception as e:
-        # Log but do not break: e.g. Resend domain not verified yet, or testing limits
-        import logging
-        logging.getLogger(__name__).warning("Failed to send client password reset email: %s", e)
-        # Still return success so API does not return 500; user won't get email until domain is ready
+    send_email(
+        client.email,
+        "Reset your Ardena password",
+        f"""
+        <p>Hi {client.full_name},</p>
+        <p>You requested to reset your password for your Ardena account.</p>
+        <p>Click the link below to set a new password (link expires in 1 hour):</p>
+        <p><a href="{reset_link}">{reset_link}</a></p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+        <p>— The Ardena Team</p>
+        """,
+    )
 
     return {"message": "If an account exists with this email, you will receive a password reset link."}
 
