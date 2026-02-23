@@ -554,6 +554,57 @@ async def confirm_pickup_as_host(
     return booking_to_response(booking)
 
 
+@router.put("/host/bookings/{booking_id}/confirm-dropoff", response_model=BookingResponse)
+async def confirm_dropoff_as_host(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Confirm that the client has returned the car (host side). Marks booking as **completed**.
+
+    - Only the host who owns the car can confirm dropoff
+    - Only `confirmed` or `active` bookings can be marked completed
+    """
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Only confirmed or active bookings can have dropoff confirmed. "
+                f"Current status is '{booking.status.value}'."
+            ),
+        )
+
+    booking.status = BookingStatus.COMPLETED
+    booking.status_updated_at = datetime.utcnow()
+    booking.cancellation_reason = None
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking_to_response(booking)
+
+
 @router.post("/host/bookings/{booking_id}/complete", response_model=BookingResponse)
 async def complete_booking_as_host(
     booking_id: str,
