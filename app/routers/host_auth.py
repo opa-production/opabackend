@@ -259,8 +259,12 @@ async def forgot_password(
         )
 
     reset_token = create_password_reset_token(host.id)
-    base_url = (settings.FRONTEND_URL or "https://yourapp.com").rstrip("/")
-    reset_link = f"{base_url}/reset-password?token={reset_token}"
+    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://yourapp.com").strip()
+    # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
+    if base_url.endswith("://"):
+        reset_link = f"{base_url}reset-password?token={reset_token}"
+    else:
+        reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
 
     send_email(
         host.email,

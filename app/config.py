@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     # Google Auth
     GOOGLE_CLIENT_ID: Optional[str] = None
     
-    # Frontend URL for password reset links
+    # Frontend URL for password reset links (web). Overridden by PASSWORD_RESET_LINK_BASE_URL when set.
     FRONTEND_URL: Optional[str] = "https://yourapp.com"  # Base URL for reset password links
+    # Optional: base for reset link. Use a deep link to open the app, e.g. ardenahost:// so link becomes ardenahost://reset-password?token=...
+    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  # e.g. ardenahost:// or https://yourapp.com
 
     # Veriff KYC (host verification)
     VERIFF_API_KEY: Optional[str] = None

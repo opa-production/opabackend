@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Request, Response, status
 
@@ -19,7 +20,7 @@ router = APIRouter(tags=["Veriff Webhook"])
 logger = logging.getLogger(__name__)
 
 
-def _get_webhook_secret() -> str | None:
+def _get_webhook_secret() -> Optional[str]:
     """Use VERIFF_WEBHOOK_SECRET, or SHARED_SECRET_KEY, or MASTER_SECRET_KEY (first set)."""
     for key in (
         getattr(settings, "VERIFF_WEBHOOK_SECRET", None),
@@ -31,7 +32,7 @@ def _get_webhook_secret() -> str | None:
     return None
 
 
-def _parse_verified_at(payload: dict) -> datetime | None:
+def _parse_verified_at(payload: dict) -> Optional[datetime]:
     for key in ("decisionTime", "decision_time", "submissionTime", "submission_time"):
         val = payload.get(key)
         if val:
@@ -54,7 +55,7 @@ def _parse_verified_at(payload: dict) -> datetime | None:
     return None
 
 
-def _parse_document_type(payload: dict) -> str | None:
+def _parse_document_type(payload: dict) -> Optional[str]:
     doc = payload.get("document") or payload.get("documentInfo") or {}
     if isinstance(doc, dict):
         return doc.get("type") or doc.get("documentType")
