@@ -114,6 +114,57 @@ SENDGRID_FROM_EMAIL=Ardena Group Team <hello@ardena.xyz>
 Include an unsubscribe link in your newsletter (e.g. `https://yoursite.com/unsubscribe?email={{email}}` that POSTs to `/api/v1/unsubscribe`).  
 Admin UI: open or link to **admin-web/subscribers.html** for the subscribers page (count, list, send to all).
 
+### Host KYC (Veriff)
+
+Hosts verify identity via [Veriff](https://www.veriff.com/) (ID, passport, or driver’s licence + liveness). No document images are stored; only status and metadata.
+
+- **.env:**
+  - `VERIFF_API_KEY` – required (API key from Veriff, used to create sessions).
+  - **Webhook verification** (recommended): set **one** of `VERIFF_WEBHOOK_SECRET`, `SHARED_SECRET_KEY`, or `MASTER_SECRET_KEY` to the value from Veriff Customer Portal → Integration → Auth methods → shared secret / master signature key. The backend verifies `X-HMAC-SIGNATURE` on incoming webhooks so only Veriff can update KYC results.
+  - Optional: `VERIFF_BASE_URL` (default `https://stationapi.veriff.com`).
+  - **Return to app after verification:** Veriff allows only **HTTPS** callback URLs. If the app sends a deep link (e.g. `ardenahost://kyc/result`) in the session body, set `VERIFF_CALLBACK_URL` to your API's public HTTPS URL for the redirect endpoint, e.g. `https://api.ardena.xyz/api/v1/host/kyc/redirect`. Veriff redirects the user there after verification; the backend then redirects to the app deep link. Optional: `KYC_ALLOWED_RETURN_PREFIXES` (default `ardenahost://,ardena://`).
+  - **Local dev with ngrok:** See [Local dev: ngrok for Veriff KYC](#local-dev-ngrok-for-veriff-kyc) below.
+- **App flow:** Host taps “Continue to verification” → app calls `POST /api/v1/host/kyc/session` (Bearer) → backend returns `verification_url` → app opens that URL (browser/webview) → user completes Veriff flow.
+- **Result:** Veriff sends a decision to your webhook. Set **Webhook decisions URL** in Veriff Customer Portal to `https://api.ardena.xyz/api/v1/veriff/webhook` (or your API base + `/api/v1/veriff/webhook`). Backend updates `host_kycs` and the app can poll `GET /api/v1/host/kyc/status` (Bearer) to show approved/declined/pending.
+
+#### Local dev: ngrok for Veriff KYC
+
+Veriff requires an **HTTPS** callback URL. For local development, expose your backend with ngrok and point `VERIFF_CALLBACK_URL` at the ngrok URL.
+
+1. **Install ngrok** (if needed):
+   - **Windows:** Download the Windows 64-bit zip from [ngrok.com/download](https://ngrok.com/download), extract `ngrok.exe` to a folder (e.g. `D:\backend\tools` or `C:\ngrok`). Either add that folder to your PATH or run ngrok with the full path, e.g. `D:\backend\tools\ngrok.exe http 8001`. Alternatively: `winget install ngrok.ngrok` then open a **new** PowerShell (so PATH updates) and run `ngrok http 8001`.
+   - **Mac/Linux:** `brew install ngrok` (Mac) or download from ngrok.com.
+   - Sign up at [ngrok.com](https://ngrok.com) and add your auth token: `ngrok config add-authtoken YOUR_TOKEN`.
+   - **Use port 8001** (your backend), not 3000: `ngrok http 8001`.
+
+2. **Start your backend** (in one terminal):
+   ```bash
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+   ```
+
+3. **Start ngrok** (in a second terminal), forwarding to port 8001:
+   ```bash
+   ngrok http 8001
+   ```
+   Or from the project root: `scripts\ngrok-veriff.bat` (Windows) or `./scripts/ngrok-veriff.sh` (Mac/Linux).
+   You’ll see a line like:
+   ```text
+   Forwarding   https://abc123.ngrok-free.app -> http://localhost:8001
+   ```
+
+4. **Set the callback URL in `.env`** (use the **HTTPS** URL from ngrok):
+   ```env
+   VERIFF_CALLBACK_URL=https://YOUR-NGROK-SUBDOMAIN.ngrok-free.app/api/v1/host/kyc/redirect
+   ```
+   Example: if ngrok shows `https://abc123.ngrok-free.app`, set:
+   ```env
+   VERIFF_CALLBACK_URL=https://abc123.ngrok-free.app/api/v1/host/kyc/redirect
+   ```
+
+5. **Restart the backend** so it picks up the new `VERIFF_CALLBACK_URL`. Your app can keep using your local IP (e.g. `http://192.168.88.x:8001`) for API calls; Veriff will use the ngrok HTTPS URL only for the post-verification redirect.
+
+**Note:** The free ngrok URL changes each time you restart ngrok. Update `VERIFF_CALLBACK_URL` in `.env` and restart the backend whenever you get a new ngrok URL. For a stable URL, use a paid ngrok plan or deploy to a server with a fixed HTTPS URL.
+
 ## Troubleshooting: Backend not reachable
 
 If the admin panel or mobile app can't reach the backend (no logs appear):

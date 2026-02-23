@@ -128,6 +128,24 @@ class Host(Base):
     host_ratings = relationship("HostRating", back_populates="host", cascade="all, delete-orphan")
     # Relationship to withdrawals
     withdrawals = relationship("Withdrawal", back_populates="host", cascade="all, delete-orphan")
+    # KYC (Veriff) - one-to-many for history; use latest for status
+    host_kycs = relationship("HostKyc", back_populates="host", cascade="all, delete-orphan")
+
+
+class HostKyc(Base):
+    """Host KYC verification result from Veriff (no doc images stored)."""
+    __tablename__ = "host_kycs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    veriff_session_id = Column(String(255), nullable=False, index=True)  # Veriff verification/session ID
+    status = Column(String(50), nullable=False, index=True)  # approved, declined, pending, resubmission_requested
+    document_type = Column(String(80), nullable=True)  # passport, id_card, drivers_license, etc.
+    decision_reason = Column(String(500), nullable=True)  # reason if declined
+    verified_at = Column(DateTime(timezone=True), nullable=True)  # when Veriff decided
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    host = relationship("Host", back_populates="host_kycs")
 
 
 class WithdrawalStatus(str, enum.Enum):

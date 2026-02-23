@@ -58,6 +58,34 @@ class HostProfileResponse(BaseModel):
         from_attributes = True
 
 
+class HostKycSessionRequest(BaseModel):
+    """Optional body when creating a KYC session."""
+    callback_url: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="URL to redirect the user to after verification (e.g. deep link: myapp://kyc/result). If not set, Veriff uses default or user stays on Veriff.",
+    )
+
+
+class HostKycSessionResponse(BaseModel):
+    """Response after creating a Veriff KYC session - app opens verification_url."""
+    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
+    session_id: str = Field(..., description="Veriff session ID (for reference)")
+
+
+class HostKycStatusResponse(BaseModel):
+    """Host KYC verification status (latest attempt)."""
+    user_id: int = Field(..., description="Host ID")
+    veriff_session_id: Optional[str] = None
+    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
+    document_type: Optional[str] = None
+    decision_reason: Optional[str] = None
+    verified_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class HostLoginRequest(BaseModel):
     email: EmailStr
     password: str

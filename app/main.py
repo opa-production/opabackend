@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -41,7 +42,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, host_earnings, subscribers as subscribers_router
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, veriff_webhook as veriff_webhook_router
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -93,7 +94,10 @@ app = FastAPI(
         {"name": "Admin Withdrawals", "description": "View and process host withdrawal requests"},
         {"name": "Newsletter", "description": "Public subscribe / unsubscribe"},
         {"name": "Admin Subscribers", "description": "Newsletter subscriber list and send email to all"},
-    ]
+        {"name": "Host KYC", "description": "Host KYC verification (Veriff)"},
+        {"name": "Veriff Webhook", "description": "Veriff decision webhook (do not call directly)"},
+    ],
+    servers=[{"url": "/", "description": "Current host"}],
 )
 
 
@@ -512,6 +516,8 @@ app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
+app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
+app.include_router(veriff_webhook_router.router, prefix="/api/v1", tags=["Veriff Webhook"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
 app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
 app.include_router(admin_cars.router, prefix="/api/v1", tags=["Admin Car Management"])
@@ -524,6 +530,19 @@ app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"
 app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
+
+
+@app.get("/host/kyc/redirect", response_class=HTMLResponse)
+def kyc_redirect_callback(
+    return_to: Optional[str] = Query(None, description="Deep link to open the app after KYC"),
+):
+    """
+    KYC callback without /api/v1 prefix. Use this URL if your proxy strips the path
+    or you configured Veriff with https://your-domain/host/kyc/redirect.
+    Same behavior as GET /api/v1/host/kyc/redirect.
+    """
+    from app.routers.host_kyc import build_kyc_redirect_response
+    return build_kyc_redirect_response(return_to)
 
 
 @app.get("/")

@@ -25,7 +25,20 @@ class Settings(BaseSettings):
     
     # Frontend URL for password reset links
     FRONTEND_URL: Optional[str] = "https://yourapp.com"  # Base URL for reset password links
-    
+
+    # Veriff KYC (host verification)
+    VERIFF_API_KEY: Optional[str] = None
+    VERIFF_BASE_URL: Optional[str] = "https://stationapi.veriff.com"  # Veriff API base
+    # HTTPS URL where Veriff redirects after verification. Required when app sends a deep link (Veriff allows only HTTPS).
+    # Example: https://api.ardena.xyz/api/v1/host/kyc/redirect — this endpoint then redirects to the app deep link.
+    VERIFF_CALLBACK_URL: Optional[str] = None
+    # Comma-separated allowed prefixes for return_to (e.g. ardenahost://,ardena://). Used to avoid open redirects.
+    KYC_ALLOWED_RETURN_PREFIXES: str = "ardenahost://,ardena://"
+    # Webhook signature verification (use one of these; same value as Veriff "shared secret" / "master signature key")
+    VERIFF_WEBHOOK_SECRET: Optional[str] = None
+    SHARED_SECRET_KEY: Optional[str] = None   # Veriff shared secret (alternative env name)
+    MASTER_SECRET_KEY: Optional[str] = None   # Veriff master key that signs webhooks (alternative env name)
+
     class Config:
         # Use absolute path to .env file in project root
         env_file = str(BASE_DIR / ".env")
