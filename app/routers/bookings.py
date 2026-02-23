@@ -504,6 +504,56 @@ async def get_host_booking_details(
     return booking_to_response(booking)
 
 
+@router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
+async def confirm_pickup_as_host(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Confirm that the client has picked up the car (host side). Moves booking from **confirmed** to **active**.
+
+    - Only the host who owns the car can confirm pickup
+    - Only `confirmed` bookings can be moved to active
+    """
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+        )
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status != BookingStatus.CONFIRMED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Only confirmed bookings can have pickup confirmed. "
+                f"Current status is '{booking.status.value}'."
+            ),
+        )
+
+    booking.status = BookingStatus.ACTIVE
+    booking.status_updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking_to_response(booking)
+
+
 @router.post("/host/bookings/{booking_id}/complete", response_model=BookingResponse)
 async def complete_booking_as_host(
     booking_id: str,

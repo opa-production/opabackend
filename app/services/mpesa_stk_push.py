@@ -8,14 +8,6 @@ from datetime import datetime
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Supported env vars (either naming works):
-#   CONSUMER_KEY or MPESA_CONSUMER_KEY
-#   CONSUMER_SECRET or MPESA_CONSUMER_SECRET
-#   MPESA_TOKEN_URL, MPESA_STK_URL (optional if MPESA_ENVIRONMENT is set)
-#   MPESA_ENVIRONMENT = 'production' | 'sandbox' -> picks live or sandbox URLs when *_URL not set
-#   MPESA_SHORTCODE or MPESA_EXPRESS_SHORTCODE (express used for STK push when set)
-#   MPESA_PASSKEY, MPESA_CALLBACK_URL (required)
-#   MPESA_SHORTCODE_TYPE = 'till_number' | 'paybill' -> Till uses CustomerBuyGoodsOnline
 
 LIVE_TOKEN_URL = "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
 LIVE_STK_URL = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
