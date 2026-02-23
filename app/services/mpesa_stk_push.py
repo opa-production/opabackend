@@ -63,17 +63,24 @@ def generate_access_token():
 def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
     token = generate_access_token()
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    # Sandbox uses Paybill 174379 -> prefer MPESA_SHORTCODE. Live Till -> prefer MPESA_EXPRESS_SHORTCODE.
-    if _is_live():
-        shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
-    else:
-        shortCode = os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_EXPRESS_SHORTCODE")
-    passkey = os.getenv("MPESA_PASSKEY")
-    callback_url = os.getenv("MPESA_CALLBACK_URL")
     shortcode_type = (os.getenv("MPESA_SHORTCODE_TYPE") or "paybill").strip().lower()
 
+    # For Till (Buy Goods): use MPESA_TILL if set; otherwise shortcode. For Paybill: use shortcode only.
+    if shortcode_type == "till_number":
+        shortCode = (os.getenv("MPESA_TILL") or "").strip() or os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
+    else:
+        if _is_live():
+            shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
+        else:
+            shortCode = os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_EXPRESS_SHORTCODE")
+    passkey = os.getenv("MPESA_PASSKEY")
+    callback_url = os.getenv("MPESA_CALLBACK_URL")
+
     if not shortCode or not passkey:
-        raise Exception("M-Pesa configuration missing: MPESA_SHORTCODE (sandbox) or MPESA_EXPRESS_SHORTCODE/MPESA_SHORTCODE (live) and MPESA_PASSKEY")
+        raise Exception(
+            "M-Pesa configuration missing: for Till set MPESA_SHORTCODE_TYPE=till_number and MPESA_TILL (or MPESA_SHORTCODE); "
+            "for Paybill set MPESA_SHORTCODE; also set MPESA_PASSKEY."
+        )
 
     # Callback URL: required for production (must be public HTTPS). For sandbox/local dev, allow missing and use a placeholder so STK still fires.
     if not callback_url or not callback_url.strip().startswith("http"):
