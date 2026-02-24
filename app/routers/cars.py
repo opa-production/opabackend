@@ -1083,6 +1083,52 @@ async def toggle_car_visibility(
     return _car_to_response(db_car)
 
 
+@router.delete("/host/cars/{car_id}", status_code=status.HTTP_200_OK)
+async def delete_my_car(
+    car_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a car listing. Only the car owner (host) can delete it.
+
+    - Cannot delete if the car has any pending, confirmed, or active bookings.
+    - Returns 400 in that case; cancel or complete those bookings first.
+    """
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id
+    ).first()
+
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to delete it",
+        )
+
+    # Block delete if there are non-finished bookings
+    active_booking = (
+        db.query(Booking)
+        .filter(
+            Booking.car_id == car_id,
+            Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+        )
+        .first()
+    )
+    if active_booking:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Cannot delete car with pending, confirmed, or active bookings. "
+                "Cancel or complete them first."
+            ),
+        )
+
+    db.delete(car)
+    db.commit()
+    return {"message": "Car deleted successfully"}
+
+
 # ==================== BLOCKED DATES MANAGEMENT ====================
 
 # Helper function to add blocked date (shared by both endpoints)
