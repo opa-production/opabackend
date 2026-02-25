@@ -1,3 +1,4 @@
+import secrets
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -457,6 +458,7 @@ async def host_google_auth(
             host = Host(
                 full_name=full_name,
                 email=email,
+                hashed_password=get_password_hash(secrets.token_urlsafe(32)),
                 google_id=google_id,
                 avatar_url=avatar_url,
                 is_active=True
