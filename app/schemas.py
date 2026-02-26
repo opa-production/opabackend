@@ -598,6 +598,51 @@ class HostRatingListResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== CLIENT (RENTER) RATING SCHEMAS ====================
+
+class ClientRatingCreateRequest(BaseModel):
+    """Request for a host to create a client/renter rating"""
+    client_id: int = Field(..., description="ID of the client being rated")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="Optional: ID of the completed booking this rating is for")
+
+
+class ClientRatingUpdateRequest(BaseModel):
+    """Request for a host to update a client/renter rating"""
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+
+
+class ClientRatingResponse(BaseModel):
+    """Client/renter rating response schema"""
+    id: int
+    client_id: int
+    host_id: int
+    booking_id: Optional[int] = None
+    rating: int
+    review: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Display helpers
+    client_name: Optional[str] = None
+    host_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientRatingListResponse(BaseModel):
+    """List of client/renter ratings response"""
+    ratings: List[ClientRatingResponse]
+    total: int
+    average_rating: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
 # Support Message Schemas
 class SupportMessageRequest(BaseModel):
     """Request to send a message in support conversation"""

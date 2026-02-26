@@ -126,6 +126,8 @@ class Host(Base):
     feedbacks = relationship("Feedback", back_populates="host", cascade="all, delete-orphan")
     # Relationship to host ratings
     host_ratings = relationship("HostRating", back_populates="host", cascade="all, delete-orphan")
+    # Relationship to client (renter) ratings given by this host
+    client_ratings = relationship("ClientRating", back_populates="host", cascade="all, delete-orphan")
     # Relationship to withdrawals
     withdrawals = relationship("Withdrawal", back_populates="host", cascade="all, delete-orphan")
     # KYC (Veriff) - one-to-many for history; use latest for status
@@ -360,6 +362,8 @@ Client.bookings = relationship("Booking", back_populates="client", cascade="all,
 Client.payments = relationship("Payment", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include host ratings relationship
 Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
+# Update Client model to include ratings received from hosts
+Client.client_ratings = relationship("ClientRating", back_populates="client", cascade="all, delete-orphan")
 
 
 class Feedback(Base):
@@ -412,6 +416,31 @@ class HostRating(Base):
         # Allow multiple ratings per client-host pair, but one per booking
         # We'll enforce this in the API logic
     )
+
+
+class ClientRating(Base):
+    """Host ratings for clients (renters)"""
+    __tablename__ = "client_ratings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True, index=True)  # Optional: link to booking
+
+    # Rating (1-5 stars)
+    rating = Column(Integer, nullable=False)  # 1 to 5
+
+    # Review content
+    review = Column(Text, nullable=True)  # Optional text review
+
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    client = relationship("Client", back_populates="client_ratings", foreign_keys=[client_id])
+    host = relationship("Host", back_populates="client_ratings", foreign_keys=[host_id])
+    booking = relationship("Booking", foreign_keys=[booking_id])
 
 
 class Admin(Base):

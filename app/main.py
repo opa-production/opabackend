@@ -42,7 +42,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, veriff_webhook as veriff_webhook_router
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, veriff_webhook as veriff_webhook_router
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -80,6 +80,7 @@ app = FastAPI(
         {"name": "Payments", "description": "Payment processing"},
         {"name": "Media Upload", "description": "File uploads"},
         {"name": "Host Ratings", "description": "Client ratings for hosts"},
+        {"name": "Client Ratings", "description": "Host ratings for clients (renters)"},
         {"name": "Host Earnings", "description": "Host earnings summary, transactions, and withdrawal requests"},
         {"name": "Admin Auth", "description": "Admin authentication"},
         {"name": "Admin User Management", "description": "User management"},
@@ -514,6 +515,7 @@ app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
+app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
