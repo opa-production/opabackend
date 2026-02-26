@@ -278,8 +278,13 @@ async def forgot_password(
         )
 
     reset_token = create_password_reset_token(host.id)
-    # Use HTTPS/API URL in email, then redirect to app deep link.
-    reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
+    # Prefer web reset page (full URL e.g. https://ardena.xyz/reset-password.html) when set; else use API redirect to app deep link.
+    web_url = (settings.HOST_PASSWORD_RESET_WEB_URL or "").strip()
+    if web_url:
+        sep = "&" if "?" in web_url else "?"
+        reset_link = f"{web_url.rstrip('/')}{sep}token={reset_token}"
+    else:
+        reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
 
     send_email(
         host.email,

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     FRONTEND_URL: Optional[str] = "https://yourapp.com"  # Base URL for reset password links
     # Optional: base for reset link. Use a deep link to open the app, e.g. ardenahost:// so link becomes ardenahost://reset-password?token=...
     PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  # e.g. ardenahost:// or https://yourapp.com
+    # When set, host forgot-password email uses this page URL. User resets on web then "Go back to app". Use full URL including path.
+    HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  # e.g. https://ardena.xyz/reset-password.html → link: ...?token=...
 
     # Veriff KYC (host verification)
     VERIFF_API_KEY: Optional[str] = None
