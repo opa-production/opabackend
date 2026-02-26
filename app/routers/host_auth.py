@@ -260,7 +260,8 @@ async def forgot_password(
         )
 
     reset_token = create_password_reset_token(host.id)
-    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://yourapp.com").strip()
+    # Host reset links should open the host app deep link by default.
+    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or "ardenahost://").strip()
     # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
     if base_url.endswith("://"):
         reset_link = f"{base_url}reset-password?token={reset_token}"
