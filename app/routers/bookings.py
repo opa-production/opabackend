@@ -2,6 +2,7 @@
 Booking endpoints for clients (and hosts)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_
 from typing import Optional, List
@@ -19,6 +20,7 @@ from app.schemas import (
     BookingCancelRequest,
     BookingStatusEnum,
 )
+from app.services.receipt import build_receipt_pdf
 
 router = APIRouter()
 
@@ -284,6 +286,39 @@ def _client_booking_query(db: Session, booking_id_param: str, client_id: int):
     return base.filter(Booking.booking_id == booking_id_param).first()
 
 
+def _client_booking_for_receipt(db: Session, booking_id_param: str, client_id: int):
+    """Resolve booking for client with car, host, payments loaded (for receipt)."""
+    base = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+            joinedload(Booking.payments),
+        )
+        .filter(Booking.client_id == client_id)
+    )
+    if booking_id_param.isdigit():
+        return base.filter(Booking.id == int(booking_id_param)).first()
+    return base.filter(Booking.booking_id == booking_id_param).first()
+
+
+def _host_booking_for_receipt(db: Session, booking_id_param: str, host_id: int):
+    """Resolve booking by numeric id or booking_id string for host (car must belong to host). Loads car, client, payments."""
+    base = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.car).joinedload(Car.host),
+            joinedload(Booking.client),
+            joinedload(Booking.payments),
+        )
+        .join(Car)
+        .filter(Car.host_id == host_id)
+    )
+    if booking_id_param.isdigit():
+        return base.filter(Booking.id == int(booking_id_param)).first()
+    return base.filter(Booking.booking_id == booking_id_param).first()
+
+
 @router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking_details(
     booking_id: str,
@@ -305,6 +340,32 @@ async def get_booking_details(
             detail="Booking not found"
         )
     return booking_to_response(booking)
+
+
+@router.get("/client/bookings/{booking_id}/receipt")
+async def get_client_booking_receipt(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Get a PDF receipt for this booking. Only the client who made the booking can download.
+    Receipt includes booking details, car, client, host, pricing, payment info (M-Pesa receipt), and host payout (after commission).
+    """
+    booking = _client_booking_for_receipt(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+    pdf_bytes = build_receipt_pdf(booking)
+    bid = getattr(booking, "booking_id", None) or getattr(booking, "id", "receipt")
+    filename = f"receipt-{bid}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/client/bookings/{booking_id}/cancel", response_model=BookingResponse)
@@ -502,6 +563,32 @@ async def get_host_booking_details(
         )
 
     return booking_to_response(booking)
+
+
+@router.get("/host/bookings/{booking_id}/receipt")
+async def get_host_booking_receipt(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get a PDF receipt for this booking. Only the host who owns the car can download.
+    Receipt includes booking details, car, client, host, pricing, payment info (M-Pesa receipt), and host payout (after commission).
+    """
+    booking = _host_booking_for_receipt(db, booking_id, current_host.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+    pdf_bytes = build_receipt_pdf(booking)
+    bid = getattr(booking, "booking_id", None) or getattr(booking, "id", "receipt")
+    filename = f"receipt-{bid}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
