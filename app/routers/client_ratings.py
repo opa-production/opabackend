@@ -13,6 +13,7 @@ from app.auth import get_current_host
 from app.database import get_db
 from app.models import Booking, BookingStatus, Car, Client, ClientRating, Host
 from app.schemas import (
+    ClientProfileForHostResponse,
     ClientRatingCreateRequest,
     ClientRatingListResponse,
     ClientRatingResponse,
@@ -197,6 +198,42 @@ async def delete_host_client_rating(
     db.delete(rating)
     db.commit()
     return None
+
+
+@router.get("/host/clients/{client_id}/profile", response_model=ClientProfileForHostResponse)
+async def get_client_profile_for_host(
+    client_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get client (renter) profile summary for hosts.
+
+    Returns basic client info plus **trips_count** (number of completed bookings)
+    and **average_rating** (from host ratings) so hosts can show "X trips" and
+    rating on the renter's profile.
+    """
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+
+    trips_count = db.query(Booking).filter(
+        Booking.client_id == client_id,
+        Booking.status == BookingStatus.COMPLETED,
+    ).count()
+
+    avg_rating = db.query(func.avg(ClientRating.rating)).filter(
+        ClientRating.client_id == client_id
+    ).scalar()
+
+    return ClientProfileForHostResponse(
+        id=client.id,
+        full_name=client.full_name,
+        email=client.email,
+        avatar_url=client.avatar_url,
+        trips_count=trips_count,
+        average_rating=round(float(avg_rating), 2) if avg_rating else None,
+    )
 
 
 @router.get("/clients/{client_id}/ratings", response_model=ClientRatingListResponse)

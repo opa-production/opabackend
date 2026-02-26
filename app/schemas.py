@@ -643,6 +643,19 @@ class ClientRatingListResponse(BaseModel):
         from_attributes = True
 
 
+class ClientProfileForHostResponse(BaseModel):
+    """Client summary for hosts (e.g. when viewing a renter profile). Includes trips count and rating."""
+    id: int
+    full_name: str
+    email: str
+    avatar_url: Optional[str] = None
+    trips_count: int = Field(..., description="Number of completed bookings (trips) by this client")
+    average_rating: Optional[float] = Field(None, description="Average rating from hosts (1-5)")
+
+    class Config:
+        from_attributes = True
+
+
 # Support Message Schemas
 class SupportMessageRequest(BaseModel):
     """Request to send a message in support conversation"""
