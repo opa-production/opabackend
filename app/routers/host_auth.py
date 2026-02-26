@@ -1,6 +1,8 @@
+import html
 import secrets
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -238,6 +240,7 @@ async def update_host_profile(
 @router.post("/host/auth/forgot-password")
 async def forgot_password(
     request: ForgotPasswordRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -260,28 +263,69 @@ async def forgot_password(
         )
 
     reset_token = create_password_reset_token(host.id)
-    # Host reset links should open the host app deep link by default.
-    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or "ardenahost://").strip()
-    # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
-    if base_url.endswith("://"):
-        reset_link = f"{base_url}reset-password?token={reset_token}"
-    else:
-        reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
+    # Use HTTPS/API URL in email, then redirect to app deep link.
+    reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
 
     send_email(
         host.email,
         "Reset your Ardena host password",
         f"""
-        <p>Hi {host.full_name},</p>
-        <p>You requested to reset your password for your Ardena host account.</p>
-        <p>Click the link below to set a new password (link expires in 1 hour):</p>
-        <p><a href="{reset_link}">{reset_link}</a></p>
-        <p>If you didn't request this, you can safely ignore this email.</p>
-        <p>— The Ardena Group Team</p>
+        <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #111827;">
+          <p>Hi {host.full_name},</p>
+          <p>You requested to reset your password for your Ardena host account.</p>
+          <p>This link expires in 1 hour.</p>
+          <p style="margin: 24px 0;">
+            <a
+              href="{reset_link}"
+              style="display: inline-block; padding: 12px 18px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;"
+            >
+              Reset Password in App
+            </a>
+          </p>
+          <p style="font-size: 14px; color: #4b5563;">
+            If the button does not open automatically, open this secure link in your browser:
+          </p>
+          <p style="font-size: 14px; word-break: break-all;">
+            <a href="{reset_link}">{reset_link}</a>
+          </p>
+          <p>If you didn't request this, you can safely ignore this email.</p>
+          <p>— The Ardena Group Team</p>
+        </div>
         """,
     )
 
     return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+
+@router.get("/host/auth/reset-password/redirect", response_class=HTMLResponse, name="host_password_reset_redirect")
+async def host_password_reset_redirect(
+    token: str = Query(..., description="Password reset token"),
+):
+    """
+    Email-safe HTTPS endpoint that redirects to the host app deep link.
+    This avoids email clients blocking custom schemes directly in emails.
+    """
+    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or "ardenahost://").strip()
+    if base_url.endswith("://"):
+        deep_link = f"{base_url}reset-password?token={token}"
+    else:
+        deep_link = f"{base_url.rstrip('/')}/reset-password?token={token}"
+
+    escaped = html.escape(deep_link, quote=True)
+    content = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Ardena Host</title>
+    <meta http-equiv="refresh" content="0;url={escaped}" />
+  </head>
+  <body style="font-family: Arial, sans-serif; padding: 24px;">
+    <p>Redirecting to the Ardena Host app...</p>
+    <p><a href="{escaped}">Open Ardena Host</a></p>
+  </body>
+</html>"""
+    return HTMLResponse(content=content)
 
 
 @router.post("/host/auth/reset-password")
