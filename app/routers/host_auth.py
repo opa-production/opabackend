@@ -318,10 +318,13 @@ async def host_password_reset_redirect(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Open Ardena Host</title>
-    <meta http-equiv="refresh" content="0;url={escaped}" />
   </head>
   <body style="font-family: Arial, sans-serif; padding: 24px;">
     <p>Redirecting to the Ardena Host app...</p>
+    <script>
+      // Use explicit JS navigation so the exact deep link is preserved.
+      window.location.href = "{escaped}";
+    </script>
     <p><a href="{escaped}">Open Ardena Host</a></p>
   </body>
 </html>"""
