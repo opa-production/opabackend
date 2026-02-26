@@ -1,6 +1,6 @@
 import html
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -234,6 +234,21 @@ async def update_host_profile(
     db.commit()
     db.refresh(current_host)
     
+    return current_host
+
+
+@router.post("/host/terms/accept", response_model=HostProfileResponse)
+async def accept_terms_host(
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Record that the authenticated host has accepted the terms and conditions.
+    Call this when the user checks the T&C checkbox. Status is stored so you do not prompt again.
+    """
+    current_host.terms_accepted_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(current_host)
     return current_host
 
 

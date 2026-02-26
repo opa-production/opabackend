@@ -114,7 +114,8 @@ class Host(Base):
     
     # Account status
     is_active = Column(Boolean, default=True, nullable=False)
-    
+    terms_accepted_at = Column(DateTime(timezone=True), nullable=True)  # When user accepted T&C
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -205,10 +206,11 @@ class Client(Base):
     
     # Account status
     is_active = Column(Boolean, default=True, nullable=False)
-    
+    terms_accepted_at = Column(DateTime(timezone=True), nullable=True)  # When user accepted T&C
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
     # Relationship to driving license
     driving_license = relationship("DrivingLicense", back_populates="client", uselist=False, cascade="all, delete-orphan")
     # Relationship to payment methods

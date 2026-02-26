@@ -51,6 +51,7 @@ class HostProfileResponse(BaseModel):
     cover_image_url: Optional[str] = None
     id_document_url: Optional[str] = None
     license_document_url: Optional[str] = None
+    terms_accepted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -164,6 +165,7 @@ class ClientProfileResponse(BaseModel):
     avatar_url: Optional[str] = None
     id_document_url: Optional[str] = None
     license_document_url: Optional[str] = None
+    terms_accepted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

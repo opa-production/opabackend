@@ -1,5 +1,5 @@
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -318,6 +318,21 @@ async def get_current_client_info(current_client: Client = Depends(get_current_c
     
     Requires Bearer token authentication.
     """
+    return current_client
+
+
+@router.post("/client/terms/accept", response_model=ClientProfileResponse)
+async def accept_terms_client(
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Record that the authenticated client has accepted the terms and conditions.
+    Call this when the user checks the T&C checkbox. Status is stored so you do not prompt again.
+    """
+    current_client.terms_accepted_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(current_client)
     return current_client
 
 
