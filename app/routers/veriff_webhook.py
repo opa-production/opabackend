@@ -14,7 +14,7 @@ from fastapi import APIRouter, Request, Response, status
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import HostKyc
+from app.models import HostKyc, ClientKyc
 
 router = APIRouter(tags=["Veriff Webhook"])
 logger = logging.getLogger(__name__)
@@ -137,19 +137,49 @@ async def veriff_webhook(request: Request) -> Response:
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     logger.info(
-        "Veriff webhook received: session_id=%s status=%s (will update host_kycs if row exists)",
+        "Veriff webhook received: session_id=%s status=%s",
         session_id,
         status_val,
     )
 
     db = SessionLocal()
     try:
-        kyc = db.query(HostKyc).filter(HostKyc.veriff_session_id == session_id).first()
-        if not kyc:
-            vendor_data = body.get("vendorData") or (verification.get("vendorData"))
-            if vendor_data is not None and str(vendor_data).isdigit():
-                host_id = int(vendor_data)
-                kyc = HostKyc(
+        # Try host_kycs first, then client_kycs
+        host_kyc = db.query(HostKyc).filter(HostKyc.veriff_session_id == session_id).first()
+        client_kyc = db.query(ClientKyc).filter(ClientKyc.veriff_session_id == session_id).first()
+
+        if host_kyc:
+            host_kyc.status = status_val
+            host_kyc.document_type = document_type
+            host_kyc.decision_reason = decision_reason
+            host_kyc.verified_at = verified_at
+            logger.info("Veriff webhook updated host_kyc session_id=%s status=%s", session_id, status_val)
+        elif client_kyc:
+            client_kyc.status = status_val
+            client_kyc.document_type = document_type
+            client_kyc.decision_reason = decision_reason
+            client_kyc.verified_at = verified_at
+            logger.info("Veriff webhook updated client_kyc session_id=%s status=%s", session_id, status_val)
+        else:
+            # No existing row -- try vendorData to create one
+            vendor_data = body.get("vendorData") or verification.get("vendorData") or ""
+            vendor_str = str(vendor_data).strip()
+
+            if vendor_str.startswith("client:") and vendor_str[7:].isdigit():
+                client_id = int(vendor_str[7:])
+                new_kyc = ClientKyc(
+                    client_id=client_id,
+                    veriff_session_id=session_id,
+                    status=status_val,
+                    document_type=document_type,
+                    decision_reason=decision_reason,
+                    verified_at=verified_at,
+                )
+                db.add(new_kyc)
+                logger.info("Veriff webhook created client_kyc from vendorData session_id=%s", session_id)
+            elif vendor_str.isdigit():
+                host_id = int(vendor_str)
+                new_kyc = HostKyc(
                     host_id=host_id,
                     veriff_session_id=session_id,
                     status=status_val,
@@ -157,21 +187,18 @@ async def veriff_webhook(request: Request) -> Response:
                     decision_reason=decision_reason,
                     verified_at=verified_at,
                 )
-                db.add(kyc)
+                db.add(new_kyc)
+                logger.info("Veriff webhook created host_kyc from vendorData session_id=%s", session_id)
             else:
                 logger.warning(
-                    "Veriff webhook: no host_kycs row for session_id=%s and no vendorData in payload. "
-                    "Ensure sessions are created via POST /host/kyc/session so veriff_session_id is stored.",
+                    "Veriff webhook: no kyc row for session_id=%s and unrecognised vendorData=%r. "
+                    "Ensure sessions are created via POST /host/kyc/session or POST /client/kyc/session.",
                     session_id,
+                    vendor_data,
                 )
-                return Response(status_code=status.HTTP_200_OK)  # 200 so Veriff doesn't retry
-        else:
-            kyc.status = status_val
-            kyc.document_type = document_type
-            kyc.decision_reason = decision_reason
-            kyc.verified_at = verified_at
+                return Response(status_code=status.HTTP_200_OK)
+
         db.commit()
-        logger.info("Veriff webhook updated host_kyc session_id=%s status=%s", session_id, status_val)
     except Exception as e:
         logger.exception("Veriff webhook DB error: %s", e)
         db.rollback()

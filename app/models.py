@@ -215,6 +215,24 @@ class Client(Base):
     driving_license = relationship("DrivingLicense", back_populates="client", uselist=False, cascade="all, delete-orphan")
     # Relationship to payment methods
     payment_methods = relationship("PaymentMethod", back_populates="client", cascade="all, delete-orphan")
+    # KYC (Veriff) - one-to-many for history; use latest for status
+    client_kycs = relationship("ClientKyc", back_populates="client", cascade="all, delete-orphan")
+
+
+class ClientKyc(Base):
+    """Client KYC verification result from Veriff (mirrors HostKyc)."""
+    __tablename__ = "client_kycs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    veriff_session_id = Column(String(255), nullable=False, index=True)
+    status = Column(String(50), nullable=False, index=True)  # approved, declined, pending, resubmission_requested
+    document_type = Column(String(80), nullable=True)
+    decision_reason = Column(String(500), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    client = relationship("Client", back_populates="client_kycs")
 
 
 class DrivingLicense(Base):

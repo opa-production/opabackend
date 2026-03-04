@@ -87,6 +87,34 @@ class HostKycStatusResponse(BaseModel):
         from_attributes = True
 
 
+class ClientKycSessionRequest(BaseModel):
+    """Optional body when creating a client KYC session."""
+    callback_url: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="URL to redirect the user to after verification (e.g. deep link: ardena://kyc/result).",
+    )
+
+
+class ClientKycSessionResponse(BaseModel):
+    """Response after creating a Veriff KYC session for a client."""
+    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
+    session_id: str = Field(..., description="Veriff session ID (for reference)")
+
+
+class ClientKycStatusResponse(BaseModel):
+    """Client KYC verification status (latest attempt)."""
+    user_id: int = Field(..., description="Client ID")
+    veriff_session_id: Optional[str] = None
+    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
+    document_type: Optional[str] = None
+    decision_reason: Optional[str] = None
+    verified_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class HostLoginRequest(BaseModel):
     email: EmailStr
     password: str

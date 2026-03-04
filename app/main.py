@@ -42,7 +42,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, veriff_webhook as veriff_webhook_router
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, client_kyc as client_kyc_router, veriff_webhook as veriff_webhook_router
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -406,6 +406,13 @@ async def startup_event():
                 conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at DATETIME"))
             print("✓ Added created_at column to car_blocked_dates table")
     
+    # Ensure client_kycs table exists
+    if 'client_kycs' not in table_names:
+        print("⚠️  client_kycs table missing, creating...")
+        from app.models import ClientKyc
+        ClientKyc.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created client_kycs table")
+
     # Check and add missing columns to bookings table
     if 'bookings' in table_names:
         columns = [col['name'] for col in inspector.get_columns('bookings')]
@@ -527,6 +534,7 @@ app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Rating
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
+app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])
 app.include_router(veriff_webhook_router.router, prefix="/api/v1", tags=["Veriff Webhook"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
 app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
@@ -553,6 +561,18 @@ def kyc_redirect_callback(
     """
     from app.routers.host_kyc import build_kyc_redirect_response
     return build_kyc_redirect_response(return_to)
+
+
+@app.get("/client/kyc/redirect", response_class=HTMLResponse)
+def client_kyc_redirect_callback(
+    return_to: Optional[str] = Query(None, description="Deep link to open the app after KYC"),
+):
+    """
+    Client KYC callback without /api/v1 prefix.
+    Same behavior as GET /api/v1/client/kyc/redirect.
+    """
+    from app.routers.client_kyc import build_client_kyc_redirect_response
+    return build_client_kyc_redirect_response(return_to)
 
 
 @app.get("/")
