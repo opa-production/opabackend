@@ -5,7 +5,7 @@ import html
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -87,9 +87,11 @@ def create_kyc_session(
             verification_payload["callback"] = callback_url
         elif settings.VERIFF_CALLBACK_URL:
             # App sent a deep link (e.g. ardenahost://kyc/result); Veriff allows only HTTPS.
-            # Redirect Veriff to our HTTPS endpoint, which then redirects to the deep link.
-            base = settings.VERIFF_CALLBACK_URL.rstrip("/")
-            verification_payload["callback"] = f"{base}?return_to={quote(callback_url, safe='')}"
+            # Extract origin from VERIFF_CALLBACK_URL and append the host redirect path.
+            parsed = urlparse(settings.VERIFF_CALLBACK_URL)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            redirect_url = f"{origin}/api/v1/host/kyc/redirect"
+            verification_payload["callback"] = f"{redirect_url}?return_to={quote(callback_url, safe='')}"
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

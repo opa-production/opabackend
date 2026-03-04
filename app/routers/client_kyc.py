@@ -6,7 +6,7 @@ import html
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -90,9 +90,10 @@ def create_client_kyc_session(
         if callback_lower.startswith("https://"):
             verification_payload["callback"] = callback_url
         elif settings.VERIFF_CALLBACK_URL:
-            cb_base = settings.VERIFF_CALLBACK_URL.rstrip("/")
-            # Point to the client redirect endpoint
-            redirect_url = cb_base.replace("/host/kyc/redirect", "/client/kyc/redirect")
+            # Extract origin from VERIFF_CALLBACK_URL and append the client redirect path.
+            parsed = urlparse(settings.VERIFF_CALLBACK_URL)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            redirect_url = f"{origin}/api/v1/client/kyc/redirect"
             verification_payload["callback"] = f"{redirect_url}?return_to={quote(callback_url, safe='')}"
         else:
             raise HTTPException(
