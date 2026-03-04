@@ -907,11 +907,9 @@ async def get_car_availability(
     bookings_query = db.query(Booking).filter(
         Booking.car_id == car_id,
         Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
-        # Only include bookings that haven't ended yet (end_date >= today)
         Booking.end_date >= today_datetime
     )
     
-    # If checking specific date range, filter to relevant bookings
     if start_date and end_date:
         bookings_query = bookings_query.filter(
             and_(
@@ -921,6 +919,22 @@ async def get_car_availability(
         )
     
     bookings = bookings_query.order_by(Booking.start_date).all()
+    
+    # Get host-blocked dates for this car (only future/current ones)
+    blocked_query = db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id,
+        CarBlockedDate.end_date >= today_datetime
+    )
+    
+    if start_date and end_date:
+        blocked_query = blocked_query.filter(
+            and_(
+                CarBlockedDate.start_date < end_date,
+                CarBlockedDate.end_date > start_date
+            )
+        )
+    
+    blocked_entries = blocked_query.order_by(CarBlockedDate.start_date).all()
     
     # Build booked dates list
     booked_dates = [
@@ -932,51 +946,87 @@ async def get_car_availability(
         for booking in bookings
     ]
     
-    # Check if today is booked
+    # Build blocked dates list (host-blocked periods visible to clients)
+    blocked_dates = [
+        {
+            "start_date": (bd.start_date.isoformat() if bd.start_date
+                           else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()),
+            "end_date": (bd.end_date.isoformat() if bd.end_date
+                         else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()),
+            "reason": bd.reason or "Unavailable"
+        }
+        for bd in blocked_entries
+    ]
+    
+    # Combined list for easy calendar rendering on the client
+    unavailable_dates = [
+        {"start_date": d["start_date"], "end_date": d["end_date"], "type": "booked"}
+        for d in booked_dates
+    ] + [
+        {"start_date": d["start_date"], "end_date": d["end_date"], "type": "blocked"}
+        for d in blocked_dates
+    ]
+    
+    # Check if today is booked or blocked
     today_is_booked = any(
         booking.start_date.date() <= today <= booking.end_date.date()
         for booking in bookings
     )
+    today_is_blocked = any(
+        (bd.start_date.date() if bd.start_date else bd.blocked_date) <= today <=
+        (bd.end_date.date() if bd.end_date else bd.blocked_date)
+        for bd in blocked_entries
+    )
+    today_unavailable = today_is_booked or today_is_blocked
     
-    # Calculate next available date
+    # Calculate next available date considering both bookings and blocked dates
+    all_end_dates = (
+        [booking.end_date.date() for booking in bookings]
+        + [(bd.end_date.date() if bd.end_date else bd.blocked_date) for bd in blocked_entries]
+    )
+    
     next_available_date = None
-    if len(bookings) == 0:
-        # No bookings, available today
+    if not all_end_dates:
         next_available_date = today.isoformat()
     else:
-        # Find the latest end_date among all bookings
-        latest_end_date = max(booking.end_date.date() for booking in bookings)
-        
-        if today_is_booked:
-            # Today is booked, next available is the day after the latest booking ends
+        latest_end_date = max(all_end_dates)
+        if today_unavailable:
             next_available_date = (latest_end_date + timedelta(days=1)).isoformat()
         else:
-            # Today is not booked, available today
             next_available_date = today.isoformat()
     
-    # Check if specific range is available
+    # Check if specific range is available (against both bookings AND blocked dates)
     available = True
     message = "Car is available"
     
     if start_date and end_date:
-        # Check if the requested range overlaps with any booking
-        range_overlaps = any(
+        booking_overlap = any(
             booking.start_date < end_date and booking.end_date > start_date
             for booking in bookings
         )
-        if range_overlaps:
+        blocked_overlap = any(
+            (bd.start_date or datetime.combine(bd.blocked_date, datetime.min.time())) < end_date
+            and (bd.end_date or datetime.combine(bd.blocked_date, datetime.min.time())) > start_date
+            for bd in blocked_entries
+        )
+        if booking_overlap or blocked_overlap:
             available = False
             message = "Car is not available for the selected dates"
         else:
             message = "Car is available for the selected dates"
     else:
-        # No specific date range provided - check if car is available today
-        if today_is_booked:
+        if today_unavailable:
             available = False
-            message = f"Car is currently booked. {len(booked_dates)} active booking(s)"
-        elif len(booked_dates) > 0:
+            reasons = []
+            if today_is_booked:
+                reasons.append(f"{len(booked_dates)} active booking(s)")
+            if today_is_blocked:
+                reasons.append("host has blocked today")
+            message = f"Car is currently unavailable. {', '.join(reasons)}"
+        elif len(booked_dates) > 0 or len(blocked_dates) > 0:
             available = True
-            message = f"Car is available today. {len(booked_dates)} upcoming booking(s)"
+            message = (f"Car is available today. {len(booked_dates)} upcoming booking(s), "
+                       f"{len(blocked_dates)} blocked period(s)")
         else:
             available = True
             message = "Car is available"
@@ -985,6 +1035,8 @@ async def get_car_availability(
         car_id=car_id,
         available=available,
         booked_dates=booked_dates,
+        blocked_dates=blocked_dates,
+        unavailable_dates=unavailable_dates,
         next_available_date=next_available_date,
         message=message
     )

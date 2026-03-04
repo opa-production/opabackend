@@ -4,14 +4,14 @@ Booking endpoints for clients (and hosts)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, func
 from typing import Optional, List
 from datetime import datetime
 import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus
+from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -122,6 +122,31 @@ def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_da
     return query.first() is not None
 
 
+def check_blocked_date_overlap(db: Session, car_id: int, start_date: datetime, end_date: datetime) -> bool:
+    """
+    Check if the requested date range overlaps with any host-blocked dates.
+    Returns True if there's an overlap (dates are blocked), False if clear.
+    Checks both the start_date/end_date range columns and the legacy blocked_date column.
+    """
+    start_as_date = start_date.date() if isinstance(start_date, datetime) else start_date
+    end_as_date = end_date.date() if isinstance(end_date, datetime) else end_date
+
+    return db.query(CarBlockedDate).filter(
+        CarBlockedDate.car_id == car_id,
+        or_(
+            and_(
+                CarBlockedDate.start_date < end_date,
+                CarBlockedDate.end_date > start_date
+            ),
+            and_(
+                CarBlockedDate.blocked_date.isnot(None),
+                CarBlockedDate.blocked_date >= start_as_date,
+                CarBlockedDate.blocked_date < end_as_date
+            )
+        )
+    ).first() is not None
+
+
 @router.post("/client/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: BookingCreateRequest,
@@ -178,6 +203,13 @@ async def create_booking(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Car is not available for the selected dates. Please choose different dates."
+        )
+    
+    # Check for host-blocked dates
+    if check_blocked_date_overlap(db, car.id, request.start_date, request.end_date):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The host has blocked some of the selected dates. Please choose different dates."
         )
     
     # Calculate pricing
