@@ -160,6 +160,7 @@ class WithdrawalStatus(str, enum.Enum):
     COMPLETED = "completed"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
+    FAILED = "failed"
 
 
 class Withdrawal(Base):
@@ -173,6 +174,15 @@ class Withdrawal(Base):
     # Where to send: mpesa, bank, etc.
     payment_method_type = Column(String(20), nullable=False)  # mpesa, bank
     payment_details = Column(Text, nullable=True)  # JSON: e.g. {"mpesa_number":"254..."} or {"bank_name":"...","account_number":"..."}
+    
+    # Payhero/M-Pesa B2C callback fields
+    checkout_request_id = Column(String(255), nullable=True, index=True) # Payhero TransactionID
+    result_code = Column(Integer, nullable=True)
+    result_desc = Column(String(500), nullable=True)
+    mpesa_receipt_number = Column(String(100), nullable=True)
+    mpesa_phone = Column(String(20), nullable=True)
+    mpesa_transaction_date = Column(String(50), nullable=True)
+
     # Admin processing
     processed_at = Column(DateTime(timezone=True), nullable=True)
     processed_by_admin_id = Column(Integer, ForeignKey("admins.id"), nullable=True, index=True)
