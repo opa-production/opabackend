@@ -1,17 +1,17 @@
 """
 Booking endpoints for clients (and hosts)
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate
+from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate, BookingExtensionRequest
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -19,6 +19,10 @@ from app.schemas import (
     BookingListResponse,
     BookingCancelRequest,
     BookingStatusEnum,
+    BookingExtensionCreateRequest,
+    BookingExtensionRequestResponse,
+    BookingExtensionListResponse,
+    BookingExtensionStatusEnum,
 )
 from app.services.receipt import build_receipt_pdf
 
@@ -26,6 +30,15 @@ router = APIRouter()
 
 # Damage waiver price per day (KES)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
+
+
+def _to_utc(dt: datetime) -> datetime:
+    """Normalize datetime to timezone-aware UTC to avoid naive/aware comparison issues."""
+    if dt is None:
+        return dt  # type: ignore
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def parse_image_urls(image_urls_str: Optional[str]) -> List[str]:
@@ -442,6 +455,140 @@ async def cancel_booking(
     return booking_to_response(booking)
 
 
+# ==================== BOOKING EXTENSION REQUESTS ====================
+
+
+@router.post(
+    "/client/bookings/{booking_id}/extensions",
+    response_model=BookingExtensionRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_booking_extension_request(
+    booking_id: str,
+    request: BookingExtensionCreateRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Request to extend an existing booking (same trip, later drop-off only).
+
+    Flow:
+    - Client proposes a new `end_date` and optionally a new drop-off location.
+    - System checks availability (bookings + host blocked dates) for the **extra period only**.
+    - Creates an extension request with status `pending_host_approval`.
+    - Host then approves/rejects; on approval, client must pay for the extra days.
+
+    Notes:
+    - Only **confirmed** or **active** bookings can be extended (prevents extending unpaid bookings).
+    - `new_end_date` must be strictly after the current booking `end_date`.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only confirmed or active bookings can be extended. "
+                   "Complete payment for the current booking first.",
+        )
+
+    # Normalize datetimes to UTC to avoid naive/aware comparison errors
+    new_end_utc = _to_utc(request.new_end_date)
+    current_end_utc = _to_utc(booking.end_date)
+    start_utc = _to_utc(booking.start_date)
+
+    # Ensure client only extends the drop-off (new end must be after current end)
+    if new_end_utc <= current_end_utc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New drop-off date must be after the current drop-off date.",
+        )
+
+    # Prevent multiple active extension requests for the same booking
+    existing_active = (
+        db.query(BookingExtensionRequest)
+        .filter(
+            BookingExtensionRequest.booking_id == booking.id,
+            BookingExtensionRequest.status.in_(
+                [
+                    BookingExtensionStatusEnum.PENDING_HOST_APPROVAL.value,
+                    BookingExtensionStatusEnum.HOST_APPROVED.value,
+                ]
+            ),
+        )
+        .first()
+    )
+    if existing_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="There is already a pending or approved extension request for this booking.",
+        )
+
+    # Extra period to validate: from current end to requested new end
+    extra_start = current_end_utc
+    extra_end = new_end_utc
+
+    # Availability checks (other bookings + host blocked dates)
+    if check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Car is not available for the requested extension period.",
+        )
+
+    if check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The host has blocked some of the requested extension dates.",
+        )
+
+    # Calculate extra days and price (using same day-based logic as original booking)
+    # Original rental_days = (end_date - start_date).days
+    new_total_days = (new_end_utc - start_utc).days
+    extra_days = new_total_days - booking.rental_days
+    if extra_days < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Extension must add at least one extra day to the booking.",
+        )
+
+    extra_base_price = booking.daily_rate * extra_days
+    extra_damage_waiver = (
+        DAMAGE_WAIVER_PRICE_PER_DAY * extra_days if booking.damage_waiver_enabled else 0
+    )
+    extra_amount = extra_base_price + extra_damage_waiver
+
+    car = booking.car
+    if not car or not car.host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Booking car or host information is missing.",
+        )
+
+    extension = BookingExtensionRequest(
+        booking_id=booking.id,
+        client_id=current_client.id,
+        host_id=car.host.id,
+        old_end_date=booking.end_date,
+        requested_end_date=request.new_end_date,
+        extra_days=extra_days,
+        extra_amount=extra_amount,
+        dropoff_same_as_previous=request.dropoff_same_as_previous,
+        new_dropoff_location=request.new_dropoff_location.strip()
+        if (request.new_dropoff_location and not request.dropoff_same_as_previous)
+        else None,
+        status=BookingExtensionStatusEnum.PENDING_HOST_APPROVAL.value,
+    )
+
+    db.add(extension)
+    db.commit()
+    db.refresh(extension)
+
+    return extension
+
 # ==================== CLIENT COMPLETED BOOKINGS ====================
 
 @router.get("/client/bookings/completed", response_model=BookingListResponse)
@@ -811,3 +958,221 @@ async def delete_booking(
     db.commit()
     
     return None
+
+
+@router.get(
+    "/client/bookings/{booking_id}/extensions",
+    response_model=BookingExtensionListResponse,
+)
+async def get_client_booking_extensions(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all extension requests for a specific booking (client view).
+
+    - Only returns extensions for bookings owned by the authenticated client.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    extensions = (
+        db.query(BookingExtensionRequest)
+        .filter(BookingExtensionRequest.booking_id == booking.id)
+        .order_by(BookingExtensionRequest.created_at.desc())
+        .all()
+    )
+
+    return BookingExtensionListResponse(extensions=extensions)
+
+
+@router.get(
+    "/host/bookings/{booking_id}/extensions",
+    response_model=BookingExtensionListResponse,
+)
+async def get_host_booking_extensions(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all extension requests for a specific booking (host view).
+
+    - Only returns extensions where the car belongs to the authenticated host.
+    """
+    booking = (
+        db.query(Booking)
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    extensions = (
+        db.query(BookingExtensionRequest)
+        .filter(BookingExtensionRequest.booking_id == booking.id)
+        .order_by(BookingExtensionRequest.created_at.desc())
+        .all()
+    )
+
+    return BookingExtensionListResponse(extensions=extensions)
+
+
+@router.post(
+    "/host/bookings/{booking_id}/extensions/{extension_id}/approve",
+    response_model=BookingExtensionRequestResponse,
+)
+async def approve_booking_extension(
+    booking_id: str,
+    extension_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Approve a client's booking extension request.
+
+    - Verifies the booking belongs to the host.
+    - Ensures the extension is still pending.
+    - Re-checks availability before approval.
+    """
+    booking = (
+        db.query(Booking)
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    extension = (
+        db.query(BookingExtensionRequest)
+        .filter(
+            BookingExtensionRequest.id == extension_id,
+            BookingExtensionRequest.booking_id == booking.id,
+        )
+        .first()
+    )
+    if not extension:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extension request not found",
+        )
+
+    if extension.status != BookingExtensionStatusEnum.PENDING_HOST_APPROVAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot approve an extension in status '{extension.status}'.",
+        )
+
+    # Re-check availability in case something changed since the request was created
+    extra_start = extension.old_end_date
+    extra_end = extension.requested_end_date
+
+    if check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
+        # Mark as rejected so client sees it's no longer possible
+        extension.status = BookingExtensionStatusEnum.REJECTED.value
+        extension.host_note = "Car is no longer available for the requested extension period."
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Car is no longer available for the requested extension period.",
+        )
+
+    if check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
+        extension.status = BookingExtensionStatusEnum.REJECTED.value
+        extension.host_note = "Some of the requested extension dates are now blocked."
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Some of the requested extension dates are now blocked.",
+        )
+
+    extension.status = BookingExtensionStatusEnum.HOST_APPROVED.value
+    db.commit()
+    db.refresh(extension)
+
+    return extension
+
+
+@router.post(
+    "/host/bookings/{booking_id}/extensions/{extension_id}/reject",
+    response_model=BookingExtensionRequestResponse,
+)
+async def reject_booking_extension(
+    booking_id: str,
+    extension_id: int,
+    reason: Optional[str] = Body(None, embed=True, description="Optional reason for rejecting the extension"),
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Reject a client's booking extension request.
+
+    - Verifies the booking belongs to the host.
+    - Sets extension status to `rejected` and optionally stores a reason.
+    """
+    booking = (
+        db.query(Booking)
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    extension = (
+        db.query(BookingExtensionRequest)
+        .filter(
+            BookingExtensionRequest.id == extension_id,
+            BookingExtensionRequest.booking_id == booking.id,
+        )
+        .first()
+    )
+    if not extension:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extension request not found",
+        )
+
+    if extension.status in [
+        BookingExtensionStatusEnum.PAID.value,
+        BookingExtensionStatusEnum.EXPIRED.value,
+        BookingExtensionStatusEnum.REJECTED.value,
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot reject an extension in status '{extension.status}'.",
+        )
+
+    extension.status = BookingExtensionStatusEnum.REJECTED.value
+    if reason:
+        extension.host_note = reason.strip()
+
+    db.commit()
+    db.refresh(extension)
+
+    return extension

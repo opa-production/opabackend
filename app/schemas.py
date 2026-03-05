@@ -1617,6 +1617,65 @@ class BookingListResponse(BaseModel):
     limit: int
 
 
+class BookingExtensionStatusEnum(str, Enum):
+    """Status of a booking extension request."""
+    PENDING_HOST_APPROVAL = "pending_host_approval"
+    HOST_APPROVED = "host_approved"
+    PAID = "paid"
+    EXPIRED = "expired"
+    REJECTED = "rejected"
+
+
+class BookingExtensionCreateRequest(BaseModel):
+    """
+    Client request to extend an existing booking (same trip, later drop-off only).
+
+    - Only `end_date` is changed (no new pickup date)
+    """
+    new_end_date: datetime = Field(..., description="New drop-off date/time (must be after current end_date)")
+    dropoff_same_as_previous: bool = Field(
+        True,
+        description="If true, keep the same drop-off location as the current booking",
+    )
+    new_dropoff_location: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="New drop-off location if different from the original one",
+    )
+
+    @model_validator(mode="after")
+    def validate_locations(self):
+        if not self.dropoff_same_as_previous and not self.new_dropoff_location:
+            raise ValueError("new_dropoff_location is required when dropoff_same_as_previous is false")
+        return self
+
+
+class BookingExtensionRequestResponse(BaseModel):
+    """Booking extension request details."""
+    id: int
+    booking_id: int
+    client_id: int
+    host_id: int
+    old_end_date: datetime
+    requested_end_date: datetime
+    extra_days: int
+    extra_amount: float
+    dropoff_same_as_previous: bool
+    new_dropoff_location: Optional[str] = None
+    status: BookingExtensionStatusEnum
+    host_note: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BookingExtensionListResponse(BaseModel):
+    """List of extension requests for a booking."""
+    extensions: List[BookingExtensionRequestResponse]
+
+
 # ==================== HOST EARNINGS SCHEMAS ====================
 
 
@@ -1763,6 +1822,13 @@ class ClientHostConversationListResponse(BaseModel):
 
 
 # ==================== PAYMENT SCHEMAS ====================
+
+class BookingExtensionPaymentRequest(BaseModel):
+    """Request to start payment for an approved booking extension."""
+    payment_method_id: int = Field(..., description="ID of the payment method to use", alias="paymentMethodId")
+
+    model_config = {"populate_by_name": True}
+
 
 class PaymentRequest(BaseModel):
     """Request to process a payment. Accepts both snake_case and camelCase.

@@ -69,6 +69,8 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, index=True)
     booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    # Optional link to an extension request when this payment is for an extension
+    extension_request_id = Column(Integer, ForeignKey("booking_extension_requests.id"), nullable=True, index=True)
 
     # M-Pesa STK: Safaricom checkout id (unique per push)
     checkout_request_id = Column(String(255), unique=True, nullable=True, index=True)
@@ -89,6 +91,7 @@ class Payment(Base):
     # Relationships
     booking = relationship("Booking", back_populates="payments")
     client = relationship("Client", back_populates="payments")
+    extension_request = relationship("BookingExtensionRequest", foreign_keys=[extension_request_id])
 
 
 class Host(Base):
@@ -375,6 +378,41 @@ class Booking(Base):
     client = relationship("Client", back_populates="bookings")
     car = relationship("Car", back_populates="bookings")
     payments = relationship("Payment", back_populates="booking", cascade="all, delete-orphan")
+
+
+class BookingExtensionRequest(Base):
+    """Client request to extend an existing booking (same trip, later drop-off)."""
+    __tablename__ = "booking_extension_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+
+    # Dates
+    old_end_date = Column(DateTime(timezone=True), nullable=False)
+    requested_end_date = Column(DateTime(timezone=True), nullable=False)
+
+    # Pricing for the extension period only
+    extra_days = Column(Integer, nullable=False)
+    extra_amount = Column(Float, nullable=False)  # Includes base + damage waiver for extra_days
+
+    # Drop-off details
+    dropoff_same_as_previous = Column(Boolean, default=True, nullable=False)
+    new_dropoff_location = Column(String(500), nullable=True)
+
+    # Lifecycle
+    # pending_host_approval -> host_approved -> paid | expired | rejected
+    status = Column(String(50), nullable=False, index=True)
+    host_note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    booking = relationship("Booking", foreign_keys=[booking_id])
+    client = relationship("Client", foreign_keys=[client_id])
+    host = relationship("Host", foreign_keys=[host_id])
 
 
 # Update Client model to include bookings relationship

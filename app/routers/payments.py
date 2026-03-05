@@ -3,14 +3,29 @@ Payment processing endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import logging
 
 from app.database import get_db
-from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus
+from app.models import (
+    Booking,
+    PaymentMethod,
+    Client,
+    BookingStatus,
+    PaymentMethodType,
+    Payment,
+    PaymentStatus,
+    BookingExtensionRequest,
+)
 from app.auth import get_current_client
-from app.schemas import PaymentRequest, PaymentResponse, PaymentStatusResponse, PaymentStatusEnum
+from app.schemas import (
+    PaymentRequest,
+    PaymentResponse,
+    PaymentStatusResponse,
+    PaymentStatusEnum,
+    BookingExtensionPaymentRequest,
+)
 from app.services.mpesa_stk_push import sendStkPush
 
 router = APIRouter()
@@ -221,6 +236,204 @@ async def process_payment(
         )
 
 
+@router.post(
+    "/client/bookings/{booking_id}/extensions/{extension_id}/pay",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def process_extension_payment(
+    booking_id: str,
+    extension_id: int,
+    request: BookingExtensionPaymentRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Start payment for an **approved** booking extension.
+
+    Flow:
+    - Verifies booking belongs to client and is confirmed/active.
+    - Verifies extension exists, belongs to this booking, and is host-approved.
+    - Ensures payment is started at least 24 hours before the current drop-off time.
+    - Initiates M-Pesa STK push for the extension amount and creates a pending Payment.
+    - Booking dates and price are updated by the M-Pesa callback when payment succeeds.
+    """
+    logger.info(
+        "💳 [EXTENSION PAYMENT] Request: client_id=%s, booking_id=%s, extension_id=%s, payment_method_id=%s",
+        current_client.id,
+        booking_id,
+        extension_id,
+        request.payment_method_id,
+    )
+
+    # Resolve booking by booking_id (string) for this client
+    booking = (
+        db.query(Booking)
+        .options(joinedload(Booking.car))
+        .filter(
+            Booking.client_id == current_client.id,
+            Booking.booking_id == booking_id,
+        )
+        .first()
+    )
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only confirmed or active bookings can be extended.",
+        )
+
+    # Find extension request
+    extension = (
+        db.query(BookingExtensionRequest)
+        .filter(
+            BookingExtensionRequest.id == extension_id,
+            BookingExtensionRequest.booking_id == booking.id,
+            BookingExtensionRequest.client_id == current_client.id,
+        )
+        .first()
+    )
+    if not extension:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extension request not found",
+        )
+
+    if extension.status != "host_approved":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Extension must be host-approved before payment. Current status: {extension.status}",
+        )
+
+    # Enforce 24-hour rule: payment must be started at least 24h before the current end date
+    now = datetime.now(timezone.utc)
+    end = booking.end_date
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end - now < timedelta(hours=24):
+        extension.status = "expired"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Extension payment must be made at least 24 hours before the current drop-off time.",
+        )
+
+    # Verify payment method exists and belongs to client
+    payment_method = (
+        db.query(PaymentMethod)
+        .filter(
+            PaymentMethod.id == request.payment_method_id,
+            PaymentMethod.client_id == current_client.id,
+        )
+        .first()
+    )
+    if not payment_method:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment method not found or does not belong to you",
+        )
+
+    if payment_method.method_type != PaymentMethodType.MPESA:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only M-Pesa payment is supported for booking extensions at the moment.",
+        )
+
+    if not payment_method.mpesa_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="M-Pesa number is missing for this payment method",
+        )
+
+    amount_str = str(int(float(extension.extra_amount)))
+
+    logger.info(
+        " [MPESA STK PUSH EXT] Initiating for booking=%s, extension_id=%s, number=%s, amount=%s",
+        booking.booking_id,
+        extension.id,
+        payment_method.mpesa_number,
+        amount_str,
+    )
+
+    # Ensure M-Pesa number has country code (254 for Kenya) if missing
+    mpesa_phone = str(payment_method.mpesa_number).strip()
+    if mpesa_phone.startswith("0"):
+        mpesa_phone = "254" + mpesa_phone[1:]
+    elif not mpesa_phone.startswith("254"):
+        mpesa_phone = "254" + mpesa_phone
+
+    mpesa_response = sendStkPush(
+        amount=amount_str,
+        PhoneNumber=mpesa_phone,
+        AccountReference=str(booking.booking_id),
+        TransactionDesc=f"Extension for booking {booking.booking_id}",
+    )
+
+    if mpesa_response is None or mpesa_response.get("ResponseCode") != "0":
+        logger.error("[MPESA STK PUSH EXT] Failed: %s", mpesa_response)
+        error_desc = (
+            mpesa_response.get("ResponseDescription", "Unknown error")
+            if mpesa_response
+            else "No response from M-Pesa"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"M-Pesa STK Push failed: {error_desc}",
+        )
+
+    checkout_request_id = mpesa_response.get("CheckoutRequestID")
+    transaction_id = checkout_request_id or f"TXN-EXT-{booking.booking_id}-{extension.id}"
+
+    payment = Payment(
+        booking_id=booking.id,
+        client_id=current_client.id,
+        checkout_request_id=checkout_request_id,
+        amount=float(extension.extra_amount),
+        status=PaymentStatus.PENDING,
+        extension_request_id=extension.id,
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+
+    # Reload booking with relationships for response
+    from app.models import Car  # local import to avoid circular
+
+    final_booking = (
+        db.query(Booking)
+        .options(joinedload(Booking.car).joinedload(Car.host))
+        .filter(Booking.id == booking.id)
+        .first()
+    )
+    if not final_booking:
+        raise HTTPException(status_code=404, detail="Booking lost during processing")
+
+    from app.routers.bookings import booking_to_response
+    from app.schemas import BookingResponse
+
+    message = (
+        "M-Pesa STK Push initiated for extension. "
+        "Please check your phone to complete the payment. "
+        "You can poll GET /client/payments/status?checkout_request_id=... for status."
+    )
+
+    return PaymentResponse(
+        success=True,
+        booking_id=str(final_booking.booking_id),
+        amount_paid=float(extension.extra_amount),  # type: ignore
+        payment_method_type=str(payment_method.method_type.value),
+        payment_method_name=str(payment_method.name),
+        transaction_id=str(transaction_id),
+        message=message,
+        paid_at=datetime.now(timezone.utc),
+        booking=BookingResponse(**booking_to_response(final_booking)),
+    )
+
 @router.get("/client/payments/status", response_model=PaymentStatusResponse)
 async def get_payment_status(
     checkout_request_id: Optional[str] = Query(None, description="M-Pesa CheckoutRequestID returned from process payment"),
@@ -335,10 +548,41 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             payment.mpesa_transaction_date = str(transaction_date) if transaction_date else None
             
             booking = db.query(Booking).filter(Booking.id == payment.booking_id).first()
+
+            # Initial booking payment: confirm the booking if it was pending
             if booking and booking.status == BookingStatus.PENDING:
                 booking.status = BookingStatus.CONFIRMED
                 booking.status_updated_at = datetime.now(timezone.utc)
-            
+
+            # Extension payment: update booking dates and pricing when linked to an extension request
+            if payment.extension_request_id is not None:
+                extension = (
+                    db.query(BookingExtensionRequest)
+                    .filter(BookingExtensionRequest.id == payment.extension_request_id)
+                    .first()
+                )
+                if extension and booking and extension.status == "host_approved":
+                    # Import here to avoid circular import at module level
+                    from app.routers.bookings import DAMAGE_WAIVER_PRICE_PER_DAY  # type: ignore
+
+                    extension.status = "paid"
+                    extra_days = extension.extra_days
+
+                    # Adjust booking pricing and dates in-place
+                    extra_base = booking.daily_rate * extra_days  # type: ignore
+                    extra_damage = (
+                        DAMAGE_WAIVER_PRICE_PER_DAY * extra_days  # type: ignore
+                        if booking.damage_waiver_enabled  # type: ignore
+                        else 0
+                    )
+
+                    booking.base_price = (booking.base_price or 0) + extra_base  # type: ignore
+                    booking.damage_waiver_fee = (booking.damage_waiver_fee or 0) + extra_damage  # type: ignore
+                    booking.total_price = (booking.base_price or 0) + (booking.damage_waiver_fee or 0)  # type: ignore
+                    booking.rental_days = (booking.rental_days or 0) + extra_days  # type: ignore
+                    booking.end_date = extension.requested_end_date  # type: ignore
+                    booking.status_updated_at = datetime.now(timezone.utc)
+
             db.commit()
             logger.info(f"[MPESA CALLBACK] ✅ Payment Successful: Receipt={receipt}, CheckoutRequestID={checkout_request_id}, booking_id={booking.booking_id if booking else None}")
         else:
