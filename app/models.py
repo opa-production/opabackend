@@ -445,6 +445,27 @@ class Feedback(Base):
     host = relationship("Host", foreign_keys=[host_id])
 
 
+class ClientFeedback(Base):
+    """Client feedback (general app feedback or suggestions)."""
+    __tablename__ = "client_feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+
+    # Feedback content
+    content = Column(String(250), nullable=False)  # Max 250 characters
+
+    # Admin moderation
+    is_flagged = Column(Boolean, default=False, nullable=False)  # Flagged for review
+
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationship to client
+    client = relationship("Client", foreign_keys=[client_id])
+
+
 class HostRating(Base):
     """Client ratings for hosts"""
     __tablename__ = "host_ratings"

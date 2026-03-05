@@ -584,6 +584,31 @@ class FeedbackListResponse(BaseModel):
         from_attributes = True
 
 
+class ClientFeedbackCreateRequest(BaseModel):
+    """Create client feedback request schema"""
+    content: str = Field(..., min_length=1, max_length=250, description="Feedback content (max 250 characters)")
+
+
+class ClientFeedbackResponse(BaseModel):
+    """Client feedback response schema"""
+    id: int
+    client_id: int
+    content: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientFeedbackListResponse(BaseModel):
+    """List of client feedbacks response"""
+    feedbacks: List[ClientFeedbackResponse]
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== HOST RATING SCHEMAS ====================
 
 class HostRatingCreateRequest(BaseModel):
