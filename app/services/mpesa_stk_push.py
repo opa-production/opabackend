@@ -1,144 +1,83 @@
 from dotenv import load_dotenv
 import os
-import base64
 import logging
 import requests
-from datetime import datetime
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+PAYHERO_URL = "https://backend.payhero.co.ke/api/v2/payments"
 
-LIVE_TOKEN_URL = "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-LIVE_STK_URL = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
-SANDBOX_TOKEN_URL = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-SANDBOX_STK_URL = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental"):
+    auth_token = os.getenv("PAYHERO_AUTH_TOKEN")
+    channel_id = os.getenv("PAYHERO_CHANNEL_ID")
+    callback_url = os.getenv("PAYHERO_CALLBACK_URL")
 
-
-def _get_token_url():
-    url = os.getenv("MPESA_TOKEN_URL")
-    if url:
-        return url
-    env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
-    return LIVE_TOKEN_URL if env in ("production", "live") else SANDBOX_TOKEN_URL
-
-
-def _get_stk_url():
-    url = os.getenv("MPESA_STK_URL")
-    if url:
-        return url
-    env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
-    return LIVE_STK_URL if env in ("production", "live") else SANDBOX_STK_URL
-
-
-def _is_live():
-    """True if we're using live Daraja URLs (for shortcode/transaction-type logic)."""
-    token_url = _get_token_url()
-    return "api.safaricom.co.ke" in token_url
-
-
-def generate_access_token():
-    consumer_key = os.getenv("MPESA_CONSUMER_KEY") or os.getenv("CONSUMER_KEY")
-    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") or os.getenv("CONSUMER_SECRET")
-    url = _get_token_url()
-
-    if not all([consumer_key, consumer_secret, url]):
-        raise Exception("M-Pesa configuration missing: CONSUMER_KEY/MPESA_CONSUMER_KEY, CONSUMER_SECRET/MPESA_CONSUMER_SECRET, or MPESA_TOKEN_URL/MPESA_ENVIRONMENT")
+    if not all([auth_token, channel_id]):
+        logger.error("[PAYHERO] Configuration missing: PAYHERO_AUTH_TOKEN or PAYHERO_CHANNEL_ID")
+        return {
+            "ResponseCode": "1",
+            "ResponseDescription": "Payhero configuration missing (Auth Token or Channel ID)"
+        }
 
     try:
-        encoded_credentials = base64.b64encode(f"{consumer_key}:{consumer_secret}".encode()).decode()
-        headers = {"Authorization": f"Basic {encoded_credentials}", "Content-Type": "application/json"}
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code != 200:
-            logger.error(f"[MPESA] Token request failed: status={response.status_code}, body={response.text[:500]}")
-            raise Exception(f"Token request failed: HTTP {response.status_code}")
-        data = response.json()
-        if "access_token" in data:
-            return data["access_token"]
-        raise Exception("Failed to get access token: " + data.get("error_description", str(data)))
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[MPESA] Token request error: {e}")
-        raise Exception("Failed to get access token: " + str(e)) 
+        headers = {
+            "Authorization": f"Basic {auth_token}",
+            "Content-Type": "application/json"
+        }
 
-def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental", TransactionDesc: str = "Car Rental Payment"):
-    token = generate_access_token()
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    shortcode_type = (os.getenv("MPESA_SHORTCODE_TYPE") or "paybill").strip().lower()
+        try:
+            amount_val = int(float(amount))
+        except (ValueError, TypeError):
+            logger.error(f"[PAYHERO] Invalid amount: {amount}")
+            return {
+                "ResponseCode": "1",
+                "ResponseDescription": f"Invalid amount: {amount}"
+            }
 
-    # For Till (Buy Goods): use MPESA_TILL if set; otherwise shortcode. For Paybill: use shortcode only.
-    if shortcode_type == "till_number":
-        shortCode = (os.getenv("MPESA_TILL") or "").strip() or os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
-    else:
-        if _is_live():
-            shortCode = os.getenv("MPESA_EXPRESS_SHORTCODE") or os.getenv("MPESA_SHORTCODE")
-        else:
-            shortCode = os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_EXPRESS_SHORTCODE")
-    passkey = os.getenv("MPESA_PASSKEY")
-    callback_url = os.getenv("MPESA_CALLBACK_URL")
+        payload = {
+            "amount": amount_val,
+            "phone_number": PhoneNumber,
+            "channel_id": int(channel_id),
+            "provider": "m-pesa",
+            "external_reference": AccountReference,
+            "callback_url": callback_url,
+        }
 
-    if not shortCode or not passkey:
-        raise Exception(
-            "M-Pesa configuration missing: for Till set MPESA_SHORTCODE_TYPE=till_number and MPESA_TILL (or MPESA_SHORTCODE); "
-            "for Paybill set MPESA_SHORTCODE; also set MPESA_PASSKEY."
-        )
+        logger.info(f"[PAYHERO] Initiating STK push: {PhoneNumber}, amount={amount_val}, ref={AccountReference}")
 
-    # Callback URL: required for production (must be public HTTPS). For sandbox/local dev, allow missing and use a placeholder so STK still fires.
-    if not callback_url or not callback_url.strip().startswith("http"):
-        if _is_live():
-            logger.error("[MPESA] MPESA_CALLBACK_URL missing or invalid (must be public HTTPS URL)")
-            raise Exception("M-Pesa configuration missing or invalid: MPESA_CALLBACK_URL (must be a public HTTPS URL)")
-        callback_url = "https://sandbox.safaricom.co.ke/mpesa/callback"  # placeholder so sandbox STK request succeeds
-        logger.warning("[MPESA] MPESA_CALLBACK_URL not set; using sandbox placeholder. STK will send but callback won't reach your server. Set MPESA_CALLBACK_URL to a public URL (e.g. ngrok) for full flow.")
+        response = requests.post(PAYHERO_URL, json=payload, headers=headers, timeout=30)
 
-    shortCode = str(shortCode)
-    passkey = str(passkey)
-    stk_password = base64.b64encode((shortCode + passkey + timestamp).encode('utf-8')).decode('utf-8')
-    url = _get_stk_url()
-
-    # Sandbox is always Paybill (174379). Live Till uses CustomerBuyGoodsOnline.
-    transaction_type = (
-        "CustomerBuyGoodsOnline" if (_is_live() and shortcode_type == "till_number") else "CustomerPayBillOnline"
-    )
-
-    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
-    requestBody = {
-        "BusinessShortCode": shortCode,
-        "Password": stk_password,
-        "Timestamp": timestamp,
-        "TransactionType": transaction_type,
-        "Amount": amount,
-        "PartyA": PhoneNumber,
-        "PartyB": shortCode,
-        "PhoneNumber": PhoneNumber,
-        "CallBackURL": callback_url,
-        "AccountReference": AccountReference,
-        "TransactionDesc": TransactionDesc,
-    }
-
-    try:
-        response = requests.post(url, json=requestBody, headers=headers, timeout=30)
-        body_text = response.text
-        if response.status_code != 200:
-            logger.error(
-                f"[MPESA] STK push request failed: status={response.status_code}, url={url}, body={body_text[:500]}"
-            )
-            print(f"[MPESA] STK push request failed: status={response}, url={url}, body={body_text[:500]}")
-            try:
-                data = response.json()
+        if response.status_code in (200, 201):
+            data = response.json()
+            if data.get("success") or data.get("status") == "Success":
                 return {
-                    "ResponseCode": str(data.get("errorCode", response.status_code)),
-                    "ResponseDescription": data.get("errorMessage", body_text or f"HTTP {response.status_code}"),
+                    "ResponseCode": "0",
+                    "ResponseDescription": data.get("message", "STK Push initiated successfully"),
+                    "CheckoutRequestID": data.get("reference")
                 }
-            except Exception:
+            else:
+                logger.error(f"[PAYHERO] API returned error: {data}")
                 return {
                     "ResponseCode": "1",
-                    "ResponseDescription": f"HTTP {response.status_code}: {body_text[:200] or 'No body'}",
+                    "ResponseDescription": data.get("message", "Failed to initiate STK push")
                 }
-        try:
-            return response.json()
-        except Exception as e:
-            logger.error(f"[MPESA] STK response not JSON: {body_text[:300]}, error={e}")
-            return {"ResponseCode": "1", "ResponseDescription": "Invalid response from M-Pesa"}
+        else:
+            logger.error(f"[PAYHERO] Request failed: status={response.status_code}, body={response.text[:500]}")
+            return {
+                "ResponseCode": str(response.status_code),
+                "ResponseDescription": f"Payhero error: {response.status_code}"
+            }
+
     except requests.exceptions.RequestException as e:
-        logger.error(f"[MPESA] STK push request error: {e}")
-        return {"ResponseCode": "1", "ResponseDescription": str(e)}
+        logger.error(f"[PAYHERO] Request exception: {str(e)}")
+        return {
+            "ResponseCode": "1",
+            "ResponseDescription": f"Connection error: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"[PAYHERO] Unexpected error: {str(e)}")
+        return {
+            "ResponseCode": "1",
+            "ResponseDescription": f"Internal error: {str(e)}"
+        }

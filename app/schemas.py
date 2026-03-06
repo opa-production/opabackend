@@ -1802,6 +1802,15 @@ class WithdrawalResponse(BaseModel):
     processed_at: Optional[datetime] = None
     processed_by_admin_id: Optional[int] = None
     admin_notes: Optional[str] = None
+    
+    # Payhero/M-Pesa B2C callback fields
+    checkout_request_id: Optional[str] = None
+    result_code: Optional[int] = None
+    result_desc: Optional[str] = None
+    mpesa_receipt_number: Optional[str] = None
+    mpesa_phone: Optional[str] = None
+    mpesa_transaction_date: Optional[str] = None
+    
     created_at: datetime
     updated_at: Optional[datetime] = None
 

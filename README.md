@@ -4,32 +4,20 @@ FastAPI backend for a car rental platform with server-side validation and multi-
 
 ## Setup
 
-1. Create a virtual environment:
+1. Make sure you have [UV](https://docs.astral.sh/) on your system:
+
+2.Setup the uv application:
 ```bash
-python -m venv venv
+  uv sync
 ```
 
-2. Activate the virtual environment:
-```bash
-# Windows
-venv\Scripts\activate
-
-# Linux/Mac
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Run the application:
+3. Run the application:
 ```bash
 # For local development (localhost only)
-uvicorn app.main:app --reload --port 8001
+uv run uvicorn app.main:app --reload --port 8001
 
 # For network access (Expo Go, mobile devices, etc.)
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 The API will be available at:
@@ -267,4 +255,3 @@ The backend maps **1032** and **2029** to short, user-friendly messages for the 
 ## Development
 
 See `guide.md` for the complete development checklist and project requirements.
-

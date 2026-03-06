@@ -440,6 +440,34 @@ async def startup_event():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
             print("✓ Added dropoff_confirmed_at column to bookings table")
+
+    # Check and add missing columns to withdrawals table
+    if 'withdrawals' in table_names:
+        columns = [col['name'] for col in inspector.get_columns('withdrawals')]
+        if 'checkout_request_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN checkout_request_id VARCHAR(255)"))
+            print("✓ Added checkout_request_id column to withdrawals table")
+        if 'result_code' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_code INTEGER"))
+            print("✓ Added result_code column to withdrawals table")
+        if 'result_desc' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_desc VARCHAR(500)"))
+            print("✓ Added result_desc column to withdrawals table")
+        if 'mpesa_receipt_number' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_receipt_number VARCHAR(100)"))
+            print("✓ Added mpesa_receipt_number column to withdrawals table")
+        if 'mpesa_phone' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_phone VARCHAR(20)"))
+            print("✓ Added mpesa_phone column to withdrawals table")
+        if 'mpesa_transaction_date' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_transaction_date VARCHAR(50)"))
+            print("✓ Added mpesa_transaction_date column to withdrawals table")
     
     # Create default super admin if it doesn't exist
     db = SessionLocal()
@@ -480,18 +508,6 @@ async def startup_event():
     finally:
         db.close()
     
-    # Warn if M-Pesa is configured for sandbox (real customers will never receive STK)
-    mpesa_token_url = (os.getenv("MPESA_TOKEN_URL") or "").strip()
-    mpesa_env = (os.getenv("MPESA_ENVIRONMENT") or "").strip().lower()
-    using_sandbox = "sandbox" in mpesa_token_url.lower() or (
-        not mpesa_token_url and mpesa_env not in ("production", "live")
-    )
-    if using_sandbox:
-        print("=" * 60)
-        print("⚠️  M-PESA SANDBOX DETECTED – Real customers will NOT receive STK push")
-        print("   Set MPESA_ENVIRONMENT=production (and live credentials) for production.")
-        print("   See README 'M-Pesa production (live)' section.")
-        print("=" * 60)
     print("✅ Startup complete!")
 
 # Ensure all error responses are valid JSON (avoids "JSON parse error" in production)

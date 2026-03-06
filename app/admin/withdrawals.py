@@ -59,7 +59,7 @@ def list_withdrawals(
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid status. Valid: pending, completed, rejected, cancelled",
+                detail="Invalid status. Valid: pending, completed, rejected, cancelled, failed",
             )
     if host_id is not None:
         query = query.filter(Withdrawal.host_id == host_id)
@@ -123,7 +123,7 @@ def update_withdrawal_status(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid status. Valid: pending, completed, rejected, cancelled",
+            detail="Invalid status. Valid: pending, completed, rejected, cancelled, failed",
         )
     if new_status == WithdrawalStatus.PENDING:
         raise HTTPException(

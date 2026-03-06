@@ -8,16 +8,7 @@ from typing import Optional
 import logging
 
 from app.database import get_db
-from app.models import (
-    Booking,
-    PaymentMethod,
-    Client,
-    BookingStatus,
-    PaymentMethodType,
-    Payment,
-    PaymentStatus,
-    BookingExtensionRequest,
-)
+from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus, Withdrawal, WithdrawalStatus
 from app.auth import get_current_client
 from app.schemas import (
     PaymentRequest,
@@ -159,7 +150,6 @@ async def process_payment(
                 amount=amount_str,
                 PhoneNumber=mpesa_phone,
                 AccountReference=str(booking.booking_id),
-                TransactionDesc=f"Payment for booking {booking.booking_id}"
             )
             
             if mpesa_response is None or mpesa_response.get("ResponseCode") != "0":
@@ -494,34 +484,25 @@ async def get_payment_status(
     return _payment_to_status_response(payment)
 
 
-def parse_mpesa_metadata(metadata_items):
-    """Parse M-Pesa callback metadata into a dictionary"""
-    parsed = {}
-    for item in metadata_items:
-        name = item.get("Name")
-        value = item.get("Value")
-        parsed[name] = value
-    return parsed
-
-
 @router.post("/mpesa/callback")
 async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
     """
-    M-Pesa STK Push Callback URL.
-    Called by Safaricom after the user completes, cancels, or fails (e.g. insufficient funds) the STK push.
+    Payhero M-Pesa STK Push Callback URL.
+    Called by Payhero after the user completes, cancels, or fails the STK push.
     Updates the Payment record and, on success, confirms the booking.
     """
     try:
         data = await request.json()
-        logger.info(f"[MPESA CALLBACK] Received: {data}")
+        logger.info(f"[PAYHERO CALLBACK] Received: {data}")
         
-        stk_callback = data.get("Body", {}).get("stkCallback", {})
-        result_code = stk_callback.get("ResultCode")
-        result_desc = stk_callback.get("ResultDesc")
-        checkout_request_id = stk_callback.get("CheckoutRequestID")
+        # Payhero sends a flatter structure: CheckoutRequestID, ResultCode, ResultDesc, Status, etc.
+        checkout_request_id = data.get("CheckoutRequestID")
+        result_code = data.get("ResultCode")
+        result_desc = data.get("ResultDesc")
+        status_str = data.get("Status")
         
         if not checkout_request_id:
-            logger.warning("[MPESA CALLBACK] No CheckoutRequestID in callback")
+            logger.warning("[PAYHERO CALLBACK] No CheckoutRequestID in callback")
             return {"ResultCode": 0, "ResultDesc": "Success"}
         
         payment = db.query(Payment).filter(
@@ -530,15 +511,14 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         ).first()
         
         if not payment:
-            logger.warning(f"[MPESA CALLBACK] No pending payment for CheckoutRequestID={checkout_request_id}")
+            logger.warning(f"[PAYHERO CALLBACK] No pending payment for CheckoutRequestID={checkout_request_id}")
             return {"ResultCode": 0, "ResultDesc": "Success"}
         
-        if result_code == 0:
-            metadata = stk_callback.get("CallbackMetadata", {}).get("Item", [])
-            parsed_metadata = parse_mpesa_metadata(metadata)
-            receipt = parsed_metadata.get("MpesaReceiptNumber")
-            phone = parsed_metadata.get("PhoneNumber")
-            transaction_date = parsed_metadata.get("TransactionDate")
+        # Payhero uses result_code 0 for success
+        if str(result_code) == "0" or status_str == "Success":
+            receipt = data.get("MpesaReceiptNumber")
+            phone = data.get("PhoneNumber")
+            transaction_date = data.get("TransactionDate")
             
             payment.status = PaymentStatus.COMPLETED
             payment.result_code = result_code
@@ -584,31 +564,94 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                     booking.status_updated_at = datetime.now(timezone.utc)
 
             db.commit()
-            logger.info(f"[MPESA CALLBACK] ✅ Payment Successful: Receipt={receipt}, CheckoutRequestID={checkout_request_id}, booking_id={booking.booking_id if booking else None}")
+            logger.info(f"[PAYHERO CALLBACK] ✅ Payment Successful: Receipt={receipt}, CheckoutRequestID={checkout_request_id}")
         else:
-            # User cancelled (1032), timeout/generic failure (2029), insufficient funds, or other failure
-            # 1032 = Request cancelled by user; 2029 = often "unresolved reason" e.g. timeout or network/operator issue
-            payment.status = PaymentStatus.CANCELLED if result_code == 1032 else PaymentStatus.FAILED
+            # User cancelled (1032), timeout (2029), or other failure
+            # Payhero often passes through the Safaricom result codes
+            result_code_str = str(result_code)
+            payment.status = PaymentStatus.CANCELLED if result_code_str == "1032" else PaymentStatus.FAILED
             payment.result_code = result_code
-            # Store user-friendly message for status API (UI can show this)
-            if result_code == 1032:
+            
+            if result_code_str == "1032":
                 payment.result_desc = "Payment cancelled. You can try again when ready."
-            elif result_code == 2029:
+            elif result_code_str == "2029":
                 payment.result_desc = "Payment timed out or failed. Please try again."
             else:
                 payment.result_desc = result_desc or "Payment failed. Please try again."
+                
             db.commit()
             logger.warning(
-                f"[MPESA CALLBACK] ❌ Payment Failed/Cancelled: {result_desc} (Code: {result_code}, CheckoutRequestID: {checkout_request_id})"
+                f"[PAYHERO CALLBACK] ❌ Payment Failed/Cancelled: {result_desc} (Code: {result_code}, ID: {checkout_request_id})"
             )
-            if result_code == 2029:
-                logger.info(
-                    "[MPESA CALLBACK] Code 2029: usually timeout (user didn't complete in time), network/operator issue, "
-                    "or wrong env (sandbox vs live). Ensure MPESA_* URLs and shortcode match the customer's network."
-                )
             
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:
         db.rollback()
-        logger.error(f"[MPESA CALLBACK] ❌ Error processing callback: {str(e)}", exc_info=True)
+        logger.error(f"[PAYHERO CALLBACK] ❌ Error processing callback: {str(e)}", exc_info=True)
         return {"ResultCode": 0, "ResultDesc": "Success"}
+
+
+@router.post("/payout/callback")
+async def payout_callback(request: Request, db: Session = Depends(get_db)):
+    """
+    Payhero M-Pesa B2C (Payout) Callback URL.
+    Called by Payhero after a payout to a host is completed or fails.
+    Updates the Withdrawal record based on ExternalReference (withdrawal_id).
+    """
+    try:
+        data = await request.json()
+        logger.info(f"[PAYHERO PAYOUT CALLBACK] Received: {data}")
+        
+        # Payhero B2C sends ExternalReference which we set to the withdrawal ID
+        # It also sends TransactionID, ResultCode, ResultDesc, Status, etc.
+        external_reference = data.get("ExternalReference")
+        result_code = data.get("ResultCode")
+        result_desc = data.get("ResultDesc")
+        status_str = data.get("Status")
+        checkout_request_id = data.get("CheckoutRequestID") or data.get("TransactionID")
+        
+        if not external_reference:
+            logger.warning("[PAYHERO PAYOUT CALLBACK] No ExternalReference (withdrawal_id) in callback")
+            return {"ResultCode": 0, "ResultDesc": "Success"}
+            
+        # Extract numeric ID from external_reference (handle strings like "WD-123" if needed, 
+        # but usually we just send the numeric ID)
+        try:
+            withdrawal_id = int(str(external_reference).split('-')[-1])
+        except (ValueError, IndexError):
+            logger.error(f"[PAYHERO PAYOUT CALLBACK] Invalid ExternalReference: {external_reference}")
+            return {"ResultCode": 0, "ResultDesc": "Success"}
+        
+        withdrawal = db.query(Withdrawal).filter(
+            Withdrawal.id == withdrawal_id,
+            Withdrawal.status == WithdrawalStatus.PENDING,
+        ).first()
+        
+        if not withdrawal:
+            logger.warning(f"[PAYHERO PAYOUT CALLBACK] No pending withdrawal for ID={withdrawal_id}")
+            return {"ResultCode": 0, "ResultDesc": "Success"}
+        
+        # Store callback data
+        withdrawal.result_code = result_code
+        withdrawal.result_desc = result_desc
+        withdrawal.checkout_request_id = str(checkout_request_id) if checkout_request_id else None
+        withdrawal.mpesa_receipt_number = str(data.get("MpesaReceiptNumber")) if data.get("MpesaReceiptNumber") else None
+        withdrawal.mpesa_phone = str(data.get("PhoneNumber")) if data.get("PhoneNumber") else None
+        withdrawal.mpesa_transaction_date = str(data.get("TransactionDate")) if data.get("TransactionDate") else None
+        withdrawal.processed_at = datetime.now(timezone.utc)
+        
+        # Payhero uses result_code 0 for success
+        if str(result_code) == "0" or status_str == "Success":
+            withdrawal.status = WithdrawalStatus.COMPLETED
+            logger.info(f"[PAYHERO PAYOUT CALLBACK] ✅ Payout Successful: ID={withdrawal_id}, Receipt={withdrawal.mpesa_receipt_number}")
+        else:
+            withdrawal.status = WithdrawalStatus.FAILED
+            logger.warning(f"[PAYHERO PAYOUT CALLBACK] ❌ Payout Failed: {result_desc} (Code: {result_code}, ID: {withdrawal_id})")
+            
+        db.commit()
+        return {"ResultCode": 0, "ResultDesc": "Success"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[PAYHERO PAYOUT CALLBACK] ❌ Error processing callback: {str(e)}", exc_info=True)
+        return {"ResultCode": 0, "ResultDesc": "Success"}
+
