@@ -269,7 +269,7 @@ def host_list_my_withdrawals(
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid status. Valid: pending, completed, rejected, cancelled",
+                detail="Invalid status. Valid: pending, completed, rejected, cancelled, failed",
             )
     total = query.count()
     rows = query.order_by(Withdrawal.created_at.desc()).offset(skip).limit(limit).all()
