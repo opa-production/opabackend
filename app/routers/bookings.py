@@ -23,6 +23,7 @@ from app.schemas import (
     BookingExtensionRequestResponse,
     BookingExtensionListResponse,
     BookingExtensionStatusEnum,
+    DRIVE_SETTING_TO_ALLOWED,
 )
 from app.services.receipt import build_receipt_pdf
 
@@ -209,6 +210,18 @@ async def create_booking(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Maximum rental period for this car is {car.max_rental_days} days"
+        )
+    
+    # Validate drive_type is allowed by the car's drive setting
+    drive_setting = getattr(car, "drive_setting", None) or "self_only"
+    allowed_drive_types = DRIVE_SETTING_TO_ALLOWED.get(drive_setting, ["self"])
+    requested_drive = (request.drive_type or "self").strip()
+    allowed_lower = [a.lower() for a in allowed_drive_types]
+    if requested_drive.lower() not in allowed_lower:
+        allowed_str = ", ".join(allowed_drive_types)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This car only allows: {allowed_str}. You selected '{requested_drive}'."
         )
     
     # Check for overlapping bookings (prevents double booking)

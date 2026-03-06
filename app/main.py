@@ -208,6 +208,10 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE cars ADD COLUMN car_video VARCHAR(500)"))
             print("✓ Added car_video column to cars table")
+        if 'drive_setting' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cars ADD COLUMN drive_setting VARCHAR(30) DEFAULT 'self_only' NOT NULL"))
+            print("✓ Added drive_setting column to cars table")
     
     # Check and add is_flagged to feedbacks table
     if 'feedbacks' in table_names:
@@ -216,6 +220,14 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
             print("✓ Added is_flagged column to feedbacks table")
+
+    # Check and add extension_request_id to payments table (for booking extensions)
+    if 'payments' in table_names:
+        columns = [col['name'] for col in inspector.get_columns('payments')]
+        if 'extension_request_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN extension_request_id INTEGER"))
+            print("✓ Added extension_request_id column to payments table")
     
     # Check and add client_id to payment_methods table, and make host_id nullable
     if 'payment_methods' in inspector.get_table_names():

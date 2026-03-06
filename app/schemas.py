@@ -310,6 +310,33 @@ class CarLocationRequest(BaseModel):
         return self
 
 
+class DriveSettingEnum(str, Enum):
+    """Drive options for a car - what the host allows"""
+    SELF_ONLY = "self_only"
+    SELF_AND_CHAUFFEUR = "self_and_chauffeur"
+    CHAUFFEUR_ONLY = "chauffeur_only"
+
+
+# Maps drive_setting -> allowed drive_type values for booking
+DRIVE_SETTING_TO_ALLOWED = {
+    DriveSettingEnum.SELF_ONLY.value: ["self"],
+    DriveSettingEnum.SELF_AND_CHAUFFEUR.value: ["self", "withDriver"],
+    DriveSettingEnum.CHAUFFEUR_ONLY.value: ["withDriver"],
+}
+
+
+class DriveSettingsRequest(BaseModel):
+    """Request to update car drive setting (host)"""
+    drive_setting: DriveSettingEnum = Field(..., description="self_only | self_and_chauffeur | chauffeur_only")
+
+
+class DriveSettingsResponse(BaseModel):
+    """Drive settings for a car"""
+    drive_setting: str = Field(..., description="self_only | self_and_chauffeur | chauffeur_only")
+    allowed_drive_types: List[str] = Field(..., description="Drive types client can choose when booking")
+    labels: dict = Field(default_factory=lambda: {"self": "Self drive", "withDriver": "With chauffeur"})
+
+
 class CarMediaRequest(BaseModel):
     """Request schema for updating car media URLs after Supabase upload
     
@@ -398,6 +425,8 @@ class CarResponse(BaseModel):
     is_complete: bool
     verification_status: Optional[str] = None
     is_hidden: Optional[bool] = False
+    drive_setting: Optional[str] = "self_only"
+    allowed_drive_types: Optional[List[str]] = None  # ["self"] | ["self","withDriver"] | ["withDriver"]
     cover_image: Optional[str] = None
     car_images: Optional[str] = None  # JSON string: '["url1", "url2"]' (frontend expects string, not array)
     car_video: Optional[str] = None
@@ -1463,6 +1492,9 @@ class CarListingResponse(BaseModel):
     # Legacy fields (for backward compatibility)
     image_urls: Optional[List[str]] = None
     video_url: Optional[str] = None
+    # Drive options (for client car details + booking)
+    drive_setting: Optional[str] = "self_only"
+    allowed_drive_types: Optional[List[str]] = None  # ["self"] | ["self","withDriver"] | ["withDriver"]
     # Host information
     host_name: Optional[str] = None
     host_avatar_url: Optional[str] = None

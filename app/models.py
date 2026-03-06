@@ -307,6 +307,9 @@ class Car(Base):
     car_images = Column(Text, nullable=True)  # JSON array of up to 12 car image URLs
     car_video = Column(String(500), nullable=True)  # Car video URL
     
+    # Drive options: self_only | self_and_chauffeur | chauffeur_only
+    drive_setting = Column(String(30), default="self_only", nullable=False)
+
     # Status tracking
     is_complete = Column(Boolean, default=False)
     verification_status = Column(String(20), default=VerificationStatus.AWAITING.value, nullable=False)
