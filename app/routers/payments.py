@@ -150,7 +150,6 @@ async def process_payment(
                 amount=amount_str,
                 PhoneNumber=mpesa_phone,
                 AccountReference=str(booking.booking_id),
-                TransactionDesc=f"Payment for booking {booking.booking_id}"
             )
             
             if mpesa_response is None or mpesa_response.get("ResponseCode") != "0":
