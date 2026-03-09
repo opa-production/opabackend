@@ -424,6 +424,28 @@ class BookingExtensionRequest(Base):
     host = relationship("Host", foreign_keys=[host_id])
 
 
+class BookingIssue(Base):
+    """Host-reported issue concerning an active (or past) booking."""
+    __tablename__ = "host_booking_issues"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+
+    issue_type = Column(String(50), nullable=False, index=True)  # e.g. damage, late_return, no_show, misconduct, other
+    description = Column(Text, nullable=False)
+
+    # Status: open, in_review, resolved, closed
+    status = Column(String(50), default="open", nullable=False, index=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    booking = relationship("Booking", foreign_keys=[booking_id])
+    host = relationship("Host", foreign_keys=[host_id])
+
+
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
 Client.payments = relationship("Payment", back_populates="client", cascade="all, delete-orphan")

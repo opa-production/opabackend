@@ -425,6 +425,13 @@ async def startup_event():
         ClientKyc.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_kycs table")
 
+    # Ensure host_booking_issues table exists
+    if 'host_booking_issues' not in table_names:
+        print("⚠️  host_booking_issues table missing, creating...")
+        from app.models import BookingIssue
+        BookingIssue.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created host_booking_issues table")
+
     # Check and add missing columns to bookings table
     if 'bookings' in table_names:
         columns = [col['name'] for col in inspector.get_columns('bookings')]

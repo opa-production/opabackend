@@ -178,12 +178,20 @@ async def forgot_password(
         )
 
     reset_token = create_password_reset_token(client.id)
-    base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://yourapp.com").strip()
-    # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
-    if base_url.endswith("://"):
-        reset_link = f"{base_url}reset-password?token={reset_token}"
+    # Prefer dedicated web reset page for clients when set (e.g. https://ardena.co.ke/reset-password.html)
+    web_url = (getattr(settings, "CLIENT_PASSWORD_RESET_WEB_URL", None) or "").strip()
+    if web_url:
+        # Preserve existing query params on the page and append token correctly
+        sep = "&" if "?" in web_url else "?"
+        reset_link = f"{web_url.rstrip('/')}{sep}token={reset_token}"
     else:
-        reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
+        # Fallback to generic base URL or deep link logic (same as before)
+        base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://yourapp.com").strip()
+        # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
+        if base_url.endswith("://"):
+            reset_link = f"{base_url}reset-password?token={reset_token}"
+        else:
+            reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
 
     send_email(
         client.email,

@@ -192,6 +192,7 @@ def car_to_listing_response(car: Car) -> dict:
         # Host information
         "host_name": car.host.full_name if car.host else None,
         "host_avatar_url": car.host.avatar_url if car.host else None,
+        "host_created_at": car.host.created_at if car.host else None,
         "created_at": car.created_at,
     }
 
@@ -216,7 +217,9 @@ async def get_car_listings(
     
     - Returns only complete listings (is_complete = True)
     - Supports filtering by location, price, car type, etc.
-    - Supports availability filtering by date range
+    - When start_date and end_date (pickup and return dates) are provided, returns only cars
+      that are available for that period: no overlapping booking (pending/confirmed/active)
+      and no overlapping host-blocked dates.
     - Results are paginated
     """
     # Base query: only complete listings with host data
@@ -244,7 +247,7 @@ async def get_car_listings(
     if min_seats:
         query = query.filter(Car.seats >= min_seats)
     
-    # Date availability filter
+    # Date availability filter (start_date = pickup, end_date = return)
     if start_date and end_date:
         # Exclude cars that have overlapping bookings
         # A booking overlaps if: booking.start < requested.end AND booking.end > requested.start
@@ -255,8 +258,17 @@ async def get_car_listings(
                 Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE])
             )
         ).subquery()
-        
         query = query.filter(~Car.id.in_(overlapping_bookings))
+
+        # Exclude cars that have host-blocked dates overlapping the requested range
+        # Blocked range overlaps if: blocked.start < requested.end AND blocked.end > requested.start
+        overlapping_blocked = db.query(CarBlockedDate.car_id).filter(
+            and_(
+                CarBlockedDate.start_date < end_date,
+                CarBlockedDate.end_date > start_date
+            )
+        ).distinct().subquery()
+        query = query.filter(~Car.id.in_(overlapping_blocked))
     
     # Get total count before pagination
     total = query.count()

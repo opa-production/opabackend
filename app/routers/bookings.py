@@ -11,7 +11,7 @@ import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate, BookingExtensionRequest
+from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate, BookingExtensionRequest, BookingIssue
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -24,6 +24,9 @@ from app.schemas import (
     BookingExtensionListResponse,
     BookingExtensionStatusEnum,
     DRIVE_SETTING_TO_ALLOWED,
+    ReportIssueRequest,
+    BookingIssueResponse,
+    BookingIssueListResponse,
 )
 from app.services.receipt import build_receipt_pdf
 
@@ -824,6 +827,18 @@ async def confirm_pickup_as_host(
             ),
         )
 
+    today_utc = datetime.now(timezone.utc).date()
+    pickup_date = (
+        booking.start_date.astimezone(timezone.utc).date()
+        if booking.start_date.tzinfo
+        else booking.start_date.date()
+    )
+    if today_utc < pickup_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pickup can only be confirmed on or after the pickup date.",
+        )
+
     booking.status = BookingStatus.ACTIVE
     booking.status_updated_at = datetime.utcnow()
 
@@ -882,6 +897,108 @@ async def confirm_dropoff_as_host(
     db.refresh(booking)
 
     return booking_to_response(booking)
+
+
+def _issue_to_response(issue: BookingIssue) -> dict:
+    """Convert BookingIssue to response dict."""
+    booking = getattr(issue, "booking", None)
+    booking_id_display = booking.booking_id if booking else f"BK-{issue.booking_id}"
+    return {
+        "id": issue.id,
+        "booking_id": issue.booking_id,
+        "booking_id_display": booking_id_display,
+        "host_id": issue.host_id,
+        "issue_type": issue.issue_type,
+        "description": issue.description,
+        "status": issue.status,
+        "created_at": issue.created_at,
+        "updated_at": issue.updated_at,
+    }
+
+
+@router.post("/host/bookings/{booking_id}/report-issue", response_model=BookingIssueResponse, status_code=status.HTTP_201_CREATED)
+async def report_booking_issue(
+    booking_id: str,
+    request: ReportIssueRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Report an issue concerning an active (or past) booking.
+
+    - Only the host who owns the car can report issues
+    - Booking must be confirmed, active, or completed
+    - **issue_type**: damage, late_return, no_show, misconduct, other
+    """
+    booking = (
+        db.query(Booking)
+        .options(joinedload(Booking.car))
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE, BookingStatus.COMPLETED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Issues can only be reported for confirmed, active, or completed bookings. "
+                f"Current status is '{booking.status.value}'."
+            ),
+        )
+
+    issue = BookingIssue(
+        booking_id=booking.id,
+        host_id=current_host.id,
+        issue_type=request.issue_type,
+        description=request.description,
+        status="open",
+    )
+    db.add(issue)
+    db.commit()
+    db.refresh(issue)
+    db.refresh(issue.booking)
+
+    return _issue_to_response(issue)
+
+
+@router.get("/host/issues", response_model=BookingIssueListResponse)
+async def list_host_issues(
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None, description="Filter by status: open, in_review, resolved, closed"),
+):
+    """
+    List all issues reported by the host, with optional status filter.
+    """
+    q = (
+        db.query(BookingIssue)
+        .options(joinedload(BookingIssue.booking))
+        .filter(BookingIssue.host_id == current_host.id)
+    )
+    if status:
+        q = q.filter(BookingIssue.status == status)
+
+    total = q.count()
+    issues = q.order_by(BookingIssue.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+
+    return BookingIssueListResponse(
+        issues=[_issue_to_response(i) for i in issues],
+        total=total,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.post("/host/bookings/{booking_id}/complete", response_model=BookingResponse)

@@ -1498,6 +1498,7 @@ class CarListingResponse(BaseModel):
     # Host information
     host_name: Optional[str] = None
     host_avatar_url: Optional[str] = None
+    host_created_at: Optional[datetime] = None  # When host joined; use for "Since Feb", "6 months", "2 years" etc.
     created_at: datetime
 
     class Config:
@@ -1731,6 +1732,48 @@ class BookingExtensionRequestResponse(BaseModel):
 class BookingExtensionListResponse(BaseModel):
     """List of extension requests for a booking."""
     extensions: List[BookingExtensionRequestResponse]
+
+
+# ==================== HOST BOOKING ISSUES SCHEMAS ====================
+
+ISSUE_TYPES = ["damage", "late_return", "no_show", "misconduct", "other"]
+
+
+class ReportIssueRequest(BaseModel):
+    """Request to report an issue for an active booking."""
+    issue_type: str = Field(..., description="Type: damage, late_return, no_show, misconduct, other")
+    description: str = Field(..., min_length=1, max_length=2000, description="Issue description")
+
+    @field_validator("issue_type")
+    @classmethod
+    def validate_issue_type(cls, v: str) -> str:
+        if v not in ISSUE_TYPES:
+            raise ValueError(f"issue_type must be one of: {', '.join(ISSUE_TYPES)}")
+        return v
+
+
+class BookingIssueResponse(BaseModel):
+    """Host booking issue response."""
+    id: int
+    booking_id: int
+    booking_id_display: str = Field(..., description="Human-readable booking ID e.g. BK-12345678")
+    host_id: int
+    issue_type: str
+    description: str
+    status: str = Field(..., description="open, in_review, resolved, closed")
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BookingIssueListResponse(BaseModel):
+    """Paginated list of host booking issues."""
+    issues: List[BookingIssueResponse]
+    total: int
+    page: int
+    limit: int
 
 
 # ==================== HOST EARNINGS SCHEMAS ====================
