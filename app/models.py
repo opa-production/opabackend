@@ -316,6 +316,9 @@ class Car(Base):
     cover_image: Mapped[str] = mapped_column(String(500), nullable=True)  # Single cover image URL
     car_images: Mapped[str] = mapped_column(Text, nullable=True)  # JSON array of up to 12 car image URLs
     car_video: Mapped[str] = mapped_column(String(500), nullable=True)  # Car video URL
+    
+    # Drive options: self_only | self_and_chauffeur | chauffeur_only
+    drive_setting = Column(String(30), default="self_only", nullable=False)
 
     # Status tracking
     is_complete: Mapped[bool] = mapped_column(Boolean, default=False)

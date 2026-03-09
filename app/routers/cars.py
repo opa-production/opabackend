@@ -29,6 +29,9 @@ from app.schemas import (
     CarExploreItemResponse,
     CarExploreListResponse,
     CarBlockedDateRequest,
+    DriveSettingsRequest,
+    DriveSettingsResponse,
+    DRIVE_SETTING_TO_ALLOWED,
 )
 
 router = APIRouter()
@@ -60,6 +63,12 @@ def parse_features(features_str: Optional[str]) -> List[str]:
         return features if isinstance(features, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _get_allowed_drive_types(drive_setting: Optional[str]) -> List[str]:
+    """Derive allowed drive types from car's drive_setting."""
+    setting = (drive_setting or "self_only").strip()
+    return DRIVE_SETTING_TO_ALLOWED.get(setting, ["self"])
 
 
 def _car_to_response(db_car: Car) -> CarResponse:
@@ -122,6 +131,8 @@ def _car_to_response(db_car: Car) -> CarResponse:
         is_complete=db_car.is_complete,
         verification_status=VerificationStatus(db_car.verification_status).value if db_car.verification_status else VerificationStatus.AWAITING.value,
         is_hidden=db_car.is_hidden,
+        drive_setting=getattr(db_car, "drive_setting", None) or "self_only",
+        allowed_drive_types=_get_allowed_drive_types(getattr(db_car, "drive_setting", None)),
         cover_image=db_car.cover_image,
         car_images=car_images_str,  # JSON string (frontend expects string, not array)
         car_video=db_car.car_video,
@@ -175,6 +186,9 @@ def car_to_listing_response(car: Car) -> dict:
         # Legacy fields (for backward compatibility)
         "image_urls": legacy_image_urls,
         "video_url": car.video_url,
+        # Drive options (for client car details + booking)
+        "drive_setting": getattr(car, "drive_setting", None) or "self_only",
+        "allowed_drive_types": _get_allowed_drive_types(getattr(car, "drive_setting", None)),
         # Host information
         "host_name": car.host.full_name if car.host else None,
         "host_avatar_url": car.host.avatar_url if car.host else None,
@@ -1133,6 +1147,71 @@ async def toggle_car_visibility(
     db.refresh(db_car)
     
     return _car_to_response(db_car)
+
+
+@router.get("/host/cars/{car_id}/drive-settings", response_model=DriveSettingsResponse)
+async def get_car_drive_settings(
+    car_id: int,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the drive setting for a car.
+
+    - **drive_setting**: self_only | self_and_chauffeur | chauffeur_only
+    - **allowed_drive_types**: Drive types the client can choose when booking
+    """
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id,
+    ).first()
+
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to access it",
+        )
+
+    drive_setting = getattr(car, "drive_setting", None) or "self_only"
+    return DriveSettingsResponse(
+        drive_setting=drive_setting,
+        allowed_drive_types=_get_allowed_drive_types(drive_setting),
+    )
+
+
+@router.put("/host/cars/{car_id}/drive-settings", response_model=DriveSettingsResponse)
+async def update_car_drive_settings(
+    car_id: int,
+    request: DriveSettingsRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Update the drive setting for a car.
+
+    - **self_only**: Client can only choose self drive
+    - **self_and_chauffeur**: Client can choose self drive or with chauffeur
+    - **chauffeur_only**: Client can only choose with chauffeur
+    """
+    car = db.query(Car).filter(
+        Car.id == car_id,
+        Car.host_id == current_host.id,
+    ).first()
+
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found or you don't have permission to modify it",
+        )
+
+    car.drive_setting = request.drive_setting.value
+    db.commit()
+    db.refresh(car)
+
+    return DriveSettingsResponse(
+        drive_setting=car.drive_setting,
+        allowed_drive_types=_get_allowed_drive_types(car.drive_setting),
+    )
 
 
 @router.delete("/host/cars/{car_id}", status_code=status.HTTP_200_OK)
