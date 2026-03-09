@@ -8,7 +8,7 @@ from typing import Optional
 import logging
 
 from app.database import get_db
-from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus, Withdrawal, WithdrawalStatus
+from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus, Withdrawal, WithdrawalStatus, BookingExtensionRequest
 from app.auth import get_current_client
 from app.schemas import (
     PaymentRequest,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _payment_to_status_response(payment: Payment) -> PaymentStatusResponse:
     """Build PaymentStatusResponse from Payment model."""
-    status_enum = PaymentStatusEnum(payment.status.value)
+    status_enum = PaymentStatusEnum(payment.status)
     message = payment.result_desc if payment.status != PaymentStatus.PENDING else None
     return PaymentStatusResponse(
         checkout_request_id=payment.checkout_request_id or "",
@@ -85,10 +85,10 @@ async def process_payment(
     
     # Verify booking is in PENDING status (not already paid/confirmed)
     if booking.status != BookingStatus.PENDING:
-        logger.warning(f"💳 [PROCESS PAYMENT] Booking already processed: booking_id={request.booking_id}, status={booking.status.value}")
+        logger.warning(f"💳 [PROCESS PAYMENT] Booking already processed: booking_id={request.booking_id}, status={booking.status}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Booking has already been processed. Current status: {booking.status.value}"
+            detail=f"Booking has already been processed. Current status: {booking.status}"
         )
     
     # Verify payment method exists and belongs to client
@@ -186,7 +186,7 @@ async def process_payment(
         db.refresh(booking)
         
         logger.info(f"💳 [PROCESS PAYMENT] ✅ Request processed: booking_id={request.booking_id}, "
-                   f"amount={booking.total_price}, status={booking.status.value}")
+                   f"amount={booking.total_price}, status={booking.status}")
         
         # Reload booking with relationships for response
         from app.models import Car
@@ -361,7 +361,6 @@ async def process_extension_payment(
         amount=amount_str,
         PhoneNumber=mpesa_phone,
         AccountReference=str(booking.booking_id),
-        TransactionDesc=f"Extension for booking {booking.booking_id}",
     )
 
     if mpesa_response is None or mpesa_response.get("ResponseCode") != "0":
