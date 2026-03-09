@@ -494,11 +494,14 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         data = await request.json()
         logger.info(f"[PAYHERO CALLBACK] Received: {data}")
         
-        # Payhero sends a flatter structure: CheckoutRequestID, ResultCode, ResultDesc, Status, etc.
-        checkout_request_id = data.get("CheckoutRequestID")
-        result_code = data.get("ResultCode")
-        result_desc = data.get("ResultDesc")
-        status_str = data.get("Status")
+        # Payhero nests payload under "response": { CheckoutRequestID, ResultCode, ResultDesc, Status, ... }
+        # Fall back to top-level for flat format
+        payload = data.get("response", data)
+        
+        checkout_request_id = payload.get("CheckoutRequestID") or payload.get("reference")
+        result_code = payload.get("ResultCode")
+        result_desc = payload.get("ResultDesc")
+        status_str = payload.get("Status")
         
         if not checkout_request_id:
             logger.warning("[PAYHERO CALLBACK] No CheckoutRequestID in callback")
@@ -515,9 +518,9 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         
         # Payhero uses result_code 0 for success
         if str(result_code) == "0" or status_str == "Success":
-            receipt = data.get("MpesaReceiptNumber")
-            phone = data.get("PhoneNumber")
-            transaction_date = data.get("TransactionDate")
+            receipt = payload.get("MpesaReceiptNumber")
+            phone = payload.get("PhoneNumber") or payload.get("Phone")  # Payhero uses "Phone"
+            transaction_date = payload.get("TransactionDate")
             
             payment.status = PaymentStatus.COMPLETED
             payment.result_code = result_code

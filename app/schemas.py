@@ -204,6 +204,18 @@ class ClientProfileResponse(BaseModel):
 class ClientLoginRequest(BaseModel):
     email: EmailStr
     password: str
+    # Optional: ask backend to issue a device token for biometric login
+    enable_biometrics: Optional[bool] = Field(
+        False,
+        alias="enableBiometrics",
+        description="When true, backend issues a one-time device_token for biometric login"
+    )
+    device_name: Optional[str] = Field(
+        None,
+        alias="deviceName",
+        max_length=255,
+        description="Optional human-readable device name (e.g. 'John’s iPhone')"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -211,6 +223,17 @@ class ClientLoginRequest(BaseModel):
 class GoogleLoginRequest(BaseModel):
     """Request for Google Authentication"""
     id_token: str = Field(..., description="The ID token received from Google")
+    enable_biometrics: Optional[bool] = Field(
+        False,
+        alias="enableBiometrics",
+        description="When true, backend issues a one-time device_token for biometric login"
+    )
+    device_name: Optional[str] = Field(
+        None,
+        alias="deviceName",
+        max_length=255,
+        description="Optional human-readable device name (e.g. 'John’s iPhone')"
+    )
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -1435,6 +1458,19 @@ class TokenPairResponse(BaseModel):
     expires_in: int = Field(..., description="Access token expiration time in seconds")
 
 
+class BiometricLoginRequest(BaseModel):
+    """Biometric login using a device token stored in secure local storage."""
+    device_token: str = Field(..., min_length=1, max_length=255, description="Raw device token string from secure storage")
+
+
+class BiometricRevokeRequest(BaseModel):
+    """Disable biometric login for current client – one device or all devices."""
+    device_token: Optional[str] = Field(
+        default=None,
+        description="Optional raw device token to revoke for a single device. If omitted, revokes all biometric tokens for this client."
+    )
+
+
 class HostLoginResponseWithRefresh(BaseModel):
     """Host login response with refresh token"""
     access_token: str
@@ -1451,6 +1487,11 @@ class ClientLoginResponseWithRefresh(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     client: ClientProfileResponse
+    # Optional one-time device token for biometric login setup
+    device_token: Optional[str] = Field(
+        default=None,
+        description="One-time device token for biometric login (only present when enableBiometrics was true)"
+    )
 
 
 class ClientTokenData(BaseModel):

@@ -1,10 +1,11 @@
 import secrets
+import hashlib
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Client, DrivingLicense, Notification
+from app.models import Client, DrivingLicense, Notification, ClientBiometricToken
 from app.config import settings
 from app.schemas import (
     ClientRegisterRequest,
@@ -22,7 +23,9 @@ from app.schemas import (
     DrivingLicenseRequest,
     DrivingLicenseResponse,
     ClientNotificationListResponse,
-    ClientNotificationResponse
+    ClientNotificationResponse,
+    BiometricLoginRequest,
+    BiometricRevokeRequest,
 )
 from app.auth import (
     get_password_hash,
@@ -143,13 +146,28 @@ async def login_client(
     
     # Create refresh token
     refresh_token = create_refresh_token(data=token_data)
-    
+
+    # Optionally issue a device token for biometric login (one-time reveal)
+    device_token_raw = None
+    if getattr(request, "enable_biometrics", False):
+        device_token_raw = secrets.token_urlsafe(32)
+        device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
+
+        db_token = ClientBiometricToken(
+            client_id=client.id,
+            device_token_hash=device_token_hash,
+            device_name=getattr(request, "device_name", None),
+        )
+        db.add(db_token)
+        db.commit()
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
-        "client": client
+        "client": client,
+        "device_token": device_token_raw,
     }
 
 
@@ -658,14 +676,127 @@ async def client_google_auth(
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(data=token_data)
-    
+
+    # Optionally issue a device token for biometric login (one-time reveal)
+    device_token_raw = None
+    if getattr(request, "enable_biometrics", False):
+        device_token_raw = secrets.token_urlsafe(32)
+        device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
+
+        db_token = ClientBiometricToken(
+            client_id=client.id,
+            device_token_hash=device_token_hash,
+            device_name=getattr(request, "device_name", None),
+        )
+        db.add(db_token)
+        db.commit()
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        "client": client
+        "client": client,
+        "device_token": device_token_raw,
     }
+
+
+@router.post("/client/auth/biometric-login", response_model=ClientLoginResponseWithRefresh)
+async def biometric_login(
+    request: BiometricLoginRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Login using a previously issued device token (for biometric unlock).
+
+    The mobile app should:
+    - Store device_token in secure local storage after initial login + biometric setup
+    - On successful local biometric auth, call this endpoint with the stored device_token
+    """
+    if not request.device_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="device_token is required",
+        )
+
+    device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
+
+    db_token = (
+        db.query(ClientBiometricToken)
+        .filter(
+            ClientBiometricToken.device_token_hash == device_hash,
+            ClientBiometricToken.revoked == False,
+        )
+        .first()
+    )
+
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked device token",
+        )
+
+    client = db.query(Client).filter(Client.id == db_token.client_id).first()
+    if not client or not client.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client not found or inactive",
+        )
+
+    # Update last_used_at for auditing
+    db_token.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+
+    token_data = {"sub": str(client.id), "role": "client"}
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(data=token_data)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "client": client,
+        "device_token": None,  # Never issue a new device token here
+    }
+
+
+@router.post("/client/auth/biometric-revoke")
+async def revoke_biometric_tokens(
+    request: BiometricRevokeRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Revoke biometric device tokens for the current client.
+
+    - If device_token is provided, only that device is revoked.
+    - If omitted, all biometric tokens for this client are revoked.
+    """
+    query = db.query(ClientBiometricToken).filter(
+        ClientBiometricToken.client_id == current_client.id,
+        ClientBiometricToken.revoked == False,
+    )
+
+    if request.device_token:
+        device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
+        query = query.filter(ClientBiometricToken.device_token_hash == device_hash)
+
+    updated = query.update(
+        {ClientBiometricToken.revoked: True},
+        synchronize_session=False,
+    )
+    db.commit()
+
+    if updated == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No biometric tokens found to revoke",
+        )
+
+    scope = "this device" if request.device_token else "all devices"
+    return {"message": f"Biometric login disabled for {scope}"}
 
 
 # TODO: Implement "Continue with Apple" integration
