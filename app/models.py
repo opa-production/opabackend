@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -73,17 +74,17 @@ class Payment(Base):
     extension_request_id: Mapped[int] = mapped_column(ForeignKey("booking_extension_requests.id"), nullable=True, index=True)
 
     # M-Pesa STK: Safaricom checkout id (unique per push)
-    checkout_request_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    checkout_request_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     # Status: pending -> completed | cancelled | failed (set by callback or timeout)
     status: Mapped[str] = mapped_column(SQLEnum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
     # From M-Pesa callback when not success
-    result_code: Mapped[int | None] = mapped_column(nullable=True)   # Safaricom ResultCode
-    result_desc: Mapped[str | None] = mapped_column(String(500), nullable=True)  # e.g. "Insufficient funds", "User cancelled"
+    result_code: Mapped[Optional[int]] = mapped_column(nullable=True)   # Safaricom ResultCode
+    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # e.g. "Insufficient funds", "User cancelled"
     # From M-Pesa callback on success
-    mpesa_receipt_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    mpesa_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    mpesa_transaction_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
@@ -176,12 +177,12 @@ class Withdrawal(Base):
     payment_details: Mapped[str] = mapped_column(Text, nullable=True)  # JSON: e.g. {"mpesa_number":"254..."} or {"bank_name":"...","account_number":"..."}
     
     # Payhero/M-Pesa B2C callback fields
-    checkout_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True) # Payhero TransactionID
-    result_code: Mapped[int | None] = mapped_column(nullable=True)
-    result_desc: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    mpesa_receipt_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    mpesa_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    mpesa_transaction_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    checkout_request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True) # Payhero TransactionID
+    result_code: Mapped[Optional[int]] = mapped_column(nullable=True)
+    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Admin processing
     processed_at = mapped_column(DateTime(timezone=True), nullable=True)
