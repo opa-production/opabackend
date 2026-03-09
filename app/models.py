@@ -371,6 +371,8 @@ class Booking(Base):
     rental_days: Mapped[int] = mapped_column(Integer, nullable=False)
     base_price: Mapped[float] = mapped_column(Float, nullable=False)  # daily_rate * rental_days
     damage_waiver_fee: Mapped[float] = mapped_column(Float, nullable=False)
+    total_price: Mapped[float] = mapped_column(Float, nullable=False)
+    damage_waiver_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     drive_type: Mapped[str] = mapped_column(String(20), default="self")  # 'self' or 'withDriver'
     check_in_preference: Mapped[str] = mapped_column(String(20), default="self")  # 'self' or 'assisted'
     special_requirements: Mapped[str] = mapped_column(Text, nullable=True)
