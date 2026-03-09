@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Float, Text, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 from app.database import Base
@@ -419,7 +419,8 @@ class BookingExtensionRequest(Base):
     updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    booking: Mapped["Booking"] = relationship(back_populates="client", cascade="all, delete-orphan")
+    # Many-to-one: each extension belongs to one booking; no delete-orphan cascade from this side
+    booking: Mapped["Booking"] = relationship("Booking", foreign_keys=[booking_id])
     client = relationship("Client", foreign_keys=[client_id])
     host = relationship("Host", foreign_keys=[host_id])
 
