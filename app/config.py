@@ -24,13 +24,13 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = None
     
     # Frontend URL for password reset links (web). Overridden by PASSWORD_RESET_LINK_BASE_URL when set.
-    FRONTEND_URL: Optional[str] = "https://yourapp.com"  # Base URL for reset password links
+    FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  # Base URL for reset password links
     # Optional: base for reset link. Use a deep link to open the app, e.g. ardenahost:// so link becomes ardenahost://reset-password?token=...
-    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  # e.g. ardenahost:// or https://yourapp.com
+    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  # e.g. ardenahost:// or https://ardena.co.ke
     # When set, host forgot-password email uses this page URL. User resets on web then "Go back to app". Use full URL including path.
     HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  # e.g. https://ardena.xyz/reset-password.html → link: ...?token=...
-    # When set, client forgot-password email uses this page URL. Client resets on web then can tap a button to return to the app. Use full URL including path.
-    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = None  # e.g. https://ardena.co.ke/reset-password.html → link: ...?token=...
+    # Client forgot-password email uses this page URL. Client resets on web then can tap a button to return to the app. Use full URL including path.
+    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html"  # Override via env to change
 
     # Veriff KYC (host + client verification)
     VERIFF_API_KEY: Optional[str] = None

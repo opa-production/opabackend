@@ -186,7 +186,7 @@ async def forgot_password(
         reset_link = f"{web_url.rstrip('/')}{sep}token={reset_token}"
     else:
         # Fallback to generic base URL or deep link logic (same as before)
-        base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://yourapp.com").strip()
+        base_url = (settings.PASSWORD_RESET_LINK_BASE_URL or settings.FRONTEND_URL or "https://ardena.co.ke").strip()
         # Deep link (e.g. ardenahost://) must stay as-is: ardenahost://reset-password?token=...
         if base_url.endswith("://"):
             reset_link = f"{base_url}reset-password?token={reset_token}"
