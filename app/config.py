@@ -47,25 +47,24 @@ class Settings(BaseSettings):
     MASTER_SECRET_KEY: Optional[str] = None   
 
     class Config:
-        # Use absolute path to .env file in project root
+    
         env_file = str(BASE_DIR / ".env")
         env_file_encoding = 'utf-8'
         case_sensitive = True
-        extra = "ignore"  # Ignore extra env vars (DATABASE_URL, etc. used elsewhere)
+        extra = "ignore"  
 
 
 # Global settings instance
 settings = Settings()
 
-# Debug logging for environment variables (only in development)
-# Check if .env file exists
+
 env_file_path = BASE_DIR / ".env"
 if env_file_path.exists():
     logger.info(f"Found .env file at: {env_file_path}")
 else:
     logger.warning(f".env file not found at: {env_file_path}")
 
-# Log environment variable loading status (without exposing the actual key)
+
 if settings.SENDGRID_API_KEY:
     logger.info(f"SENDGRID_API_KEY loaded successfully (length: {len(settings.SENDGRID_API_KEY)})")
 else:

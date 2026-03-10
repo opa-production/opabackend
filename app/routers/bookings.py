@@ -786,6 +786,47 @@ async def get_host_booking_receipt(
     )
 
 
+@router.delete("/host/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_host_booking(
+    booking_id: str,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Permanently delete a completed or cancelled booking for the current host.
+
+    - Only deletes bookings where the car belongs to the authenticated host.
+    - Only bookings with status `completed` or `cancelled` can be deleted.
+    - This is a hard delete – booking and related payments are removed from the database.
+    """
+    booking = (
+        db.query(Booking)
+        .join(Car)
+        .filter(
+            Booking.booking_id == booking_id,
+            Car.host_id == current_host.id,
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in (BookingStatus.COMPLETED, BookingStatus.CANCELLED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only completed or cancelled bookings can be deleted.",
+        )
+
+    db.delete(booking)
+    db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
 async def confirm_pickup_as_host(
     booking_id: str,
