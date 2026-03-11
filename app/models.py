@@ -48,8 +48,8 @@ class PaymentMethod(Base):
 
     # Metadata
     is_default: Mapped[bool] = mapped_column(default=False)  # Default payment method
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     
     # Relationships
     host: Mapped["Host"] = relationship(back_populates="payment_methods")
@@ -86,8 +86,8 @@ class Payment(Base):
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationships
     booking: Mapped["Booking"] = relationship(back_populates="payments")
@@ -121,7 +121,7 @@ class Host(Base):
     terms_accepted_at = mapped_column(DateTime(timezone=True), nullable=True)  # When user accepted T&C
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationship to cars
     cars: Mapped[list["Car"]] = relationship(back_populates="host")
@@ -155,7 +155,7 @@ class HostKyc(Base):
     document_type: Mapped[str] = mapped_column(String(80), nullable=True)  # passport, id_card, drivers_license, etc.
     decision_reason: Mapped[str] = mapped_column(String(500), nullable=True)  # reason if declined
     verified_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=True)  # when Veriff decided
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
 
     host: Mapped["Host"] = relationship(back_populates="host_kycs")
 
@@ -193,8 +193,8 @@ class Withdrawal(Base):
     processed_at = mapped_column(DateTime(timezone=True), nullable=True)
     processed_by_admin_id: Mapped[int] = mapped_column(ForeignKey("admins.id"), nullable=True, index=True)
     admin_notes: Mapped[str] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     host: Mapped["Host"] = relationship(back_populates="withdrawals")
     processed_by: Mapped["Admin"] = relationship(foreign_keys=[processed_by_admin_id])
@@ -232,8 +232,8 @@ class Client(Base):
     sms_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     in_app_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationship to driving license
     driving_license: Mapped["DrivingLicense"] = relationship(back_populates="client", uselist=False, cascade="all, delete-orphan")
@@ -259,7 +259,7 @@ class ClientKyc(Base):
     document_type: Mapped[str] = mapped_column(String(80), nullable=True)
     decision_reason: Mapped[str] = mapped_column(String(500), nullable=True)
     verified_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
 
     client: Mapped["Client"] = relationship(back_populates="client_kycs")
 
@@ -276,7 +276,8 @@ class ClientBiometricToken(Base):
     device_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now()
+        server_default=func.now(),
+        nullable=False
     )
     last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -299,7 +300,8 @@ class HostBiometricToken(Base):
     device_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now()
+        server_default=func.now(),
+        nullable=False
     )
     last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -327,8 +329,8 @@ class DrivingLicense(Base):
     is_verified = mapped_column(Boolean, default=False, nullable=False)  # Admin verification status
     verification_notes = mapped_column(Text, nullable=True)  # Admin notes
     
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     
     # Relationship to client
     client = relationship("Client", back_populates="driving_license")
@@ -387,8 +389,8 @@ class Car(Base):
     verification_status: Mapped[str] = mapped_column(String(20), default=VerificationStatus.AWAITING.value, nullable=False)
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=True)  # Reason for rejection if denied
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Hide from public listing
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationship to host
     host: Mapped["Host"] = relationship(back_populates="cars")
@@ -444,8 +446,8 @@ class Booking(Base):
     cancellation_reason: Mapped[str] = mapped_column(Text, nullable=True)
         
     # Timestamps
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationships
     client: Mapped["Client"] = relationship(back_populates="bookings")
@@ -479,8 +481,8 @@ class BookingExtensionRequest(Base):
     status = mapped_column(String(50), nullable=False, index=True)
     host_note = mapped_column(Text, nullable=True)
 
-    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationships
     # Many-to-one: each extension belongs to one booking; no delete-orphan cascade from this side
@@ -503,8 +505,8 @@ class BookingIssue(Base):
     # Status: open, in_review, resolved, closed
     status = Column(String(50), default="open", nullable=False, index=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationships
     booking = relationship("Booking", foreign_keys=[booking_id])
@@ -534,9 +536,9 @@ class Feedback(Base):
     is_flagged = mapped_column(Boolean, default=False, nullable=False)  # Flagged for review
     
     # Metadata
-    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
-    
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
     # Relationship to host
     host = relationship("Host", foreign_keys=[host_id])
 
@@ -555,8 +557,8 @@ class ClientFeedback(Base):
     is_flagged = mapped_column(Boolean, default=False, nullable=False)  # Flagged for review
 
     # Metadata
-    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationship to client
     client = relationship("Client", foreign_keys=[client_id])
@@ -578,9 +580,9 @@ class HostRating(Base):
     review = mapped_column(Text, nullable=True)  # Optional text review
     
     # Metadata
-    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
-    
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
     # Relationships
     host = relationship("Host", back_populates="host_ratings", foreign_keys=[host_id])
     client = relationship("Client", back_populates="host_ratings", foreign_keys=[client_id])
@@ -609,8 +611,8 @@ class ClientRating(Base):
     review = mapped_column(Text, nullable=True)  # Optional text review
 
     # Metadata
-    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     # Relationships
     client = relationship("Client", back_populates="client_ratings", foreign_keys=[client_id])
