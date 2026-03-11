@@ -1,7 +1,10 @@
 """
 Email sending via SendGrid: welcome emails and generic send for password reset etc.
 """
+import base64
 import logging
+from typing import Optional
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -10,16 +13,20 @@ FROM_NAME = "Ardena Group Team"
 DEFAULT_FROM = "Ardena Group Team <hello@ardena.xyz>"
 
 
+def _get_from_email() -> str:
+    return settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
+
+
 def send_email(to: str, subject: str, html: str) -> bool:
     """
-    Send one email via SendGrid.
+    Send one email via SendGrid (no attachments).
     Returns True on success, False on failure (logs error).
     Use this for welcome emails, password reset, etc.
     """
     if not settings.SENDGRID_API_KEY:
         logger.warning("[Email] SENDGRID_API_KEY not set; skipping send")
         return False
-    from_email = settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
+    from_email = _get_from_email()
     try:
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
@@ -36,6 +43,64 @@ def send_email(to: str, subject: str, html: str) -> bool:
         return True
     except Exception as e:
         logger.exception(f"[Email] Failed to send to {to}: {e}")
+        return False
+
+
+def send_email_with_attachment(
+    to: str,
+    subject: str,
+    html: str,
+    attachment_bytes: bytes,
+    filename: str,
+    mime_type: str = "application/pdf",
+    attachment_disposition: str = "attachment",
+) -> bool:
+    """
+    Send one email via SendGrid with a single attachment.
+    Intended for things like data export PDFs or receipts.
+    """
+    if not settings.SENDGRID_API_KEY:
+        logger.warning("[Email] SENDGRID_API_KEY not set; skipping send with attachment")
+        return False
+
+    from_email = _get_from_email()
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import (
+            Mail,
+            Attachment,
+            FileContent,
+            FileName,
+            FileType,
+            Disposition,
+        )
+
+        encoded_file = base64.b64encode(attachment_bytes).decode("utf-8")
+
+        attachment = Attachment(
+            FileContent(encoded_file),
+            FileName(filename),
+            FileType(mime_type),
+            Disposition(attachment_disposition),
+        )
+
+        message = Mail(
+            from_email=from_email,
+            to_emails=to,
+            subject=subject,
+            html_content=html,
+        )
+        message.attachment = attachment
+
+        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
+        sg.send(message)
+        logger.info(f"[Email] Sent with attachment to {to}: {subject} ({filename})")
+        return True
+    except Exception as e:
+        logger.exception(
+            f"[Email] Failed to send with attachment to {to} ({filename}): {e}"
+        )
         return False
 
 

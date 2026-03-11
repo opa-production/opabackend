@@ -23,25 +23,20 @@ class Settings(BaseSettings):
     # Google Auth
     GOOGLE_CLIENT_ID: Optional[str] = None
     
-    # Frontend URL for password reset links (web). Overridden by PASSWORD_RESET_LINK_BASE_URL when set.
-    FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  # Base URL for reset password links
-    # Optional: base for reset link. Use a deep link to open the app, e.g. ardenahost:// so link becomes ardenahost://reset-password?token=...
-    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  # e.g. ardenahost:// or https://ardena.co.ke
-    # When set, host forgot-password email uses this page URL. User resets on web then "Go back to app". Use full URL including path.
-    HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  # e.g. https://ardena.xyz/reset-password.html → link: ...?token=...
-    # Client forgot-password email uses this page URL. Client resets on web then can tap a button to return to the app. Use full URL including path.
-    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html"  # Override via env to change
+
+    FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
+    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  
+    HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  
+    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html" 
 
     # Veriff KYC (host + client verification)
     VERIFF_API_KEY: Optional[str] = None
-    VERIFF_BASE_URL: Optional[str] = "https://stationapi.veriff.com"  # Veriff API base
-    # HTTPS base URL of your API. Used to build Veriff callback redirect URLs for both host and client KYC.
-    # Example: https://api.ardena.xyz  (no trailing path — the router appends /api/v1/host/kyc/redirect or /api/v1/client/kyc/redirect)
-    # For backwards compat, a full path like https://api.ardena.xyz/api/v1/host/kyc/redirect still works (only the origin is used).
+    VERIFF_BASE_URL: Optional[str] = "https://stationapi.veriff.com"  
+   
     VERIFF_CALLBACK_URL: Optional[str] = None
-    # Comma-separated allowed prefixes for return_to (e.g. ardenahost://,ardena://,oparides://). Used to avoid open redirects.
+    
     KYC_ALLOWED_RETURN_PREFIXES: str = "ardenahost://,ardena://,oparides://"
-    # Webhook signature verification (use one of these; same value as Veriff "shared secret" / "master signature key")
+   
     VERIFF_WEBHOOK_SECRET: Optional[str] = None
     SHARED_SECRET_KEY: Optional[str] = None   
     MASTER_SECRET_KEY: Optional[str] = None   

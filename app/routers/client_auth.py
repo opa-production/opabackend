@@ -1,11 +1,21 @@
 import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Client, DrivingLicense, Notification, ClientBiometricToken
+from app.models import (
+    Client,
+    DrivingLicense,
+    Notification,
+    ClientBiometricToken,
+    Booking,
+    ClientKyc,
+    PaymentMethod,
+    HostRating,
+    ClientRating,
+)
 from app.config import settings
 from app.schemas import (
     ClientRegisterRequest,
@@ -40,7 +50,12 @@ from app.auth import (
     get_current_client,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from app.services.email_welcome import send_welcome_email_client, send_email
+from app.services.email_welcome import (
+    send_welcome_email_client,
+    send_email,
+    send_email_with_attachment,
+)
+from app.services.client_data_export import build_client_data_pdf
 
 router = APIRouter()
 
@@ -429,6 +444,104 @@ async def change_password(
     db.commit()
     
     return {"message": "Password changed successfully"}
+
+
+@router.post("/client/account/export-data")
+async def export_client_data(
+    background_tasks: BackgroundTasks,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a PDF export of all data we store for the authenticated client
+    and email it to the address they used to register.
+
+    The PDF is generated on the server and sent as an email attachment from
+    the standard Ardena Group team address.
+    """
+    if not settings.SENDGRID_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service is not configured. Please try again later.",
+        )
+
+    # Collect related data for this client
+    bookings = (
+        db.query(Booking)
+        .filter(Booking.client_id == current_client.id)
+        .order_by(Booking.created_at.desc())
+        .all()
+    )
+
+    driving_license = (
+        db.query(DrivingLicense)
+        .filter(DrivingLicense.client_id == current_client.id)
+        .first()
+    )
+
+    latest_kyc = (
+        db.query(ClientKyc)
+        .filter(ClientKyc.client_id == current_client.id)
+        .order_by(ClientKyc.created_at.desc())
+        .first()
+    )
+
+    payment_methods = (
+        db.query(PaymentMethod)
+        .filter(PaymentMethod.client_id == current_client.id)
+        .all()
+    )
+
+    ratings_from_hosts = (
+        db.query(ClientRating)
+        .filter(ClientRating.client_id == current_client.id)
+        .all()
+    )
+
+    ratings_given_to_hosts = (
+        db.query(HostRating)
+        .filter(HostRating.client_id == current_client.id)
+        .all()
+    )
+
+    pdf_bytes = build_client_data_pdf(
+        client=current_client,
+        bookings=bookings,
+        driving_license=driving_license,
+        latest_kyc=latest_kyc,
+        payment_methods=payment_methods,
+        ratings_from_hosts=ratings_from_hosts,
+        ratings_given_to_hosts=ratings_given_to_hosts,
+    )
+
+    filename = f"ardena-client-data-{current_client.id}.pdf"
+
+    subject = "Your Ardena data export"
+    first_name = current_client.full_name.split()[0] if current_client.full_name else "there"
+    html_body = f"""
+    <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
+      <p>Dear {first_name},</p>
+      <p>As requested, we have generated a PDF export of the key information we store for your Ardena account.</p>
+      <p>The document attached includes your account details, profile information, verification status, driving licence (if provided),
+      saved payment methods, booking history, and ratings summary.</p>
+      <p>If you see anything that looks incorrect or have questions about your data, you can reply to this email and our team will help.</p>
+      <p style="margin-top: 24px;">Warm regards,<br><strong>The Ardena Group Team</strong></p>
+    </div>
+    """
+
+    # Send email in the background so the API call returns quickly
+    background_tasks.add_task(
+        send_email_with_attachment,
+        current_client.email,
+        subject,
+        html_body,
+        pdf_bytes,
+        filename,
+    )
+
+    return {
+        "message": "Your data export is being generated and will be sent to your email address shortly."
+    }
 
 
 # ==================== DRIVING LICENSE ENDPOINTS ====================
