@@ -1283,6 +1283,25 @@ class NotificationResponse(BaseModel):
     user_type: Optional[str] = None
 
 
+class AdminMultiChannelBroadcastToClientsRequest(BaseModel):
+    """
+    Admin request to broadcast a message to all clients,
+    sending via in‑app notifications and/or email depending on each client's preferences.
+    """
+    title: str = Field(..., min_length=1, max_length=255, description="Notification title (used for in‑app and default email subject)")
+    message: str = Field(..., min_length=1, max_length=1000, description="Plain text message for in‑app notification")
+    type: Optional[str] = Field("info", description="Notification type: info, warning, success, error")
+    email_subject: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional custom email subject. Defaults to title when omitted.",
+    )
+    email_body_html: Optional[str] = Field(
+        None,
+        description="Optional full HTML body for the email. If omitted, a simple HTML wrapper around `message` is used.",
+    )
+
+
 # Host Notification Schemas
 class HostNotificationResponse(BaseModel):
     """Notification response for host"""

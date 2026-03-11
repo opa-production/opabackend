@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -7,9 +7,12 @@ from app.models import Host, Client, Notification
 from app.schemas import (
     BroadcastNotificationRequest,
     UserNotificationRequest,
-    NotificationResponse
+    NotificationResponse,
+    AdminMultiChannelBroadcastToClientsRequest,
 )
 from app.auth import get_current_admin
+from app.config import settings
+from app.services.email_welcome import send_email
 
 router = APIRouter()
 
@@ -220,4 +223,110 @@ async def send_notification_to_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending notification: {str(e)}"
+        )
+
+
+@router.post(
+    "/admin/notifications/broadcast-clients-preferences",
+    response_model=NotificationResponse,
+)
+async def broadcast_to_clients_respecting_preferences(
+    request: AdminMultiChannelBroadcastToClientsRequest,
+    background_tasks: BackgroundTasks,
+    current_admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Broadcast a message to all active clients, sending it only through the
+    channels they have enabled in their notification preferences.
+
+    - In-app notification is created when `in_app_notifications_enabled` is true.
+    - Email is sent when `email_notifications_enabled` is true and email service is configured.
+    """
+    try:
+        # Fetch all active clients who have at least one of the channels enabled
+        clients = (
+            db.query(Client)
+            .filter(
+                Client.is_active == True,  # noqa: E712
+                (
+                    (Client.email_notifications_enabled == True)
+                    | (Client.in_app_notifications_enabled == True)
+                ),
+            )
+            .all()
+        )
+
+        if not clients:
+            return NotificationResponse(
+                message="No active clients with notifications enabled were found.",
+                sent_count=0,
+            )
+
+        notif_type = request.type or "info"
+        sent_in_app = 0
+        scheduled_emails = 0
+
+        # Prepare email template pieces
+        email_subject = request.email_subject or request.title
+
+        for client in clients:
+            # In‑app notification
+            if getattr(client, "in_app_notifications_enabled", True):
+                try:
+                    notification = Notification(
+                        recipient_type="client",
+                        recipient_id=client.id,
+                        title=request.title,
+                        message=request.message,
+                        notification_type=notif_type,
+                        sender_name=ADMIN_SENDER_NAME,
+                    )
+                    db.add(notification)
+                    sent_in_app += 1
+                except Exception as e:
+                    print(f"Error creating in-app notification for client {client.id}: {e}")
+
+            # Email notification
+            if (
+                getattr(client, "email_notifications_enabled", True)
+                and settings.SENDGRID_API_KEY
+            ):
+                try:
+                    if request.email_body_html:
+                        body_html = request.email_body_html
+                    else:
+                        # Simple default HTML wrapper around the plain-text message
+                        body_html = f"""
+                        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
+                          <p>{request.message}</p>
+                          <p style="margin-top: 24px;">— The Ardena Group Team</p>
+                        </div>
+                        """
+                    background_tasks.add_task(
+                        send_email,
+                        client.email,
+                        email_subject,
+                        body_html,
+                    )
+                    scheduled_emails += 1
+                except Exception as e:
+                    print(f"Error scheduling email for client {client.id}: {e}")
+
+        # Persist in‑app notifications
+        db.commit()
+
+        total_channels = sent_in_app + scheduled_emails
+        return NotificationResponse(
+            message=(
+                f"Broadcast queued to {len(clients)} client(s) "
+                f"({sent_in_app} in-app, {scheduled_emails} email)."
+            ),
+            sent_count=total_channels,
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error broadcasting notifications: {str(e)}",
         )
