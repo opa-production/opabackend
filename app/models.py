@@ -137,6 +137,11 @@ class Host(Base):
     withdrawals: Mapped[list["Withdrawal"]] = relationship(back_populates="host", cascade="all, delete-orphan")
     # KYC (Veriff) - one-to-many for history; use latest for status
     host_kycs: Mapped[list["HostKyc"]] = relationship(back_populates="host", cascade="all, delete-orphan")
+    # Biometric device tokens for local unlock
+    biometric_tokens: Mapped[list["HostBiometricToken"]] = relationship(
+        back_populates="host",
+        cascade="all, delete-orphan"
+    )
 
 
 class HostKyc(Base):
@@ -275,6 +280,29 @@ class ClientBiometricToken(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
     client: Mapped["Client"] = relationship("Client", back_populates="biometric_tokens")
+
+
+class HostBiometricToken(Base):
+    """Device token used for biometric-based local unlock for hosts (no biometrics stored)."""
+    __tablename__ = "host_biometric_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id"), nullable=False, index=True)
+    # SHA-256 hash of a random device secret stored only on the device
+    device_token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    # Optional human-readable device name/info for UI
+    device_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now()
+    )
+    last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
+    host: Mapped["Host"] = relationship("Host", back_populates="biometric_tokens")
 
 
 class DrivingLicense(Base):
@@ -594,8 +622,8 @@ class Admin(Base):
     email = mapped_column(String(255), unique=True, index=True, nullable=False)
     hashed_password = mapped_column(String(255), nullable=False)
     
-    # Admin role (super_admin, admin, moderator)
-    role = mapped_column(String(50), default="admin", nullable=False)
+    # Admin role (super_admin, finance, customer_service)
+    role = mapped_column(String(50), default="customer_service", nullable=False)
     
     # Account status
     is_active = mapped_column(Boolean, default=True, nullable=False)

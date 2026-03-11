@@ -1,12 +1,13 @@
 import html
 import secrets
 from datetime import datetime, timedelta, timezone
+import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Host, Notification
+from app.models import Host, Notification, HostBiometricToken
 from app.schemas import (
     HostRegisterRequest,
     HostRegisterResponse,
@@ -22,6 +23,8 @@ from app.schemas import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     HostChangePasswordRequest,
+    BiometricLoginRequest,
+    BiometricRevokeRequest,
 )
 from app.auth import (
     get_password_hash,
@@ -122,14 +125,127 @@ async def login_host(
     
     # Create refresh token
     refresh_token = create_refresh_token(data=token_data)
-    
+
+    # Optionally issue a device token for biometric login (one-time reveal, host app)
+    device_token_raw = None
+    if getattr(request, "enable_biometrics", False):
+        device_token_raw = secrets.token_urlsafe(32)
+        device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
+
+        db_token = HostBiometricToken(
+            host_id=host.id,
+            device_token_hash=device_token_hash,
+            device_name=getattr(request, "device_name", None),
+        )
+        db.add(db_token)
+        db.commit()
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
-        "host": host
+        "host": host,
+        "device_token": device_token_raw,
     }
+
+
+@router.post("/host/auth/biometric-login", response_model=HostLoginResponseWithRefresh)
+async def host_biometric_login(
+    request: BiometricLoginRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Host login using a previously issued device token (for biometric unlock in host app).
+
+    The host app should:
+    - Store device_token in secure local storage after initial login + biometric setup
+    - On successful local biometric auth, call this endpoint with the stored device_token
+    """
+    if not request.device_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="device_token is required",
+        )
+
+    device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
+
+    db_token = (
+        db.query(HostBiometricToken)
+        .filter(
+            HostBiometricToken.device_token_hash == device_hash,
+            HostBiometricToken.revoked == False,
+        )
+        .first()
+    )
+
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked device token",
+        )
+
+    host = db.query(Host).filter(Host.id == db_token.host_id).first()
+    if not host or not host.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Host not found or inactive",
+        )
+
+    # Update last_used_at for auditing
+    db_token.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+
+    token_data = {"sub": str(host.id), "role": "host"}
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(data=token_data)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "host": host,
+        "device_token": None,  # Never issue a new device token here
+    }
+
+
+@router.post("/host/auth/biometric-revoke")
+async def revoke_host_biometric_tokens(
+    request: BiometricRevokeRequest,
+    current_host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+):
+    """
+    Revoke biometric device tokens for the current host.
+
+    - If device_token is provided, only that device is revoked.
+    - If omitted, all biometric tokens for this host are revoked.
+    """
+    query = db.query(HostBiometricToken).filter(
+        HostBiometricToken.host_id == current_host.id,
+        HostBiometricToken.revoked == False,
+    )
+
+    if request.device_token:
+        device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
+        query = query.filter(HostBiometricToken.device_token_hash == device_hash)
+
+    updated = query.update(
+        {HostBiometricToken.revoked: True},
+        synchronize_session=False,
+    )
+    db.commit()
+
+    if updated == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No biometric tokens found to revoke",
+        )
+
+    scope = "this device" if request.device_token else "all devices"
+    return {"message": f"Biometric login disabled for {scope}"}
 
 
 @router.post("/host/auth/logout")

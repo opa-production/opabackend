@@ -118,6 +118,18 @@ class ClientKycStatusResponse(BaseModel):
 class HostLoginRequest(BaseModel):
     email: EmailStr
     password: str
+    # Optional: ask backend to issue a device token for biometric login (host app)
+    enable_biometrics: Optional[bool] = Field(
+        False,
+        alias="enableBiometrics",
+        description="When true, backend issues a one-time device_token for host biometric login"
+    )
+    device_name: Optional[str] = Field(
+        None,
+        alias="deviceName",
+        max_length=255,
+        description="Optional human-readable device name (e.g. 'Host’s iPhone')"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -1346,7 +1358,11 @@ class AdminCreateRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
     password_confirmation: str = Field(..., min_length=8)
-    role: str = Field("admin", pattern="^(admin|moderator)$", description="Role: admin or moderator (super_admin cannot be created via API)")
+    role: str = Field(
+        "customer_service",
+        pattern="^(finance|customer_service)$",
+        description="Role: finance or customer_service (super_admin cannot be created via API)",
+    )
     is_active: bool = Field(True, description="Account active status")
 
     @model_validator(mode='after')
@@ -1360,7 +1376,11 @@ class AdminUpdateRequest(BaseModel):
     """Update admin profile request"""
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
-    role: Optional[str] = Field(None, pattern="^(admin|moderator)$", description="Role: admin or moderator")
+    role: Optional[str] = Field(
+        None,
+        pattern="^(finance|customer_service)$",
+        description="Role: finance or customer_service",
+    )
     is_active: Optional[bool] = None
 
 
@@ -1478,6 +1498,11 @@ class HostLoginResponseWithRefresh(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     host: HostProfileResponse
+    # Optional one-time device token for biometric login setup (host app)
+    device_token: Optional[str] = Field(
+        default=None,
+        description="One-time device token for host biometric login (only present when enableBiometrics was true)"
+    )
 
 
 class ClientLoginResponseWithRefresh(BaseModel):
