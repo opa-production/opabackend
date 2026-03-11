@@ -11,7 +11,11 @@ from app.models import (
     Notification,
     ClientBiometricToken,
     Booking,
+    BookingStatus,
+    BookingExtensionRequest,
     ClientKyc,
+    ClientFeedback,
+    ClientHostConversation,
     PaymentMethod,
     HostRating,
     ClientRating,
@@ -622,6 +626,83 @@ async def export_client_data(
     return {
         "message": "Your data export is being generated and will be sent to your email address shortly."
     }
+
+
+@router.delete("/client/account", status_code=status.HTTP_200_OK)
+async def delete_own_account(
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Permanently delete the authenticated client's account.
+
+    Deletion is **blocked** if any of the following would jeopardise operations:
+    - An active booking (pending, confirmed, or active)
+    - A booking extension that is pending host approval or host-approved (not yet paid/expired/rejected)
+
+    The client must complete, cancel, or let such bookings/extensions resolve before deleting.
+    """
+    client_id = current_client.id
+
+    # Block if any booking is still "in progress" (pending, confirmed, or active)
+    active_booking = (
+        db.query(Booking)
+        .filter(
+            Booking.client_id == client_id,
+            Booking.status.in_([
+                BookingStatus.PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.ACTIVE,
+            ]),
+        )
+        .first()
+    )
+    if active_booking:
+        bid = getattr(active_booking, "booking_id", None) or ""
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "You cannot delete your account while you have an active booking. "
+                "Please complete or cancel the booking first."
+                + (f" (Booking: {bid})" if bid else "")
+            ),
+        )
+
+    # Block if any extension request is still pending or host-approved (not yet paid/expired/rejected)
+    active_extension = (
+        db.query(BookingExtensionRequest)
+        .filter(
+            BookingExtensionRequest.client_id == client_id,
+            BookingExtensionRequest.status.in_([
+                "pending_host_approval",
+                "host_approved",
+            ]),
+        )
+        .first()
+    )
+    if active_extension:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "You cannot delete your account while you have a booking extension in progress. "
+                "Please wait for it to be paid, expired, or rejected, or cancel it first."
+            ),
+        )
+
+    # Delete records that reference client but have no cascade from Client (to avoid FK errors / orphan data)
+    db.query(BookingExtensionRequest).filter(BookingExtensionRequest.client_id == client_id).delete()
+    db.query(ClientHostConversation).filter(ClientHostConversation.client_id == client_id).delete()
+    db.query(ClientFeedback).filter(ClientFeedback.client_id == client_id).delete()
+    db.query(Notification).filter(
+        Notification.recipient_type == "client",
+        Notification.recipient_id == client_id,
+    ).delete()
+
+    # Delete the client (cascades: bookings, payments, payment_methods, driving_license, client_kycs, biometric_tokens, host_ratings, client_ratings)
+    db.delete(current_client)
+    db.commit()
+
+    return {"message": "Your account has been permanently deleted."}
 
 
 # ==================== DRIVING LICENSE ENDPOINTS ====================
