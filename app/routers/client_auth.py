@@ -36,6 +36,7 @@ from app.schemas import (
     ClientNotificationResponse,
     BiometricLoginRequest,
     BiometricRevokeRequest,
+    NotificationToggleRequest,
 )
 from app.auth import (
     get_password_hash,
@@ -444,6 +445,85 @@ async def change_password(
     db.commit()
     
     return {"message": "Password changed successfully"}
+
+
+@router.post("/client/notifications/email", response_model=ClientProfileResponse)
+async def update_email_notifications(
+    request: NotificationToggleRequest,
+    background_tasks: BackgroundTasks,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Toggle email notifications for the authenticated client.
+
+    When turned **on**, a confirmation email is sent informing them that they
+    will now receive email notifications at their registered email address.
+    """
+    previous = getattr(current_client, "email_notifications_enabled", True)
+    current_client.email_notifications_enabled = bool(request.enabled)
+    db.commit()
+    db.refresh(current_client)
+
+    # Only send a confirmation email when toggled from OFF to ON
+    if request.enabled and not previous and settings.SENDGRID_API_KEY:
+        first_name = (
+            current_client.full_name.split()[0] if current_client.full_name else "there"
+        )
+        subject = "Email notifications enabled on Ardena"
+        html_body = f"""
+        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
+          <p>Dear {first_name},</p>
+          <p>This is a quick confirmation that you have <strong>enabled email notifications</strong> for your Ardena account.</p>
+          <p>You will now start receiving important updates and notifications at this email address.</p>
+          <p>You can turn this off at any time from your notification preferences in the app.</p>
+          <p style="margin-top: 24px;">With appreciation,<br><strong>The Ardena Group Team</strong></p>
+        </div>
+        """
+        background_tasks.add_task(
+            send_email,
+            current_client.email,
+            subject,
+            html_body,
+        )
+
+    return current_client
+
+
+@router.post("/client/notifications/in-app", response_model=ClientProfileResponse)
+async def update_in_app_notifications(
+    request: NotificationToggleRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Toggle in-app notifications for the authenticated client.
+
+    When turned **on**, a confirmation notification is created and will appear
+    in the client's Notifications page inside the app.
+    """
+    previous = getattr(current_client, "in_app_notifications_enabled", True)
+    current_client.in_app_notifications_enabled = bool(request.enabled)
+    db.commit()
+    db.refresh(current_client)
+
+    # Only create an in-app notification when toggled from OFF to ON
+    if request.enabled and not previous:
+        notif = Notification(
+            recipient_type="client",
+            recipient_id=current_client.id,
+            title="In-app notifications enabled",
+            message=(
+                "You have turned on in-app notifications. "
+                "You will now see important updates on your Notifications page in the Ardena app."
+            ),
+            notification_type="info",
+            sender_name="The Ardena Group Team",
+        )
+        db.add(notif)
+        db.commit()
+
+    return current_client
 
 
 @router.post("/client/account/export-data")

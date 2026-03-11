@@ -206,6 +206,9 @@ class ClientProfileResponse(BaseModel):
     id_document_url: Optional[str] = None
     license_document_url: Optional[str] = None
     terms_accepted_at: Optional[datetime] = None
+    email_notifications_enabled: Optional[bool] = True
+    sms_notifications_enabled: Optional[bool] = True
+    in_app_notifications_enabled: Optional[bool] = True
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -1321,6 +1324,11 @@ class ClientNotificationListResponse(BaseModel):
     notifications: List[ClientNotificationResponse]
     total: int
     unread_count: int
+
+
+class NotificationToggleRequest(BaseModel):
+    """Generic request body for toggling a notification preference."""
+    enabled: bool = Field(..., description="True to enable this notification type, false to disable it")
 
 
 # Admin Management Schemas

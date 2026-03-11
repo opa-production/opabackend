@@ -176,6 +176,18 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN terms_accepted_at DATETIME"))
             print("✓ Added terms_accepted_at column to clients table")
+        if 'email_notifications_enabled' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN email_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+            print("✓ Added email_notifications_enabled column to clients table")
+        if 'sms_notifications_enabled' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN sms_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+            print("✓ Added sms_notifications_enabled column to clients table")
+        if 'in_app_notifications_enabled' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN in_app_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+            print("✓ Added in_app_notifications_enabled column to clients table")
     
     # Check and add missing columns to cars table
     if 'cars' in table_names:
