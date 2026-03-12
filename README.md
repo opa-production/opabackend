@@ -134,7 +134,7 @@ Veriff requires an **HTTPS** callback URL. For local development, expose your ba
    ```bash
    ngrok http 8001
    ```
-   Or from the project root: `scripts\ngrok-veriff.bat` (Windows) or `./scripts/ngrok-veriff.sh` (Mac/Linux).
+   Or from the project root: `scripts\ngrok.bat` (Windows) or `./scripts/ngrok.sh` (Mac/Linux).
    You’ll see a line like:
    ```text
    Forwarding   https://abc123.ngrok-free.app -> http://localhost:8001
@@ -152,6 +152,46 @@ Veriff requires an **HTTPS** callback URL. For local development, expose your ba
 5. **Restart the backend** so it picks up the new `VERIFF_CALLBACK_URL`. Your app can keep using your local IP (e.g. `http://192.168.88.x:8001`) for API calls; Veriff will use the ngrok HTTPS URL only for the post-verification redirect.
 
 **Note:** The free ngrok URL changes each time you restart ngrok. Update `VERIFF_CALLBACK_URL` in `.env` and restart the backend whenever you get a new ngrok URL. For a stable URL, use a paid ngrok plan or deploy to a server with a fixed HTTPS URL.
+
+### M-Pesa / Payhero callback (payment status)
+
+After a client pays via M-Pesa STK push, **Payhero** sends a webhook to your backend to confirm success or failure. Payment status (and booking confirmation) is updated only when that callback is received.
+
+- **`PAYHERO_CALLBACK_URL`** in `.env` must be a **public** URL that Payhero’s servers can reach from the internet, e.g.  
+  `https://api.ardena.xyz/api/v1/mpesa/callback`  
+  If you use a local or LAN URL (e.g. `http://192.168.88.249:8001/api/v1/mpesa/callback` or `http://localhost:8001/...`), Payhero cannot call it, so the status will stay **pending** even after the user has paid.
+
+#### Local testing: ngrok for Payhero (and Veriff)
+
+Use one ngrok tunnel on port 8001 for both Payhero and Veriff callbacks.
+
+1. **Install ngrok** (if you haven’t): see [Local dev: ngrok for Veriff KYC](#local-dev-ngrok-for-veriff-kyc) (same steps). Auth token: `ngrok config add-authtoken YOUR_TOKEN`.
+
+2. **Start your backend** (Terminal 1):
+   ```bash
+   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+   ```
+
+3. **Start ngrok** (Terminal 2), from project root:
+   ```bash
+   scripts\ngrok.bat
+   ```
+   Or: `ngrok http 8001`. Copy the **HTTPS** URL (e.g. `https://abc123.ngrok-free.app`).
+
+4. **Set in `.env`** (replace `YOUR-SUBDOMAIN` with your ngrok subdomain):
+   ```env
+   PAYHERO_CALLBACK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app/api/v1/mpesa/callback
+   ```
+   Optional, for Veriff KYC on the same tunnel:
+   ```env
+   VERIFF_CALLBACK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app/api/v1/host/kyc/redirect
+   ```
+
+5. **Payhero dashboard:** Set the callback URL to the same value as `PAYHERO_CALLBACK_URL` (if Payhero lets you configure it per request, the backend already sends it; otherwise set the default in the dashboard).
+
+6. **Restart the backend** so it loads the new `.env`. Your app can keep using `http://192.168.88.x:8001` for API calls; Payhero will use the ngrok URL for the webhook.
+
+7. **Verify:** After a test payment, check server logs for `[PAYHERO CALLBACK] Received payload:` — if it appears, the callback is working and status will update to completed.
 
 ## Troubleshooting: Backend not reachable
 
