@@ -241,7 +241,24 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE payments ADD COLUMN extension_request_id INTEGER"))
             print("✓ Added extension_request_id column to payments table")
-    
+        if 'stellar_tx_hash' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN stellar_tx_hash VARCHAR(64)"))
+            print("✓ Added stellar_tx_hash column to payments table")
+
+    # Ensure stellar_payment_transactions table exists (Ardena Pay USDC/XLM payment records)
+    if 'stellar_payment_transactions' not in table_names:
+        print("⚠️  stellar_payment_transactions table missing, creating...")
+        from app.models import StellarPaymentTransaction
+        StellarPaymentTransaction.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created stellar_payment_transactions table")
+    else:
+        spt_columns = [col['name'] for col in inspector.get_columns('stellar_payment_transactions')]
+        if 'amount_xlm' not in spt_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE stellar_payment_transactions ADD COLUMN amount_xlm VARCHAR(50)"))
+            print("✓ Added amount_xlm column to stellar_payment_transactions table")
+
     # Check and add client_id to payment_methods table, and make host_id nullable
     if 'payment_methods' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('payment_methods')]
@@ -555,9 +572,10 @@ def _run_sync_startup():
 
 @app.on_event("startup")
 async def startup_event():
-    """Create database tables on startup and create default super admin. Blocking work runs in a thread so server stays responsive."""
+    """Run DB migrations in a background thread so the server accepts connections immediately (Swagger/docs work right away)."""
     print("🚀 Starting up...")
-    await asyncio.to_thread(_run_sync_startup)
+    # Run blocking startup in thread without awaiting – server becomes ready and Swagger loads immediately
+    asyncio.create_task(asyncio.to_thread(_run_sync_startup))
     # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
     asyncio.create_task(_run_expire_pending_bookings_loop())
 

@@ -10,12 +10,14 @@ import os
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from app.database import get_db
-from app.models import Client, ClientWallet
+from app.models import Client, ClientWallet, StellarPaymentTransaction
 from app.auth import get_current_client
-from app.schemas import WalletResponse
+from app.schemas import WalletResponse, StellarTransactionResponse
 from app.services.stellar_wallet import (
     create_and_fund_wallet,
     get_balances,
@@ -126,3 +128,22 @@ def create_wallet(
     balance_xlm, balance_usdc = _fetch_and_save_balances(wallet, db)
     include_secret = SHOW_SECRET_TESTNET and network == "testnet"
     return _wallet_to_response(wallet, balance_xlm=balance_xlm, balance_usdc=balance_usdc, include_secret=include_secret)
+
+
+@router.get("/client/wallet/transactions", response_model=List[StellarTransactionResponse])
+def list_wallet_transactions(
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+    booking_id: Optional[int] = Query(None, description="Filter by booking id"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """
+    List Ardena Pay (USDC/XLM) transactions for the current client's wallet.
+    Same data as GET /api/v1/client/payments/transactions.
+    """
+    q = db.query(StellarPaymentTransaction).filter(StellarPaymentTransaction.client_id == current_client.id)
+    if booking_id is not None:
+        q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
+    rows = q.order_by(StellarPaymentTransaction.created_at.desc()).offset(skip).limit(limit).all()
+    return [StellarTransactionResponse.model_validate(r) for r in rows]

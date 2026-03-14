@@ -85,6 +85,8 @@ class Payment(Base):
     mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Ardena Pay: Stellar transaction hash when payment was made via USDC
+    stellar_tx_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
@@ -281,6 +283,25 @@ class ClientWallet(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     client: Mapped["Client"] = relationship(back_populates="wallet")
+
+
+class StellarPaymentTransaction(Base):
+    """Ardena Pay: Record of a USDC or XLM payment from client wallet to platform (booking payment)."""
+    __tablename__ = "stellar_payment_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    amount_ksh: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_usdc: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # USD equivalent for display
+    amount_xlm: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Set when paid in XLM
+    stellar_tx_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    from_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    booking: Mapped["Booking"] = relationship("Booking", backref="stellar_payments")
+    client: Mapped["Client"] = relationship("Client", backref="stellar_payment_transactions")
 
 
 class ClientBiometricToken(Base):

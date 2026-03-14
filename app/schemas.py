@@ -2101,6 +2101,42 @@ class PaymentResponse(BaseModel):
     booking: BookingResponse
 
 
+class ArdenaPayPaymentRequest(BaseModel):
+    """Request to pay for a booking with Ardena Pay. Use payWithXlm=true to pay with XLM (default: USDC)."""
+    booking_id: Union[str, int] = Field(..., description="Booking ID (e.g. 'BK-ABC12345') or numeric id", alias="bookingId")
+    pay_with_xlm: bool = Field(False, description="If true, deduct XLM (converted from KSH); if false, deduct USDC", alias="payWithXlm")
+    model_config = {"populate_by_name": True}
+
+
+class ArdenaPayPaymentResponse(BaseModel):
+    """Response after successful Ardena Pay (USDC or XLM) payment."""
+    success: bool
+    booking_id: str
+    amount_ksh: float
+    amount_usdc: str
+    amount_xlm: Optional[str] = None
+    stellar_tx_hash: str
+    message: str
+    paid_at: datetime
+    booking: BookingResponse
+
+
+class StellarTransactionResponse(BaseModel):
+    """Single Ardena Pay (USDC or XLM) transaction record for listing."""
+    id: int
+    booking_id: int
+    amount_ksh: float
+    amount_usdc: Optional[str] = None
+    amount_xlm: Optional[str] = None
+    stellar_tx_hash: str
+    from_address: str
+    to_address: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class PaymentStatusEnum(str, Enum):
     """Payment attempt status (for UI polling)"""
     PENDING = "pending"

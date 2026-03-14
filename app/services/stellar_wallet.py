@@ -9,7 +9,7 @@ import requests
 from typing import Any
 
 from stellar_sdk import Keypair, Server, Asset, Network, TransactionBuilder
-from stellar_sdk.operation import ChangeTrust
+from stellar_sdk.operation import ChangeTrust, Payment
 from stellar_sdk.exceptions import BadRequestError
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,36 @@ def _get_usdc_issuer() -> str:
 def _is_testnet() -> bool:
     url = _get_horizon_url()
     return "testnet" in url.lower()
+
+
+def _get_platform_public_key() -> str | None:
+    """Platform wallet that receives USDC payments. Set STELLAR_PLATFORM_PUBLIC_KEY."""
+    return os.getenv("STELLAR_PLATFORM_PUBLIC_KEY") or None
+
+
+def ksh_to_usdc(amount_ksh: float) -> str:
+    """
+    Convert KSH to USDC amount (string for Stellar). Uses USDC_PER_KSH env (e.g. 0.0075).
+    Returns decimal string with up to 7 decimals (Stellar asset amount format).
+    """
+    rate = float(os.getenv("USDC_PER_KSH", "0.0075"))
+    usdc = amount_ksh * rate
+    return f"{usdc:.7f}".rstrip("0").rstrip(".")
+
+
+def ksh_to_xlm(amount_ksh: float) -> str:
+    """
+    Convert KSH to XLM amount for payment. Uses USDC_PER_KSH (KSH→USD) and USD_PER_XLM (1 XLM = X USD).
+    So: amount_xlm = (amount_ksh * USDC_PER_KSH) / USD_PER_XLM.
+    Returns decimal string for Stellar native amount (max 7 decimals).
+    """
+    usdc_per_ksh = float(os.getenv("USDC_PER_KSH", "0.0075"))
+    usd_per_xlm = float(os.getenv("USD_PER_XLM", "0.16"))  # 1 XLM ≈ 0.16 USD; align with UI/CoinGecko if needed
+    if usd_per_xlm <= 0:
+        usd_per_xlm = 0.16
+    amount_usd = amount_ksh * usdc_per_ksh
+    amount_xlm = amount_usd / usd_per_xlm
+    return f"{amount_xlm:.7f}".rstrip("0").rstrip(".")
 
 
 def create_keypair() -> tuple[str, str]:
@@ -140,6 +170,78 @@ def parse_balances_for_response(balances: list[dict[str, Any]]) -> dict[str, str
     if "usdc" not in out:
         out["usdc"] = "0"
     return out
+
+
+def send_xlm_payment(
+    from_secret_key: str,
+    to_public_key: str,
+    amount_xlm: str,
+) -> str | None:
+    """
+    Send native XLM from one account to another. Returns Stellar transaction hash on success, None on failure.
+    amount_xlm: string amount (e.g. "10.5").
+    """
+    try:
+        server = Server(horizon_url=_get_horizon_url())
+        keypair = Keypair.from_secret(from_secret_key)
+        account = server.load_account(keypair.public_key)
+        network = Network.TESTNET_NETWORK_PASSPHRASE if _is_testnet() else Network.PUBLIC_NETWORK_PASSPHRASE
+        tx = (
+            TransactionBuilder(
+                source_account=account,
+                network_passphrase=network,
+                base_fee=100,
+            )
+            .append_operation(Payment(destination=to_public_key, asset=Asset.native(), amount=amount_xlm))
+            .set_timeout(30)
+            .build()
+        )
+        tx.sign(keypair)
+        result = server.submit_transaction(tx)
+        tx_hash = result.get("hash") if isinstance(result, dict) else getattr(result, "hash", None)
+        if tx_hash:
+            logger.info("[STELLAR] XLM payment sent: tx=%s amount=%s to=%s", tx_hash[:8], amount_xlm, to_public_key[:8])
+        return str(tx_hash) if tx_hash else None
+    except Exception as e:
+        logger.warning("[STELLAR] send_xlm_payment failed: %s", e)
+        return None
+
+
+def send_usdc_payment(
+    from_secret_key: str,
+    to_public_key: str,
+    amount_usdc: str,
+) -> str | None:
+    """
+    Send USDC from one account to another. Returns Stellar transaction hash on success, None on failure.
+    amount_usdc: string amount (e.g. "10.50").
+    """
+    try:
+        server = Server(horizon_url=_get_horizon_url())
+        issuer = _get_usdc_issuer()
+        keypair = Keypair.from_secret(from_secret_key)
+        account = server.load_account(keypair.public_key)
+        asset = Asset("USDC", issuer)
+        network = Network.TESTNET_NETWORK_PASSPHRASE if _is_testnet() else Network.PUBLIC_NETWORK_PASSPHRASE
+        tx = (
+            TransactionBuilder(
+                source_account=account,
+                network_passphrase=network,
+                base_fee=100,
+            )
+            .append_operation(Payment(destination=to_public_key, asset=asset, amount=amount_usdc))
+            .set_timeout(30)
+            .build()
+        )
+        tx.sign(keypair)
+        result = server.submit_transaction(tx)
+        tx_hash = result.get("hash") if isinstance(result, dict) else getattr(result, "hash", None)
+        if tx_hash:
+            logger.info("[STELLAR] Payment sent: tx=%s amount=%s to=%s", tx_hash[:8], amount_usdc, to_public_key[:8])
+        return str(tx_hash) if tx_hash else None
+    except Exception as e:
+        logger.warning("[STELLAR] send_usdc_payment failed: %s", e)
+        return None
 
 
 def create_and_fund_wallet() -> tuple[str, str] | None:

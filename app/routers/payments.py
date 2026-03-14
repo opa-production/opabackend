@@ -4,12 +4,25 @@ Payment processing endpoints
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import List, Optional
 import json
 import logging
 
 from app.database import get_db
-from app.models import Booking, PaymentMethod, Client, BookingStatus, PaymentMethodType, Payment, PaymentStatus, Withdrawal, WithdrawalStatus, BookingExtensionRequest
+from app.models import (
+    Booking,
+    PaymentMethod,
+    Client,
+    BookingStatus,
+    PaymentMethodType,
+    Payment,
+    PaymentStatus,
+    Withdrawal,
+    WithdrawalStatus,
+    BookingExtensionRequest,
+    ClientWallet,
+    StellarPaymentTransaction,
+)
 from app.auth import get_current_client
 from app.schemas import (
     PaymentRequest,
@@ -17,8 +30,20 @@ from app.schemas import (
     PaymentStatusResponse,
     PaymentStatusEnum,
     BookingExtensionPaymentRequest,
+    ArdenaPayPaymentRequest,
+    ArdenaPayPaymentResponse,
+    StellarTransactionResponse,
 )
 from app.services.mpesa_stk_push import sendStkPush
+from app.services.stellar_wallet import (
+    get_balances,
+    parse_balances_for_response,
+    send_usdc_payment,
+    send_xlm_payment,
+    ksh_to_usdc,
+    ksh_to_xlm,
+    _get_platform_public_key,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -225,6 +250,160 @@ async def process_payment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Payment processing failed: {str(e)}"
         )
+
+
+@router.post("/client/payments/process-ardena-pay", response_model=ArdenaPayPaymentResponse, status_code=status.HTTP_200_OK)
+async def process_ardena_pay(
+    request: ArdenaPayPaymentRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Pay for a booking with Ardena Pay. Use payWithXlm=true to deduct XLM (converted from KSH);
+    otherwise deducts USDC. UI can show XLM balance and convert to USD; when paying in XLM,
+    backend deducts XLM and UI shows remaining XLM (converted to USD).
+    """
+    platform_key = _get_platform_public_key()
+    if not platform_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ardena Pay is not configured (missing STELLAR_PLATFORM_PUBLIC_KEY).",
+        )
+    wallet = db.query(ClientWallet).filter(ClientWallet.client_id == current_client.id).first()
+    if not wallet or not wallet.stellar_secret_encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Ardena Pay wallet found. Create one with POST /api/v1/client/wallet.",
+        )
+    booking_query = db.query(Booking).options(joinedload(Booking.car)).filter(Booking.client_id == current_client.id)
+    if isinstance(request.booking_id, int):
+        booking = booking_query.filter(Booking.id == request.booking_id).first()
+    else:
+        booking = booking_query.filter(Booking.booking_id == request.booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    if booking.status != BookingStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Booking has already been processed. Current status: {booking.status}",
+        )
+    amount_ksh = float(booking.total_price)
+    amount_usdc_str = ksh_to_usdc(amount_ksh)
+    balances_raw = get_balances(wallet.stellar_public_key)
+    balances = parse_balances_for_response(balances_raw)
+    pay_with_xlm = getattr(request, "pay_with_xlm", False)
+
+    if pay_with_xlm:
+        amount_xlm_str = ksh_to_xlm(amount_ksh)
+        balance_xlm = float(balances.get("xlm", "0"))
+        amount_xlm_float = float(amount_xlm_str)
+        if balance_xlm < amount_xlm_float:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Insufficient XLM balance. Need {amount_xlm_str} XLM, have {balance_xlm:.2f} XLM.",
+            )
+        tx_hash = send_xlm_payment(
+            wallet.stellar_secret_encrypted,
+            platform_key,
+            amount_xlm_str,
+        )
+        if not tx_hash:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Stellar XLM payment failed. Please try again or use another payment method.",
+            )
+        result_desc = "Ardena Pay XLM"
+        amount_xlm_for_record = amount_xlm_str
+    else:
+        balance_usdc = float(balances.get("usdc", "0"))
+        amount_usdc_float = float(amount_usdc_str)
+        if balance_usdc < amount_usdc_float:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Insufficient USDC balance. Need {amount_usdc_str} USDC, have {balance_usdc:.2f} USDC.",
+            )
+        tx_hash = send_usdc_payment(
+            wallet.stellar_secret_encrypted,
+            platform_key,
+            amount_usdc_str,
+        )
+        if not tx_hash:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Stellar payment failed. Please try again or use another payment method.",
+            )
+        result_desc = "Ardena Pay USDC"
+        amount_xlm_for_record = None
+
+    try:
+        payment = Payment(
+            booking_id=booking.id,
+            client_id=current_client.id,
+            amount=amount_ksh,
+            status=PaymentStatus.COMPLETED,
+            result_desc=result_desc,
+            stellar_tx_hash=tx_hash,
+        )
+        db.add(payment)
+        stellar_tx = StellarPaymentTransaction(
+            booking_id=booking.id,
+            client_id=current_client.id,
+            amount_ksh=amount_ksh,
+            amount_usdc=amount_usdc_str,
+            amount_xlm=amount_xlm_for_record,
+            stellar_tx_hash=tx_hash,
+            from_address=wallet.stellar_public_key,
+            to_address=platform_key,
+        )
+        db.add(stellar_tx)
+        booking.status = BookingStatus.CONFIRMED
+        booking.status_updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(booking)
+    except Exception as e:
+        db.rollback()
+        logger.exception("Ardena Pay: failed to save payment/booking: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Payment was sent but recording failed. Contact support with your wallet address.",
+        )
+    from app.models import Car
+    from app.routers.bookings import booking_to_response
+    from app.schemas import BookingResponse
+    final_booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.id == booking.id).first()
+    if not final_booking:
+        raise HTTPException(status_code=404, detail="Booking not found after payment")
+    return ArdenaPayPaymentResponse(
+        success=True,
+        booking_id=str(final_booking.booking_id),
+        amount_ksh=amount_ksh,
+        amount_usdc=amount_usdc_str,
+        amount_xlm=amount_xlm_for_record,
+        stellar_tx_hash=tx_hash,
+        message="Payment successful. Your booking is now confirmed.",
+        paid_at=datetime.now(timezone.utc),
+        booking=BookingResponse(**booking_to_response(final_booking)),
+    )
+
+
+@router.get("/client/payments/transactions", response_model=List[StellarTransactionResponse])
+def list_ardena_pay_transactions(
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+    booking_id: Optional[int] = Query(None, description="Filter by booking id"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """
+    List Ardena Pay (USDC) transactions for the current client. Optionally filter by booking_id.
+    """
+    q = db.query(StellarPaymentTransaction).filter(StellarPaymentTransaction.client_id == current_client.id)
+    if booking_id is not None:
+        q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
+    rows = q.order_by(StellarPaymentTransaction.created_at.desc()).offset(skip).limit(limit).all()
+    return [StellarTransactionResponse.model_validate(r) for r in rows]
 
 
 @router.post(
