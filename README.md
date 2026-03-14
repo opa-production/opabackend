@@ -55,6 +55,12 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `PUT /api/v1/client/profile` - Update client profile (bio, fun_fact, mobile_number, id_number)
 - `PUT /api/v1/client/change-password` - Change client password (requires current password verification)
 
+### Ardena Pay (Stellar wallet – client, requires authentication)
+- `GET /api/v1/client/wallet` - Get current client's Stellar wallet (public key, XLM/USDC balances). On testnet, includes `secret_key` for importing into Freighter/Lobstr.
+- `POST /api/v1/client/wallet` - Create a Stellar wallet (funded on testnet, USDC trust line added). Fails if wallet already exists.
+
+A wallet is created automatically when a client registers. Optional **.env**: `STELLAR_HORIZON_URL` (default testnet), `STELLAR_USDC_ISSUER_TESTNET`, `STELLAR_SHOW_SECRET_TESTNET=1` to include secret in response.
+
 ### Car Management (Host only, requires authentication)
 - `POST /api/v1/cars/basics` - Step 1: Create car with basic information
 - `PUT /api/v1/cars/{car_id}/specs` - Step 2: Update car technical specifications

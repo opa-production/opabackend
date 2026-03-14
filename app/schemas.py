@@ -191,6 +191,17 @@ class ClientProfileUpdateRequest(BaseModel):
     gender: str = Field(..., min_length=1, max_length=20, description="Gender (required, e.g., 'male', 'female', 'other')")
 
 
+class WalletResponse(BaseModel):
+    """Ardena Pay (Stellar) wallet: public key, balances (stored in DB, refreshed from Horizon on GET), optional secret (testnet only)."""
+    public_key: str = Field(..., description="Stellar public key (address) – share this to receive USDC")
+    network: str = Field("testnet", description="Network: testnet or mainnet")
+    balance_xlm: str = Field("0", description="Native XLM balance")
+    balance_usdc: str = Field("0", description="USDC balance")
+    balance_updated_at: Optional[datetime] = Field(None, description="When balances were last fetched from Stellar")
+    secret_key: Optional[str] = Field(None, description="Secret key – only on testnet; keep private and use to import into Freighter/Lobstr")
+    created_at: Optional[datetime] = None
+
+
 class ClientProfileResponse(BaseModel):
     """Complete client profile response"""
     id: int

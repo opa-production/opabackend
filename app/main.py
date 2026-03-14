@@ -43,7 +43,7 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, client_kyc as client_kyc_router, veriff_webhook as veriff_webhook_router
+from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, wallet as wallet_router, subscribers as subscribers_router, host_kyc as host_kyc_router, client_kyc as client_kyc_router, veriff_webhook as veriff_webhook_router
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -363,14 +363,14 @@ def migrate_database():
         print("✓ Support conversations table will be created")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Create database tables on startup and create default super admin"""
-    print("🚀 Starting up...")
-    
+def _run_sync_startup():
+    """
+    All blocking DB work (migrations, create_all, column checks). Run in a thread
+    so the event loop stays free and the server can accept requests immediately.
+    """
     # Run migrations first (may drop old tables)
     migrate_database()
-    
+
     # Then create all tables (will recreate any dropped tables with new schema)
     Base.metadata.create_all(bind=engine)
     
@@ -437,6 +437,28 @@ async def startup_event():
         from app.models import ClientKyc
         ClientKyc.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created client_kycs table")
+
+    # Ensure client_wallets table exists (Ardena Pay / Stellar)
+    if 'client_wallets' not in table_names:
+        print("⚠️  client_wallets table missing, creating...")
+        from app.models import ClientWallet
+        ClientWallet.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created client_wallets table")
+    else:
+        # Add balance cache columns if missing (stored in DB for easier retrieval)
+        cw_columns = [col['name'] for col in inspector.get_columns('client_wallets')]
+        if 'balance_xlm' not in cw_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_xlm VARCHAR(50) DEFAULT '0'"))
+            print("✓ Added balance_xlm column to client_wallets table")
+        if 'balance_usdc' not in cw_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_usdc VARCHAR(50) DEFAULT '0'"))
+            print("✓ Added balance_usdc column to client_wallets table")
+        if 'balance_updated_at' not in cw_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_updated_at DATETIME"))
+            print("✓ Added balance_updated_at column to client_wallets table")
 
     # Ensure host_booking_issues table exists
     if 'host_booking_issues' not in table_names:
@@ -530,6 +552,12 @@ async def startup_event():
     
     print("✅ Startup complete!")
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Create database tables on startup and create default super admin. Blocking work runs in a thread so server stays responsive."""
+    print("🚀 Starting up...")
+    await asyncio.to_thread(_run_sync_startup)
     # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
     asyncio.create_task(_run_expire_pending_bookings_loop())
 
@@ -605,6 +633,7 @@ app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
 app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
+app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay (Wallet)"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
@@ -625,6 +654,12 @@ app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"
 app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
+
+
+@app.get("/health")
+def health():
+    """Lightweight readiness check; no DB. Use this to verify the server is reachable (e.g. from UI or load balancer)."""
+    return {"status": "ok"}
 
 
 @app.get("/host/kyc/redirect", response_class=HTMLResponse)

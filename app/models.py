@@ -264,6 +264,25 @@ class ClientKyc(Base):
     client: Mapped["Client"] = relationship(back_populates="client_kycs")
 
 
+class ClientWallet(Base):
+    """Ardena Pay: Stellar wallet for a client (one per client). Testnet/mainnet."""
+    __tablename__ = "client_wallets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, unique=True, index=True)
+    network: Mapped[str] = mapped_column(String(20), nullable=False, default="testnet")  # testnet | mainnet
+    stellar_public_key: Mapped[str] = mapped_column(String(56), nullable=False, unique=True, index=True)
+    stellar_secret_encrypted: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # optional: encrypted or plain for testnet
+    # Cached balances (updated on each GET /client/wallet from Horizon)
+    balance_xlm: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="0")
+    balance_usdc: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="0")
+    balance_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+    client: Mapped["Client"] = relationship(back_populates="wallet")
+
+
 class ClientBiometricToken(Base):
     """Device token used for biometric-based local unlock (no biometrics stored)."""
     __tablename__ = "client_biometric_tokens"
@@ -516,6 +535,7 @@ class BookingIssue(Base):
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
 Client.payments = relationship("Payment", back_populates="client", cascade="all, delete-orphan")
+Client.wallet = relationship("ClientWallet", back_populates="client", uselist=False, cascade="all, delete-orphan")
 # Update Client model to include host ratings relationship
 Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include ratings received from hosts
