@@ -22,6 +22,7 @@ from app.services.stellar_wallet import (
     create_and_fund_wallet,
     get_balances,
     parse_balances_for_response,
+    ksh_to_usd_float,
     _is_testnet,
 )
 from sqlalchemy.orm import Session
@@ -146,4 +147,18 @@ def list_wallet_transactions(
     if booking_id is not None:
         q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
     rows = q.order_by(StellarPaymentTransaction.created_at.desc()).offset(skip).limit(limit).all()
-    return [StellarTransactionResponse.model_validate(r) for r in rows]
+    return [
+        StellarTransactionResponse(
+            id=r.id,
+            booking_id=r.booking_id,
+            amount_ksh=r.amount_ksh,
+            amount_usd=ksh_to_usd_float(r.amount_ksh),
+            amount_usdc=r.amount_usdc,
+            amount_xlm=r.amount_xlm,
+            stellar_tx_hash=r.stellar_tx_hash,
+            from_address=r.from_address,
+            to_address=r.to_address,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]

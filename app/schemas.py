@@ -2122,10 +2122,11 @@ class ArdenaPayPaymentResponse(BaseModel):
 
 
 class StellarTransactionResponse(BaseModel):
-    """Single Ardena Pay (USDC or XLM) transaction record for listing."""
+    """Single Ardena Pay (USDC or XLM) transaction record for listing. amount_usd is always set for UI display."""
     id: int
     booking_id: int
     amount_ksh: float
+    amount_usd: float = 0.0
     amount_usdc: Optional[str] = None
     amount_xlm: Optional[str] = None
     stellar_tx_hash: str

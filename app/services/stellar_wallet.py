@@ -48,6 +48,12 @@ def ksh_to_usdc(amount_ksh: float) -> str:
     return f"{usdc:.7f}".rstrip("0").rstrip(".")
 
 
+def ksh_to_usd_float(amount_ksh: float) -> float:
+    """Convert KSH to USD value for display. Uses USDC_PER_KSH (1 KSH = X USD)."""
+    rate = float(os.getenv("USDC_PER_KSH", "0.0075"))
+    return amount_ksh * rate
+
+
 def ksh_to_xlm(amount_ksh: float) -> str:
     """
     Convert KSH to XLM amount for payment. Uses USDC_PER_KSH (KSH→USD) and USD_PER_XLM (1 XLM = X USD).

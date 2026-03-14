@@ -42,6 +42,7 @@ from app.services.stellar_wallet import (
     send_xlm_payment,
     ksh_to_usdc,
     ksh_to_xlm,
+    ksh_to_usd_float,
     _get_platform_public_key,
 )
 
@@ -397,13 +398,28 @@ def list_ardena_pay_transactions(
     limit: int = Query(50, ge=1, le=100),
 ):
     """
-    List Ardena Pay (USDC) transactions for the current client. Optionally filter by booking_id.
+    List Ardena Pay (USDC/XLM) transactions for the current client. Optionally filter by booking_id.
+    amount_usd is always set (from amount_ksh) for display.
     """
     q = db.query(StellarPaymentTransaction).filter(StellarPaymentTransaction.client_id == current_client.id)
     if booking_id is not None:
         q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
     rows = q.order_by(StellarPaymentTransaction.created_at.desc()).offset(skip).limit(limit).all()
-    return [StellarTransactionResponse.model_validate(r) for r in rows]
+    return [
+        StellarTransactionResponse(
+            id=r.id,
+            booking_id=r.booking_id,
+            amount_ksh=r.amount_ksh,
+            amount_usd=ksh_to_usd_float(r.amount_ksh),
+            amount_usdc=r.amount_usdc,
+            amount_xlm=r.amount_xlm,
+            stellar_tx_hash=r.stellar_tx_hash,
+            from_address=r.from_address,
+            to_address=r.to_address,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.post(
