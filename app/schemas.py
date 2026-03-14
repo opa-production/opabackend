@@ -1706,6 +1706,42 @@ class BookingCreateRequest(BaseModel):
         return self
 
 
+class BookingUpdateRequest(BaseModel):
+    """
+    Request to update a PENDING booking (e.g. change dates or details before paying).
+    All fields are optional; only provided fields are updated.
+    """
+    start_date: Optional[datetime] = Field(None, description="New rental start date")
+    end_date: Optional[datetime] = Field(None, description="New rental end date")
+    pickup_time: Optional[str] = Field(None, max_length=10)
+    return_time: Optional[str] = Field(None, max_length=10)
+    pickup_location: Optional[str] = Field(None, max_length=500)
+    return_location: Optional[str] = Field(None, max_length=500)
+    damage_waiver_enabled: Optional[bool] = None
+    drive_type: Optional[str] = Field(None, description="'self' or 'withDriver'")
+    check_in_preference: Optional[str] = Field(None, description="'self' or 'assisted'")
+    special_requirements: Optional[str] = Field(None, max_length=2000)
+    dropoff_same_as_pickup: Optional[bool] = Field(None, description="If true, return_location = pickup_location")
+
+    @field_validator("pickup_location", "return_location", mode="before")
+    @classmethod
+    def parse_location(cls, v: Union[str, List[str], None]) -> Optional[str]:
+        return _location_to_str(v)
+
+    @model_validator(mode="after")
+    def validate_dates_if_provided(self):
+        if self.start_date is not None and self.end_date is not None and self.start_date >= self.end_date:
+            raise ValueError("End date must be after start date")
+        if self.start_date is not None:
+            now = datetime.now(timezone.utc)
+            start = self.start_date.replace(tzinfo=timezone.utc) if self.start_date.tzinfo is None else self.start_date
+            if start < now:
+                raise ValueError("Start date cannot be in the past")
+        if self.dropoff_same_as_pickup and not self.return_location and self.pickup_location:
+            self.return_location = self.pickup_location
+        return self
+
+
 class BookingResponse(BaseModel):
     """Booking response with full details"""
     id: int

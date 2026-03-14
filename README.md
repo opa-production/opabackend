@@ -193,6 +193,21 @@ Use one ngrok tunnel on port 8001 for both Payhero and Veriff callbacks.
 
 7. **Verify:** After a test payment, check server logs for `[PAYHERO CALLBACK] Received payload:` — if it appears, the callback is working and status will update to completed.
 
+### Pending booking expiry
+
+Unpaid **pending** bookings are automatically cancelled after a set time so the car becomes available again.
+
+- **`PENDING_BOOKING_EXPIRE_MINUTES`** (default: `30`) – Cancel PENDING bookings that have no completed payment and were created more than this many minutes ago.
+- **`PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES`** (default: `1`) – How often the background task runs to check for expired bookings.
+
+Optional in `.env`:
+```env
+PENDING_BOOKING_EXPIRE_MINUTES=30
+PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES=1
+```
+
+On startup you’ll see a log like: `[EXPIRE] Pending booking expiry: expire after 30 min, check every 1 min`. When bookings are expired: `[EXPIRE] Expired N unpaid pending booking(s)`.
+
 ## Troubleshooting: Backend not reachable
 
 If the admin panel or mobile app can't reach the backend (no logs appear):

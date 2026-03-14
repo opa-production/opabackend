@@ -15,6 +15,7 @@ from app.models import Car, Client, Booking, BookingStatus, Host, VerificationSt
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
+    BookingUpdateRequest,
     BookingResponse,
     BookingListResponse,
     BookingCancelRequest,
@@ -400,6 +401,133 @@ async def get_booking_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found"
         )
+    return booking_to_response(booking)
+
+
+@router.put("/client/bookings/{booking_id}", response_model=BookingResponse)
+async def update_booking(
+    booking_id: str,
+    request: BookingUpdateRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a PENDING booking (e.g. change dates or details before paying).
+
+    - Only **pending** bookings can be updated. After payment, cancel and rebook to change dates.
+    - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id.
+    - Send only the fields you want to change; omitted fields keep their current values.
+    - If you change dates, availability is re-checked (other bookings and host-blocked dates).
+    - Pricing is recalculated from the car's current daily rate when dates or damage waiver change.
+
+    Requires client authentication.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
+        )
+    if booking.status != BookingStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only pending bookings can be updated. Current status: {booking.status.value}. Cancel and create a new booking to change after payment."
+        )
+
+    car = booking.car
+    if not car:
+        car = db.query(Car).options(joinedload(Car.host)).filter(Car.id == booking.car_id).first()
+    if not car:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Car not found")
+
+    # Resolve new dates: use request if provided, else keep existing
+    new_start = request.start_date if request.start_date is not None else booking.start_date
+    new_end = request.end_date if request.end_date is not None else booking.end_date
+    new_start = _to_utc(new_start)
+    new_end = _to_utc(new_end)
+    if new_start >= new_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after start date"
+        )
+
+    # If dates changed, run full availability and pricing validation
+    dates_changed = new_start != _to_utc(booking.start_date) or new_end != _to_utc(booking.end_date)
+    new_damage_waiver = request.damage_waiver_enabled if request.damage_waiver_enabled is not None else booking.damage_waiver_enabled
+
+    if dates_changed:
+        rental_days = (new_end - new_start).days
+        if rental_days < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rental period must be at least 1 day"
+            )
+        if car.min_rental_days and rental_days < car.min_rental_days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Minimum rental period for this car is {car.min_rental_days} days"
+            )
+        if car.max_rental_days and rental_days > car.max_rental_days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Maximum rental period for this car is {car.max_rental_days} days"
+            )
+        if check_booking_overlap(db, car.id, new_start, new_end, exclude_booking_id=booking.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Car is not available for the selected dates. Please choose different dates."
+            )
+        if check_blocked_date_overlap(db, car.id, new_start, new_end):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The host has blocked some of the selected dates. Please choose different dates."
+            )
+        booking.start_date = new_start
+        booking.end_date = new_end
+        booking.rental_days = rental_days
+        base_price = car.daily_rate * rental_days
+        damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if new_damage_waiver else 0
+        booking.base_price = base_price
+        booking.damage_waiver_fee = damage_waiver_fee
+        booking.damage_waiver_enabled = new_damage_waiver
+        booking.total_price = base_price + damage_waiver_fee
+    else:
+        if request.damage_waiver_enabled is not None and request.damage_waiver_enabled != booking.damage_waiver_enabled:
+            booking.damage_waiver_enabled = request.damage_waiver_enabled
+            booking.damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * booking.rental_days if booking.damage_waiver_enabled else 0
+            booking.total_price = booking.base_price + booking.damage_waiver_fee
+
+    # Drive type: validate if changed
+    new_drive = request.drive_type if request.drive_type is not None else booking.drive_type
+    if new_drive is not None:
+        drive_setting = getattr(car, "drive_setting", None) or "self_only"
+        allowed = DRIVE_SETTING_TO_ALLOWED.get(drive_setting, ["self"])
+        if new_drive.strip().lower() not in [a.lower() for a in allowed]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"This car only allows: {', '.join(allowed)}. You selected '{new_drive}'."
+            )
+        booking.drive_type = new_drive.strip()
+
+    # Optional fields: apply if provided
+    if request.pickup_time is not None:
+        booking.pickup_time = request.pickup_time
+    if request.return_time is not None:
+        booking.return_time = request.return_time
+    if request.pickup_location is not None:
+        booking.pickup_location = request.pickup_location
+    if request.return_location is not None:
+        booking.return_location = request.return_location
+    if request.check_in_preference is not None:
+        booking.check_in_preference = request.check_in_preference
+    if request.special_requirements is not None:
+        booking.special_requirements = request.special_requirements
+
+    db.commit()
+    db.refresh(booking)
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.id == booking.id).first()
     return booking_to_response(booking)
 
 
