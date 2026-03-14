@@ -6,10 +6,12 @@ FastAPI backend for a car rental platform with server-side validation and multi-
 
 1. Make sure you have [UV](https://docs.astral.sh/) on your system:
 
-2.Setup the uv application:
+2. Setup the uv application:
 ```bash
   uv sync
 ```
+
+**Adding new dependencies:** When you add a dependency to `pyproject.toml`, run `uv lock` and commit the updated `uv.lock`. Deploy uses `uv sync --locked`, so the lockfile must include every dependency or deploy will fail (and the app would fail at runtime with `ModuleNotFoundError`).
 
 3. Run the application:
 ```bash

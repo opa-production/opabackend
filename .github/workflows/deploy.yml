@@ -19,5 +19,5 @@ jobs:
             cd /var/www/opabackend
             git pull
             source .venv/bin/activate
-            uv sync
+            uv sync --locked
             sudo systemctl restart fastapi
