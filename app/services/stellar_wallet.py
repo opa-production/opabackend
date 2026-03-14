@@ -1,6 +1,8 @@
 """
 Ardena Pay: Stellar wallet creation, funding (testnet), USDC trust line, and balance fetching.
 """
+from __future__ import annotations
+
 import os
 import logging
 import requests

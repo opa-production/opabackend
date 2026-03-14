@@ -4,6 +4,8 @@ Ardena Pay: Stellar wallet (client) – get wallet, create wallet, balances.
 Balances are fetched from Stellar Horizon on each GET, saved to DB, then returned to the UI.
 UI receives: public_key, network, balance_xlm, balance_usdc, balance_updated_at, secret_key (testnet), created_at.
 """
+from __future__ import annotations
+
 import os
 import logging
 from datetime import datetime, timezone
