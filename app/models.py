@@ -488,6 +488,7 @@ class Booking(Base):
     # Timestamps
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    pickup_reminder_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     client: Mapped["Client"] = relationship(back_populates="bookings")

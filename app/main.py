@@ -9,6 +9,7 @@ import asyncio
 import os
 import time
 import logging
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Request logging - logs every API call with status code
@@ -499,6 +500,10 @@ def _run_sync_startup():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
             print("✓ Added dropoff_confirmed_at column to bookings table")
+        if 'pickup_reminder_sent_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_reminder_sent_at DATETIME"))
+            print("✓ Added pickup_reminder_sent_at column to bookings table")
 
     # Check and add missing columns to withdrawals table
     if 'withdrawals' in table_names:
@@ -578,6 +583,8 @@ async def startup_event():
     asyncio.create_task(asyncio.to_thread(_run_sync_startup))
     # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
     asyncio.create_task(_run_expire_pending_bookings_loop())
+    # Send pickup reminders when pickup is in ~24 hours
+    asyncio.create_task(_run_pickup_reminder_loop())
 
 
 async def _run_expire_pending_bookings_loop():
@@ -601,6 +608,46 @@ async def _run_expire_pending_bookings_loop():
                 _log.info("[EXPIRE] Expired %s unpaid pending booking(s)", n)
         except Exception as e:
             _log.exception("[EXPIRE] Error expiring pending bookings: %s", e)
+        finally:
+            db.close()
+
+
+async def _run_pickup_reminder_loop():
+    """Every 30–60 min, send pickup reminder emails for bookings whose start_date is in ~24 hours."""
+    from app.models import Booking, BookingStatus
+    from app.services.booking_emails import send_pickup_reminder_email
+
+    _log = logging.getLogger(__name__)
+    interval_minutes = max(15, int(os.getenv("PICKUP_REMINDER_CHECK_INTERVAL_MINUTES", "30")))
+    interval_seconds = interval_minutes * 60
+    _log.info("[PICKUP_REMINDER] Loop started, check every %s min", interval_minutes)
+    while True:
+        await asyncio.sleep(interval_seconds)
+        db = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            window_start = now + timedelta(hours=23)
+            window_end = now + timedelta(hours=25)
+            bookings = (
+                db.query(Booking)
+                .filter(
+                    Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+                    Booking.start_date >= window_start,
+                    Booking.start_date <= window_end,
+                    Booking.pickup_reminder_sent_at.is_(None),
+                )
+                .all()
+            )
+            for b in bookings:
+                try:
+                    ok = await asyncio.to_thread(send_pickup_reminder_email, b.id)
+                    if ok:
+                        b.pickup_reminder_sent_at = now
+                        db.commit()
+                except Exception as e:
+                    _log.exception("[PICKUP_REMINDER] Failed for booking_id=%s: %s", b.id, e)
+        except Exception as e:
+            _log.exception("[PICKUP_REMINDER] Loop error: %s", e)
         finally:
             db.close()
 

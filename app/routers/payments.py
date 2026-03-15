@@ -1,7 +1,7 @@
 """
 Payment processing endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
@@ -67,9 +67,10 @@ def _payment_to_status_response(payment: Payment) -> PaymentStatusResponse:
 
 @router.post("/client/payments/process", response_model=PaymentResponse, status_code=status.HTTP_200_OK)
 async def process_payment(
+    background_tasks: BackgroundTasks,
     request: PaymentRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Process payment for a booking (simulated payment gateway).
@@ -211,6 +212,9 @@ async def process_payment(
         
         db.commit()
         db.refresh(booking)
+        if payment_method.method_type != PaymentMethodType.MPESA:
+            from app.services.booking_emails import send_booking_ticket_email
+            background_tasks.add_task(send_booking_ticket_email, booking.id)
         
         logger.info(f"💳 [PROCESS PAYMENT] ✅ Request processed: booking_id={request.booking_id}, "
                    f"amount={booking.total_price}, status={booking.status}")
@@ -255,6 +259,7 @@ async def process_payment(
 
 @router.post("/client/payments/process-ardena-pay", response_model=ArdenaPayPaymentResponse, status_code=status.HTTP_200_OK)
 async def process_ardena_pay(
+    background_tasks: BackgroundTasks,
     request: ArdenaPayPaymentRequest,
     current_client: Client = Depends(get_current_client),
     db: Session = Depends(get_db),
@@ -376,6 +381,8 @@ async def process_ardena_pay(
     ).filter(Booking.id == booking.id).first()
     if not final_booking:
         raise HTTPException(status_code=404, detail="Booking not found after payment")
+    from app.services.booking_emails import send_booking_ticket_email
+    background_tasks.add_task(send_booking_ticket_email, booking.id)
     return ArdenaPayPaymentResponse(
         success=True,
         booking_id=str(final_booking.booking_id),
@@ -706,7 +713,11 @@ def _normalize_callback_payload(data: dict) -> dict:
 
 
 @router.post("/mpesa/callback")
-async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
+async def mpesa_callback(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
     Payhero M-Pesa STK Push Callback URL.
     Called by Payhero after the user completes, cancels, or fails the STK push.
@@ -783,6 +794,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             payment.mpesa_transaction_date = str(transaction_date) if transaction_date else None
             
             booking = db.query(Booking).filter(Booking.id == payment.booking_id).first()
+            booking_just_confirmed = bool(booking and booking.status == BookingStatus.PENDING and payment.extension_request_id is None)
 
             if booking and booking.status == BookingStatus.PENDING:
                 booking.status = BookingStatus.CONFIRMED
@@ -812,6 +824,9 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                     booking.status_updated_at = datetime.now(timezone.utc)
 
             db.commit()
+            if booking_just_confirmed:
+                from app.services.booking_emails import send_booking_ticket_email
+                background_tasks.add_task(send_booking_ticket_email, booking.id)
             logger.info("[PAYHERO CALLBACK] Payment successful: Receipt=%s, CheckoutRequestID=%s", receipt, checkout_request_id)
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
