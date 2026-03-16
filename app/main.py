@@ -561,6 +561,11 @@ def _run_sync_startup():
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_reminder_sent_at DATETIME"))
             print("✓ Added pickup_reminder_sent_at column to bookings table")
 
+        if 'client_deleted_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN client_deleted_at DATETIME"))
+            print("✓ Added client_deleted_at column to bookings table")
+
     # Check and add missing columns to withdrawals table
     if 'withdrawals' in table_names:
         columns = [col['name'] for col in inspector.get_columns('withdrawals')]
@@ -588,6 +593,14 @@ def _run_sync_startup():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_transaction_date VARCHAR(50)"))
             print("✓ Added mpesa_transaction_date column to withdrawals table")
+
+    # Check and add missing columns to refunds table
+    if 'refunds' in table_names:
+        columns = [col['name'] for col in inspector.get_columns('refunds')]
+        if 'client_deleted_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE refunds ADD COLUMN client_deleted_at DATETIME"))
+            print("✓ Added client_deleted_at column to refunds table")
     
     # Create default super admin if it doesn't exist
     db = SessionLocal()

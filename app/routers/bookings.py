@@ -413,9 +413,14 @@ async def get_my_bookings(
     
     Requires client authentication.
     """
-    query = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.client_id == current_client.id)
+    query = (
+        db.query(Booking)
+        .options(joinedload(Booking.car).joinedload(Car.host))
+        .filter(
+            Booking.client_id == current_client.id,
+            Booking.client_deleted_at.is_(None),
+        )
+    )
     
     # Filter by status if provided
     if status:
@@ -974,11 +979,14 @@ async def get_my_completed_bookings(
     - Uses the same shape as `/client/bookings`
     - Results are paginated and sorted by creation date (newest first)
     """
-    query = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
-    ).filter(
-        Booking.client_id == current_client.id,
-        Booking.status == BookingStatus.COMPLETED,
+    query = (
+        db.query(Booking)
+        .options(joinedload(Booking.car).joinedload(Car.host))
+        .filter(
+            Booking.client_id == current_client.id,
+            Booking.status == BookingStatus.COMPLETED,
+            Booking.client_deleted_at.is_(None),
+        )
     )
 
     total = query.count()
@@ -1482,6 +1490,43 @@ async def delete_booking(
     
     db.commit()
     
+    return None
+
+
+@router.delete("/client/bookings/{booking_id}/completed", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_completed_booking(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Hide/delete a **completed or cancelled** booking from the client's view.
+
+    - Does **not** delete the booking from the database; it sets `client_deleted_at`
+      so the client no longer sees it in their bookings list.
+    - Only bookings owned by the current client and with status `completed` or
+      `cancelled` are allowed.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.COMPLETED, BookingStatus.CANCELLED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only completed or cancelled bookings can be deleted from your history.",
+        )
+
+    if booking.client_deleted_at is not None:
+        # Already hidden; treat as success
+        return None
+
+    booking.client_deleted_at = datetime.utcnow()
+    db.commit()
+
     return None
 
 

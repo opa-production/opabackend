@@ -203,6 +203,11 @@ class Refund(Base):
         nullable=True,
         doc="When the refund was actually processed (money sent).",
     )
+    client_deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the client chose to hide/delete this refund from their view.",
+    )
 
     # Relationships
     booking: Mapped["Booking"] = relationship("Booking", foreign_keys=[booking_id])
@@ -628,6 +633,11 @@ class Booking(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     pickup_reminder_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the client chose to hide/delete this booking from their view.",
+    )
 
     # Relationships
     client: Mapped["Client"] = relationship(back_populates="bookings")

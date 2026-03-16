@@ -7,10 +7,11 @@ their bookings (e.g. after cancellations).
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.auth import get_current_client
-from app.models import Refund, Booking, Client
+from app.models import Refund, Booking, Client, RefundStatus
 from app.schemas import ClientRefundResponse, ClientRefundListResponse
 
 router = APIRouter()
@@ -51,7 +52,10 @@ async def list_my_refunds(
     q = (
         db.query(Refund)
         .options(joinedload(Refund.booking))
-        .filter(Refund.client_id == current_client.id)
+        .filter(
+            Refund.client_id == current_client.id,
+            Refund.client_deleted_at.is_(None),
+        )
     )
 
     if booking_id is not None:
@@ -97,4 +101,47 @@ async def get_my_refund_details(
             detail="Refund not found",
         )
     return _client_refund_to_response(refund)
+
+
+@router.delete("/client/refunds/{refund_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_refund(
+    refund_id: int,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Hide/delete a refund from the client's view.
+
+    - Only refunds belonging to the current client are allowed.
+    - Only `completed` or `failed` refunds can be deleted.
+    - This is a soft delete: sets `client_deleted_at` so it no longer appears
+      in `/client/refunds` responses.
+    """
+    refund = (
+        db.query(Refund)
+        .filter(
+            Refund.id == refund_id,
+            Refund.client_id == current_client.id,
+        )
+        .first()
+    )
+    if not refund:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Refund not found",
+        )
+
+    if refund.status not in (RefundStatus.COMPLETED, RefundStatus.FAILED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only completed or failed refunds can be deleted.",
+        )
+
+    if refund.client_deleted_at is not None:
+        return None
+
+    refund.client_deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return None
 
