@@ -85,6 +85,12 @@ class Payment(Base):
     mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Pesapal: Card payment tracking (Visa/Mastercard)
+    pesapal_order_tracking_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    pesapal_merchant_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    pesapal_confirmation_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pesapal_payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g., "Visa", "Mastercard"
+    pesapal_payment_account: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Last 4 digits
     # Ardena Pay: Stellar transaction hash when payment was made via USDC
     stellar_tx_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 

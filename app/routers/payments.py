@@ -2,11 +2,13 @@
 Payment processing endpoints
 """
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Request, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 import json
 import logging
+import os
 
 from app.database import get_db
 from app.models import (
@@ -35,6 +37,12 @@ from app.schemas import (
     StellarTransactionResponse,
 )
 from app.services.mpesa_stk_push import sendStkPush
+from app.services.pesapal_payment import (
+    get_ipn_id,
+    submit_order,
+    build_billing_address,
+    get_transaction_status as pesapal_get_transaction_status,
+)
 from app.services.stellar_wallet import (
     get_balances,
     parse_balances_for_response,
@@ -54,14 +62,17 @@ def _payment_to_status_response(payment: Payment) -> PaymentStatusResponse:
     """Build PaymentStatusResponse from Payment model."""
     status_enum = PaymentStatusEnum(payment.status)
     message = payment.result_desc if payment.status != PaymentStatus.PENDING else None
+    # For M-Pesa use checkout_request_id; for Pesapal card use order_tracking_id in both fields for polling
+    checkout_or_tracking = payment.checkout_request_id or payment.pesapal_order_tracking_id or ""
     return PaymentStatusResponse(
-        checkout_request_id=payment.checkout_request_id or "",
+        checkout_request_id=checkout_or_tracking,
         booking_id=payment.booking.booking_id,
         status=status_enum,
         message=message,
         amount=payment.amount,
         paid_at=payment.updated_at if payment.status == PaymentStatus.COMPLETED else None,
         mpesa_receipt_number=payment.mpesa_receipt_number,
+        order_tracking_id=payment.pesapal_order_tracking_id,
     )
 
 
@@ -152,6 +163,7 @@ async def process_payment(
 
         transaction_id = f"TXN-{booking.booking_id}"
         payment_message = "Payment processed successfully. Your booking is now confirmed."
+        redirect_url: Optional[str] = None
 
         # If payment method is M-Pesa, call STK Push and create pending payment (do not confirm booking yet)
         if payment_method.method_type == PaymentMethodType.MPESA:
@@ -205,14 +217,79 @@ async def process_payment(
             
             payment_message = "M-Pesa STK Push initiated. Please check your phone to complete the payment. You can poll GET /client/payments/status?checkout_request_id=... for status."
             # Do NOT set booking to CONFIRMED here; callback will do it when payment succeeds.
+        elif payment_method.method_type in (PaymentMethodType.VISA, PaymentMethodType.MASTERCARD):
+            # Pesapal card: use OUR API base (not PESAPAL_BASE_URL). So Pesapal and user can reach our /pesapal/return and IPN.
+            # e.g. https://api.ardena.xyz/api/v1 or ngrok https://xxx.ngrok-free.dev/api/v1
+            callback_base = os.getenv("PESAPAL_CALLBACK_BASE_URL", "").rstrip("/")
+            if not callback_base:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Card payment is not configured. Set PESAPAL_CALLBACK_BASE_URL to your API base (e.g. https://api.ardena.xyz/api/v1 or ngrok URL + /api/v1).",
+                )
+            ipn_url = f"{callback_base}/pesapal/ipn"
+            ipn_id = get_ipn_id(ipn_url)
+            if not ipn_id:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Pesapal IPN not configured. Set PESAPAL_IPN_ID in env or ensure PESAPAL_CALLBACK_BASE_URL is correct.",
+                )
+            callback_url = f"{callback_base}/pesapal/return"
+            parts = (current_client.full_name or "Client").strip().split(None, 1)
+            first_name = parts[0] if parts else "Client"
+            last_name = parts[1] if len(parts) > 1 else ""
+            billing_address = build_billing_address(
+                email=current_client.email,
+                first_name=first_name,
+                last_name=last_name,
+                phone_number=current_client.mobile_number,
+                country_code="KE",
+            )
+            payment = Payment(
+                booking_id=booking.id,
+                client_id=current_client.id,
+                amount=float(booking.total_price),
+                status=PaymentStatus.PENDING,
+            )
+            db.add(payment)
+            db.commit()
+            db.refresh(payment)
+            # Pesapal requires a unique "id" per SubmitOrderRequest (retries or same booking = new payment row = unique id)
+            ref_safe = str(booking.booking_id).replace(" ", "_")
+            reference = f"{ref_safe}-{payment.id}"[:50]
+            result = submit_order(
+                amount=float(booking.total_price),
+                currency="KES",
+                description=f"Booking {booking.booking_id}"[:100],
+                callback_url=callback_url,
+                notification_id=ipn_id,
+                billing_address=billing_address,
+                reference=reference,
+            )
+            if result.get("status") != "success":
+                db.delete(payment)
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=result.get("message", "Pesapal order submission failed"),
+                )
+            payment.pesapal_order_tracking_id = result.get("order_tracking_id")
+            payment.pesapal_merchant_reference = result.get("merchant_reference")
+            db.commit()
+            db.refresh(payment)
+            transaction_id = result.get("order_tracking_id") or transaction_id
+            payment_message = (
+                "Redirect to complete card payment. You can poll GET /client/payments/status?booking_id=... for status."
+            )
+            redirect_url = result.get("redirect_url")
+            # Build response and return with redirect_url (handled below)
         else:
-            # Non-M-Pesa (e.g. card): confirm booking immediately
+            # Other methods (e.g. future): confirm booking immediately
             booking.status = BookingStatus.CONFIRMED # type: ignore
             booking.status_updated_at = datetime.now(timezone.utc) # type: ignore
         
         db.commit()
         db.refresh(booking)
-        if payment_method.method_type != PaymentMethodType.MPESA:
+        if payment_method.method_type not in (PaymentMethodType.MPESA, PaymentMethodType.VISA, PaymentMethodType.MASTERCARD):
             from app.services.booking_emails import send_booking_ticket_email
             background_tasks.add_task(send_booking_ticket_email, booking.id)
         
@@ -242,7 +319,8 @@ async def process_payment(
             transaction_id=str(transaction_id),
             message=payment_message,
             paid_at=datetime.now(timezone.utc),
-            booking=BookingResponse(**booking_to_response(final_booking))  # Include full booking details
+            booking=BookingResponse(**booking_to_response(final_booking)),  # Include full booking details
+            redirect_url=redirect_url,
         )
         
     except HTTPException:
@@ -626,35 +704,212 @@ async def process_extension_payment(
         booking=BookingResponse(**booking_to_response(final_booking)),
     )
 
+@router.get("/pesapal/return")
+async def pesapal_return(
+    OrderTrackingId: Optional[str] = Query(None, alias="OrderTrackingId"),
+    OrderMerchantReference: Optional[str] = Query(None, alias="OrderMerchantReference"),
+):
+    """
+    Pesapal redirects the customer here after payment. We send them to FRONTEND_URL (e.g. oparides://payment/result).
+    For custom schemes, many browsers don't follow 302 so we return HTML with "Open in app" link and auto-redirect attempt.
+    """
+    from fastapi.responses import RedirectResponse, HTMLResponse
+    from app.config import settings
+    frontend = (settings.FRONTEND_URL or "https://ardena.co.ke").strip()
+    if frontend.endswith("://"):
+        base = frontend
+    else:
+        base = frontend.rstrip("/")
+    params = []
+    if OrderTrackingId:
+        params.append(f"OrderTrackingId={OrderTrackingId}")
+    if OrderMerchantReference:
+        params.append(f"OrderMerchantReference={OrderMerchantReference}")
+    qs = "&".join(params)
+    path_suffix = f"payment/result?{qs}" if qs else "payment/result"
+    redirect_to = f"{base}{path_suffix}" if base.endswith("://") else f"{base}/{path_suffix}"
+    # Custom scheme (e.g. oparides://): return HTML so user can tap "Open in app" if 302 is not followed
+    if "://" in base and not base.startswith("http"):
+        import html
+        safe_url = html.escape(redirect_to, quote=True)
+        html_content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment complete</title>
+<script>window.location.href = {repr(redirect_to)};</script>
+</head><body>
+<p>Payment submitted. Opening app...</p>
+<p><a href="{safe_url}">Open in app</a> if nothing happens.</p>
+</body></html>"""
+        return HTMLResponse(content=html_content, status_code=200)
+    return RedirectResponse(url=redirect_to, status_code=302)
+
+
+def _pesapal_ipn_handle(
+    background_tasks: BackgroundTasks,
+    OrderTrackingId: Optional[str],
+    OrderMerchantReference: Optional[str],
+) -> dict:
+    """Shared logic for Pesapal IPN (GET with OrderTrackingId, OrderMerchantReference)."""
+    if not OrderTrackingId:
+        logger.warning("[PESAPAL IPN] Missing OrderTrackingId")
+        return {"status": "ok"}
+    background_tasks.add_task(
+        _pesapal_ipn_process,
+        order_tracking_id=OrderTrackingId,
+        merchant_reference=OrderMerchantReference or "",
+    )
+    return {"status": "ok"}
+
+
+@router.get("/pesapal/ipn")
+async def pesapal_ipn(
+    background_tasks: BackgroundTasks,
+    OrderTrackingId: Optional[str] = Query(None, alias="OrderTrackingId"),
+    OrderMerchantReference: Optional[str] = Query(None, alias="OrderMerchantReference"),
+):
+    """
+    Pesapal IPN. Pesapal sends GET with OrderTrackingId and OrderMerchantReference.
+    """
+    return _pesapal_ipn_handle(background_tasks, OrderTrackingId, OrderMerchantReference)
+
+
+@router.get("/payments/ipn")
+async def payments_ipn(
+    background_tasks: BackgroundTasks,
+    OrderTrackingId: Optional[str] = Query(None, alias="OrderTrackingId"),
+    OrderMerchantReference: Optional[str] = Query(None, alias="OrderMerchantReference"),
+):
+    """Alias for Pesapal IPN so dashboard URL https://api.ardena.xyz/api/v1/payments/ipn works."""
+    return _pesapal_ipn_handle(background_tasks, OrderTrackingId, OrderMerchantReference)
+
+
+def _apply_pesapal_result_to_payment(db: Session, payment: Payment, result: dict) -> None:
+    """Apply Pesapal GetTransactionStatus result to payment and booking. Caller must commit."""
+    payment_status = (result.get("payment_status") or "").lower()
+    if payment_status == "completed":
+        payment.status = PaymentStatus.COMPLETED
+        payment.result_desc = result.get("message") or "Card payment completed"
+        payment.pesapal_confirmation_code = result.get("confirmation_code")
+        payment.pesapal_payment_method = result.get("payment_method")
+        payment.pesapal_payment_account = result.get("payment_account")
+        booking = payment.booking
+        if booking and booking.status == BookingStatus.PENDING:
+            booking.status = BookingStatus.CONFIRMED
+            booking.status_updated_at = datetime.now(timezone.utc)
+        if payment.extension_request_id and booking:
+            ext = (
+                db.query(BookingExtensionRequest)
+                .filter(BookingExtensionRequest.id == payment.extension_request_id)
+                .first()
+            )
+            if ext and ext.status == "host_approved":
+                from app.routers.bookings import DAMAGE_WAIVER_PRICE_PER_DAY
+                ext.status = "paid"
+                extra_days = ext.extra_days
+                extra_base = float(booking.daily_rate or 0) * extra_days
+                extra_damage = (
+                    DAMAGE_WAIVER_PRICE_PER_DAY * extra_days
+                    if booking.damage_waiver_enabled
+                    else 0
+                )
+                booking.base_price = (booking.base_price or 0) + extra_base
+                booking.damage_waiver_fee = (booking.damage_waiver_fee or 0) + extra_damage
+                booking.total_price = (booking.base_price or 0) + (booking.damage_waiver_fee or 0)
+                booking.rental_days = (booking.rental_days or 0) + extra_days
+                booking.end_date = ext.requested_end_date
+                booking.status_updated_at = datetime.now(timezone.utc)
+        db.commit()
+        if booking and payment.extension_request_id is None:
+            from app.services.booking_emails import send_booking_ticket_email
+            try:
+                send_booking_ticket_email(booking.id)
+            except Exception as e:
+                logger.exception("[PESAPAL] send_booking_ticket_email failed: %s", e)
+    elif payment_status in ("failed", "invalid", "reversed"):
+        payment.status = PaymentStatus.FAILED
+        payment.result_desc = result.get("message") or f"Payment status: {payment_status}"
+        db.commit()
+
+
+def _pesapal_ipn_process(
+    order_tracking_id: str,
+    merchant_reference: str,
+) -> None:
+    """Background task: fetch Pesapal status and update Payment + Booking. Uses its own DB session."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        result = pesapal_get_transaction_status(order_tracking_id)
+        if result.get("status") != "success":
+            logger.warning("[PESAPAL IPN] GetTransactionStatus failed: %s", result.get("message"))
+            return
+        payment = (
+            db.query(Payment)
+            .options(joinedload(Payment.booking))
+            .filter(
+                Payment.pesapal_order_tracking_id == order_tracking_id,
+                Payment.status == PaymentStatus.PENDING,
+            )
+            .first()
+        )
+        if not payment and merchant_reference:
+            payment = (
+                db.query(Payment)
+                .options(joinedload(Payment.booking))
+                .filter(
+                    Payment.pesapal_merchant_reference == merchant_reference,
+                    Payment.status == PaymentStatus.PENDING,
+                )
+                .first()
+            )
+        if not payment:
+            logger.warning("[PESAPAL IPN] No pending payment for OrderTrackingId=%s", order_tracking_id)
+            return
+        payment_status = (result.get("payment_status") or "").lower()
+        if payment_status in ("completed", "failed", "invalid", "reversed"):
+            _apply_pesapal_result_to_payment(db, payment, result)
+            logger.info("[PESAPAL IPN] Updated payment: order_tracking_id=%s, status=%s", order_tracking_id, payment_status)
+    except Exception as e:
+        logger.exception("[PESAPAL IPN] Error: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.get("/client/payments/status", response_model=PaymentStatusResponse)
 async def get_payment_status(
-    checkout_request_id: Optional[str] = Query(None, description="M-Pesa CheckoutRequestID returned from process payment"),
+    checkout_request_id: Optional[str] = Query(None, description="M-Pesa CheckoutRequestID or Pesapal order_tracking_id"),
+    order_tracking_id: Optional[str] = Query(None, description="Pesapal order_tracking_id (alternative to checkout_request_id)"),
     booking_id: Optional[str] = Query(None, description="Booking ID (e.g. BK-ABC12345); returns latest payment for this booking"),
     current_client: Client = Depends(get_current_client),
     db: Session = Depends(get_db),
 ):
     """
-    Get status of an M-Pesa STK push payment. Poll this after initiating payment to detect:
+    Get status of an M-Pesa or Pesapal card payment. Poll after initiating payment.
     - **pending**: User has not yet completed or cancelled.
     - **completed**: Payment successful; booking is confirmed.
-    - **cancelled**: User cancelled on phone (ResultCode 1032).
+    - **cancelled**: User cancelled (M-Pesa) or failed (card).
     - **failed**: e.g. insufficient funds, timeout (see `message` for reason).
-    
-    Provide either `checkout_request_id` (from the process payment response) or `booking_id`.
+
+    Provide one of: checkout_request_id, order_tracking_id, or booking_id.
     """
-    if not checkout_request_id and not booking_id:
+    lookup_id = checkout_request_id or order_tracking_id
+    if not lookup_id and not booking_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provide either checkout_request_id or booking_id",
+            detail="Provide one of: checkout_request_id, order_tracking_id, or booking_id",
         )
-    
-    if checkout_request_id:
+
+    if lookup_id:
         payment = (
             db.query(Payment)
             .options(joinedload(Payment.booking))
             .filter(
-                Payment.checkout_request_id == checkout_request_id,
                 Payment.client_id == current_client.id,
+                or_(Payment.checkout_request_id == lookup_id, Payment.pesapal_order_tracking_id == lookup_id),
             )
             .first()
         )
@@ -676,7 +931,20 @@ async def get_payment_status(
             .order_by(Payment.created_at.desc())
             .first()
         )
-    
+
+    # If still pending and Pesapal: sync status from Pesapal (IPN may not have fired or may be delayed)
+    if (
+        payment
+        and payment.status == PaymentStatus.PENDING
+        and payment.pesapal_order_tracking_id
+    ):
+        result = pesapal_get_transaction_status(payment.pesapal_order_tracking_id)
+        if result.get("status") == "success":
+            payment_status = (result.get("payment_status") or "").lower()
+            if payment_status in ("completed", "failed", "invalid", "reversed"):
+                _apply_pesapal_result_to_payment(db, payment, result)
+                db.refresh(payment)
+
     if not payment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

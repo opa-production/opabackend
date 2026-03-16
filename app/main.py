@@ -235,7 +235,7 @@ def migrate_database():
                 conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
             print("✓ Added is_flagged column to feedbacks table")
 
-    # Check and add extension_request_id to payments table (for booking extensions)
+    # Check and add extension_request_id and Pesapal columns to payments table
     if 'payments' in table_names:
         columns = [col['name'] for col in inspector.get_columns('payments')]
         if 'extension_request_id' not in columns:
@@ -246,6 +246,27 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE payments ADD COLUMN stellar_tx_hash VARCHAR(64)"))
             print("✓ Added stellar_tx_hash column to payments table")
+        # Pesapal card payment columns (Visa/Mastercard)
+        if 'pesapal_order_tracking_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_order_tracking_id VARCHAR(255)"))
+            print("✓ Added pesapal_order_tracking_id column to payments table")
+        if 'pesapal_merchant_reference' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_merchant_reference VARCHAR(255)"))
+            print("✓ Added pesapal_merchant_reference column to payments table")
+        if 'pesapal_confirmation_code' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_confirmation_code VARCHAR(100)"))
+            print("✓ Added pesapal_confirmation_code column to payments table")
+        if 'pesapal_payment_method' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_payment_method VARCHAR(50)"))
+            print("✓ Added pesapal_payment_method column to payments table")
+        if 'pesapal_payment_account' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_payment_account VARCHAR(50)"))
+            print("✓ Added pesapal_payment_account column to payments table")
 
     # Ensure stellar_payment_transactions table exists (Ardena Pay USDC/XLM payment records)
     if 'stellar_payment_transactions' not in table_names:
