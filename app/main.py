@@ -44,7 +44,27 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, wallet as wallet_router, subscribers as subscribers_router, host_kyc as host_kyc_router, client_kyc as client_kyc_router, veriff_webhook as veriff_webhook_router
+from app.routers import (
+    host_auth,
+    client_auth,
+    cars,
+    payment_methods,
+    feedback,
+    support,
+    media,
+    bookings,
+    messages,
+    payments,
+    host_ratings,
+    client_ratings,
+    host_earnings,
+    wallet as wallet_router,
+    subscribers as subscribers_router,
+    host_kyc as host_kyc_router,
+    client_kyc as client_kyc_router,
+    veriff_webhook as veriff_webhook_router,
+    client_refunds as client_refunds_router,
+)
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -58,6 +78,7 @@ from app.admin import (
     bookings as admin_bookings,
     withdrawals as admin_withdrawals,
     subscribers as admin_subscribers,
+    refunds as admin_refunds,
 )
 from app.models import Admin
 from app.auth import get_password_hash, get_admin_by_email
@@ -84,6 +105,7 @@ app = FastAPI(
         {"name": "Host Ratings", "description": "Client ratings for hosts"},
         {"name": "Client Ratings", "description": "Host ratings for clients (renters)"},
         {"name": "Host Earnings", "description": "Host earnings summary, transactions, and withdrawal requests"},
+        {"name": "Client Refunds", "description": "Client‑visible refund records for bookings"},
         {"name": "Admin Auth", "description": "Admin authentication"},
         {"name": "Admin User Management", "description": "User management"},
         {"name": "Admin Car Management", "description": "Car verification"},
@@ -95,6 +117,7 @@ app = FastAPI(
         {"name": "Admin Support", "description": "Support conversation management"},
         {"name": "Admin Bookings", "description": "Booking management and oversight"},
         {"name": "Admin Withdrawals", "description": "View and process host withdrawal requests"},
+        {"name": "Admin Refunds", "description": "Track and manage booking refunds for finance"},
         {"name": "Newsletter", "description": "Public subscribe / unsubscribe"},
         {"name": "Admin Subscribers", "description": "Newsletter subscriber list and send email to all"},
         {"name": "Host KYC", "description": "Host KYC verification (Veriff)"},
@@ -738,6 +761,7 @@ app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
+app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
 app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])
@@ -754,6 +778,7 @@ app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"
 app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
+app.include_router(admin_refunds.router, prefix="/api/v1", tags=["Admin Refunds"])
 
 
 @app.get("/health")

@@ -103,6 +103,121 @@ class Payment(Base):
     extension_request: Mapped["BookingExtensionRequest"] = relationship(foreign_keys=[extension_request_id])
 
 
+class RefundStatus(str, enum.Enum):
+    """Lifecycle of a refund record."""
+    PENDING = "pending"      # Created, awaiting finance processing
+    PROCESSING = "processing"  # Being processed at PSP/bank/M-Pesa
+    COMPLETED = "completed"  # Money has been sent back to client
+    FAILED = "failed"        # Attempted but failed at PSP/bank
+    CANCELLED = "cancelled"  # Admin cancelled / closed without paying out
+
+
+class Refund(Base):
+    """
+    Admin‑visible refund record so finance can track refunds for bookings.
+
+    This does not itself move money; it records the decision, amounts, and processing
+    status so finance can reconcile with payment providers.
+    """
+    __tablename__ = "refunds"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
+    payment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("payments.id"),
+        nullable=True,
+        index=True,
+        doc="Optional link to a specific payment row when refunding a particular attempt.",
+    )
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+
+    # Financials (in KES)
+    amount_original: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        doc="Total amount originally paid for this booking (or payment) in KES at refund creation time.",
+    )
+    amount_refund: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        doc="Amount to be refunded to the client in KES, according to policy/decision.",
+    )
+    percentage: Mapped[float] = mapped_column(
+        Float,
+        nullable=True,
+        doc="Refund percentage of the original amount (0.0‑1.0) for reporting.",
+    )
+
+    status: Mapped[RefundStatus] = mapped_column(
+        SQLEnum(RefundStatus),
+        default=RefundStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+
+    # Who/why
+    reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Short reason visible to client (e.g. 'Cancelled within 24h – 50% refund').",
+    )
+    internal_note: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Internal note for finance/admin (e.g. PSP reference, manual overrides).",
+    )
+    created_by_admin_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("admins.id"),
+        nullable=True,
+        index=True,
+        doc="Admin who created this refund record.",
+    )
+    processed_by_admin_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("admins.id"),
+        nullable=True,
+        index=True,
+        doc="Admin who marked this refund as completed/failed/cancelled.",
+    )
+
+    # PSP / external references (optional)
+    external_reference: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+        doc="Optional reference from payment provider (reversal ID, transaction ID, etc.).",
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        onupdate=func.now(),
+        nullable=True,
+    )
+    processed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the refund was actually processed (money sent).",
+    )
+
+    # Relationships
+    booking: Mapped["Booking"] = relationship("Booking", foreign_keys=[booking_id])
+    payment: Mapped[Optional["Payment"]] = relationship("Payment", foreign_keys=[payment_id])
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    created_by_admin: Mapped[Optional["Admin"]] = relationship(
+        "Admin",
+        foreign_keys=[created_by_admin_id],
+    )
+    processed_by_admin: Mapped[Optional["Admin"]] = relationship(
+        "Admin",
+        foreign_keys=[processed_by_admin_id],
+    )
+
+
 class Host(Base):
     """Car owners/rental hosts"""
     __tablename__ = "hosts"
@@ -518,6 +633,7 @@ class Booking(Base):
     client: Mapped["Client"] = relationship(back_populates="bookings")
     car: Mapped["Car"] = relationship(back_populates="bookings")
     payments: Mapped[list["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+
 
 
 class BookingExtensionRequest(Base):

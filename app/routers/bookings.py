@@ -7,11 +7,26 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func
 from typing import Optional, List
 from datetime import datetime, timezone
+import logging
 import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate, BookingExtensionRequest, BookingIssue
+from app.models import (
+    Car,
+    Client,
+    Booking,
+    BookingStatus,
+    Host,
+    VerificationStatus,
+    CarBlockedDate,
+    BookingExtensionRequest,
+    BookingIssue,
+    Payment,
+    PaymentStatus,
+    Refund,
+    RefundStatus,
+)
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
@@ -32,6 +47,7 @@ from app.schemas import (
 from app.services.receipt import build_receipt_pdf
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Damage waiver price per day (KES)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
@@ -64,12 +80,98 @@ def generate_booking_id() -> str:
     return f"BK-{unique_part}"
 
 
+def _compute_refund_preview_for_cancellation(booking: Booking):
+    """
+    Compute refund preview (base trip only, excludes extension payments) for a booking
+    that is currently in a cancellable state (pending or confirmed).
+    Returns (refund_eligible, refund_amount, refund_percentage, refund_policy_code, refund_policy_reason).
+    """
+    refund_eligible = None
+    refund_amount = None
+    refund_percentage = None
+    refund_policy_code = None
+    refund_policy_reason = None
+
+    try:
+        # Only attempt refund preview for bookings that are not already cancelled or completed
+        if booking.status in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
+            completed_base_payments = [
+                p
+                for p in getattr(booking, "payments", []) or []
+                if p.status == PaymentStatus.COMPLETED and p.extension_request_id is None
+            ]
+            total_paid = float(sum(p.amount for p in completed_base_payments))
+
+            if total_paid <= 0:
+                refund_eligible = False
+                refund_amount = 0.0
+                refund_percentage = 0.0
+                refund_policy_code = "NO_PAYMENT"
+                refund_policy_reason = "No completed payment found for this booking – nothing to refund."
+            else:
+                now = datetime.now(timezone.utc)
+                start = booking.start_date
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                hours_to_pickup = (start - now).total_seconds() / 3600.0
+
+                if hours_to_pickup > 24:
+                    refund_percentage = 1.0
+                    refund_policy_code = "FULL_BEFORE_24H"
+                    refund_policy_reason = "Cancelled more than 24 hours before pickup – full refund of amounts paid."
+                elif 0 <= hours_to_pickup <= 24:
+                    refund_percentage = 0.5
+                    refund_policy_code = "HALF_WITHIN_24H"
+                    refund_policy_reason = "Cancelled within 24 hours before pickup – 50% refund of amounts paid."
+                else:
+                    refund_percentage = 0.0
+                    refund_policy_code = "NO_REFUND_AFTER_START"
+                    refund_policy_reason = "Pickup time has passed – no automatic refund, contact support for review."
+
+                refund_amount = round(total_paid * refund_percentage, 2)
+                refund_eligible = refund_percentage > 0
+
+    except Exception:
+        # Refund preview is best‑effort; never break booking serialization because of it.
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = None
+        refund_policy_reason = None
+
+    return refund_eligible, refund_amount, refund_percentage, refund_policy_code, refund_policy_reason
+
+
 def booking_to_response(booking: Booking) -> dict:
     """Convert Booking model to BookingResponse dict"""
     car = booking.car
     host = car.host if car else None
     
     client = getattr(booking, "client", None)
+
+    # ----- Refund preview (base trip only, excludes extension payments) -----
+    if booking.status in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
+        (
+            refund_eligible,
+            refund_amount,
+            refund_percentage,
+            refund_policy_code,
+            refund_policy_reason,
+        ) = _compute_refund_preview_for_cancellation(booking)
+    elif booking.status == BookingStatus.CANCELLED:
+        # For already cancelled bookings in generic responses, point to refunds history.
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = "ALREADY_CANCELLED"
+        refund_policy_reason = "Booking is already cancelled – see finance/refunds history for actual refund details."
+    else:
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = None
+        refund_policy_reason = None
+
     return {
         "id": booking.id,
         "booking_id": booking.booking_id,
@@ -114,6 +216,11 @@ def booking_to_response(booking: Booking) -> dict:
         "status": booking.status.value,
         "status_updated_at": booking.status_updated_at,
         "cancellation_reason": booking.cancellation_reason,
+        "refund_eligible": refund_eligible,
+        "refund_amount": refund_amount,
+        "refund_percentage": refund_percentage,
+        "refund_policy_code": refund_policy_code,
+        "refund_policy_reason": refund_policy_reason,
         
         # Timestamps
         "created_at": booking.created_at,
@@ -565,12 +672,21 @@ async def cancel_booking(
     db: Session = Depends(get_db)
 ):
     """
-    Cancel an existing booking.
-
+    Cancel an existing booking and apply the platform refund policy.
+    
+    Policy (base trip payments only, extensions are handled separately):
+    - If there is **no completed payment** for this booking yet, the booking is simply cancelled (no refund needed).
+    - If cancelled **more than 24 hours before pickup**, the client is eligible for a **full refund** of amounts paid.
+    - If cancelled **within 24 hours before pickup but before pickup time**, the client is eligible for a **50% refund**.
+    - If pickup time has **already passed**, there is **no automatic refund**; support can review edge cases manually.
+    
+    The response includes `refund_eligible`, `refund_amount`, `refund_percentage`, and `refund_policy_code` so
+    the app can show clear messaging to the client and route any manual refund handling to support/finance.
+    
     - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id
     - Only pending or confirmed bookings can be cancelled
     - Only the booking owner can cancel
-
+    
     Requires client authentication.
     """
     booking = _client_booking_query(db, booking_id, current_client.id)
@@ -587,6 +703,15 @@ async def cancel_booking(
             detail=f"Cannot cancel booking with status '{booking.status.value}'. Only pending or confirmed bookings can be cancelled."
         )
     
+    # Compute refund preview BEFORE changing status so we know what policy applies right now
+    (
+        refund_eligible,
+        refund_amount,
+        refund_percentage,
+        refund_policy_code,
+        refund_policy_reason,
+    ) = _compute_refund_preview_for_cancellation(booking)
+
     # Update booking status
     booking.status = BookingStatus.CANCELLED
     booking.status_updated_at = datetime.utcnow()
@@ -595,7 +720,108 @@ async def cancel_booking(
     
     db.commit()
     db.refresh(booking)
+
+    # Build response and override refund fields with the preview we computed pre‑cancellation
+    response_dict = booking_to_response(booking)
+    response_dict.update(
+        {
+            "refund_eligible": refund_eligible,
+            "refund_amount": refund_amount,
+            "refund_percentage": refund_percentage,
+            "refund_policy_code": refund_policy_code,
+            "refund_policy_reason": refund_policy_reason,
+        }
+    )
+
+    # --- Auto-create Refund record when applicable for finance/admin tracking ---
+    try:
+        # Only create when there is a positive refund amount
+        if isinstance(refund_amount, (int, float)) and refund_amount > 0:
+            # Sum completed base payments again to get a stable "original" amount
+            completed_base_payments = [
+                p
+                for p in getattr(booking, "payments", []) or []
+                if p.status == PaymentStatus.COMPLETED and p.extension_request_id is None
+            ]
+            amount_original = float(sum(p.amount for p in completed_base_payments)) if completed_base_payments else float(booking.total_price or 0)  # type: ignore
+
+            client = getattr(booking, "client", None)
+            if not client:
+                client = db.query(Client).filter(Client.id == booking.client_id).first()
+
+            refund = Refund(
+                booking_id=booking.id,
+                payment_id=completed_base_payments[0].id if completed_base_payments else None,
+                client_id=client.id if client else booking.client_id,
+                amount_original=amount_original,
+                amount_refund=float(refund_amount),
+                percentage=float(refund_percentage) if isinstance(refund_percentage, (int, float)) else None,
+                status=RefundStatus.PENDING,
+                reason=str(refund_policy_reason) if refund_policy_reason else None,
+                internal_note=f"Auto-created from client cancellation ({refund_policy_code})",
+            )
+            db.add(refund)
+            db.commit()
+            msg = (
+                f"[CANCEL BOOKING] Auto-created refund id={refund.id} "
+                f"for booking_id={booking.booking_id} amount_refund={refund_amount} policy={refund_policy_code}"
+            )
+            logger.info(msg)
+            print(msg, flush=True)
+        else:
+            msg = (
+                f"[CANCEL BOOKING] No refund record created for booking_id={booking.booking_id} "
+                f"(refund_amount={refund_amount}, policy={refund_policy_code})"
+            )
+            logger.info(msg)
+            print(msg, flush=True)
+    except Exception as e:
+        # Do not break client cancellation if refund tracking fails; just log.
+        logger.exception("[CANCEL BOOKING] Failed to auto-create refund for booking_id=%s: %s", booking.booking_id, e)
+
+    # Log the full response for debugging (trim large fields)
+    try:
+        log_payload = {
+            "booking_id": response_dict.get("booking_id"),
+            "status": response_dict.get("status"),
+            "refund_eligible": response_dict.get("refund_eligible"),
+            "refund_amount": response_dict.get("refund_amount"),
+            "refund_percentage": response_dict.get("refund_percentage"),
+            "refund_policy_code": response_dict.get("refund_policy_code"),
+            "refund_policy_reason": response_dict.get("refund_policy_reason"),
+        }
+        logger.info("[CANCEL BOOKING] Response payload: %s", log_payload)
+        print(f"[CANCEL BOOKING] Response payload: {log_payload}", flush=True)
+    except Exception:
+        pass
     
+    return response_dict
+
+
+@router.get("/client/bookings/{booking_id}/cancellation-preview", response_model=BookingResponse)
+async def get_booking_cancellation_preview(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Get a live preview of what will happen if the client cancels this booking **right now**.
+
+    The returned `BookingResponse` includes these fields populated:
+    - **refund_eligible**: whether an automatic refund applies under the current policy.
+    - **refund_amount**: estimated refund amount in KES (base trip only, excludes extensions).
+    - **refund_percentage**: fraction between 0.0 and 1.0.
+    - **refund_policy_code** and **refund_policy_reason**: explain which rule was applied.
+
+    This endpoint **does not cancel** the booking; it is safe to call from the UI before showing the
+    final "Confirm cancellation" dialog.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
     return booking_to_response(booking)
 
 

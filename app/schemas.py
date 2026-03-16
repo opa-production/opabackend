@@ -1827,6 +1827,28 @@ class BookingResponse(BaseModel):
     status_updated_at: Optional[datetime] = None
     cancellation_reason: Optional[str] = None
     
+    # Refund / cancellation details (for client visibility)
+    refund_eligible: Optional[bool] = Field(
+        default=None,
+        description="Whether this booking is currently eligible for an automatic refund under the platform policy",
+    )
+    refund_amount: Optional[float] = Field(
+        default=None,
+        description="Estimated refund amount in KES if the client cancels now (base trip only, excludes extensions)",
+    )
+    refund_percentage: Optional[float] = Field(
+        default=None,
+        description="Estimated refund percentage (0.0‑1.0) that applies if cancelled now",
+    )
+    refund_policy_code: Optional[str] = Field(
+        default=None,
+        description="Short code for the policy rule applied, e.g. FULL_BEFORE_24H, HALF_WITHIN_24H, NO_REFUND_AFTER_START, NO_PAYMENT",
+    )
+    refund_policy_reason: Optional[str] = Field(
+        default=None,
+        description="Human‑readable explanation of how the refund rule was applied",
+    )
+    
     # Timestamps
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -2041,6 +2063,126 @@ class WithdrawalUpdateRequest(BaseModel):
     """Admin update: set status and optional notes."""
     status: str = Field(..., description="completed, rejected, or cancelled")
     admin_notes: Optional[str] = Field(None, max_length=2000)
+
+
+class RefundStatusEnum(str, Enum):
+    """Refund lifecycle for admin/finance UI."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RefundCreateRequest(BaseModel):
+    """
+    Admin request to create a refund record for a booking/payment.
+
+    Normally used after a cancellation when the policy says a refund is due.
+    """
+    booking_id: int = Field(..., description="Internal numeric booking ID (not BK-… string)")
+    payment_id: Optional[int] = Field(
+        None,
+        description="Optional payment ID when refunding a specific payment attempt",
+    )
+    amount_refund: float = Field(..., gt=0, description="Refund amount in KES to send back to client")
+    percentage: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Refund percentage (0.0‑1.0) of the original amount for reporting",
+    )
+    reason: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="Short reason visible to client (e.g. 'Cancelled >24h – full refund').",
+    )
+    internal_note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Internal note for finance/admin (PSP reference, manual override, etc.)",
+    )
+
+
+class RefundUpdateRequest(BaseModel):
+    """
+    Admin request to update a refund record status and internal details.
+    """
+    status: RefundStatusEnum = Field(..., description="New refund status")
+    internal_note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Optional updated internal note for this refund",
+    )
+    external_reference: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional PSP/bank reference for this refund",
+    )
+
+
+class RefundResponse(BaseModel):
+    """Single refund record for admin UI."""
+    id: int
+    booking_id: int
+    payment_id: Optional[int] = None
+    client_id: int
+    amount_original: float
+    amount_refund: float
+    percentage: Optional[float] = None
+    status: RefundStatusEnum
+    reason: Optional[str] = None
+    internal_note: Optional[str] = None
+    created_by_admin_id: Optional[int] = None
+    processed_by_admin_id: Optional[int] = None
+    external_reference: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None
+
+    # Useful denormalized info for the admin web:
+    booking_code: Optional[str] = Field(
+        None,
+        description="Human‑readable booking code (BK‑…)",
+    )
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RefundListResponse(BaseModel):
+    """Paginated list of refunds for admin UI."""
+    refunds: List[RefundResponse]
+    total: int
+    page: int
+    limit: int
+
+
+class ClientRefundResponse(BaseModel):
+    """Refund record as visible to a client."""
+    id: int
+    booking_id: int
+    amount_refund: float
+    status: RefundStatusEnum
+    reason: Optional[str] = None
+    created_at: datetime
+    processed_at: Optional[datetime] = None
+
+    # Helpful extras for the app
+    booking_code: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientRefundListResponse(BaseModel):
+    """Paginated list of refunds for a client."""
+    refunds: List[ClientRefundResponse]
+    total: int
+    skip: int
+    limit: int
 
 
 class BookingCancelRequest(BaseModel):
