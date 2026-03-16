@@ -281,6 +281,12 @@ def migrate_database():
                 conn.execute(text("ALTER TABLE stellar_payment_transactions ADD COLUMN amount_xlm VARCHAR(50)"))
             print("✓ Added amount_xlm column to stellar_payment_transactions table")
 
+    # Ensure incoming_stellar_payments table exists (incoming wallet payments for in-app messages)
+    if 'incoming_stellar_payments' not in table_names:
+        from app.models import IncomingStellarPayment
+        IncomingStellarPayment.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created incoming_stellar_payments table")
+
     # Check and add client_id to payment_methods table, and make host_id nullable
     if 'payment_methods' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('payment_methods')]
@@ -602,6 +608,8 @@ async def startup_event():
     print("🚀 Starting up...")
     # Run blocking startup in thread without awaiting – server becomes ready and Swagger loads immediately
     asyncio.create_task(asyncio.to_thread(_run_sync_startup))
+    # Server is ready now; test with GET /health or GET /docs (if loading forever, check Windows Firewall for port 8001)
+    print("✅ Server ready to accept connections (migrations run in background). Try http://127.0.0.1:8001/health or http://127.0.0.1:8001/docs")
     # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
     asyncio.create_task(_run_expire_pending_bookings_loop())
     # Send pickup reminders when pickup is in ~24 hours
@@ -743,9 +751,9 @@ app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subs
 
 
 @app.get("/health")
-def health():
+async def health():
     """Lightweight readiness check; no DB. Use this to verify the server is reachable (e.g. from UI or load balancer)."""
-    return {"status": "ok"}
+    return {"status": "ok", "healthy": True, "service": "Car Rental API"}
 
 
 @app.get("/host/kyc/redirect", response_class=HTMLResponse)
@@ -782,12 +790,6 @@ async def root():
         "docs": "/docs",
         "api_base": "/api/v1"
     }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "Car Rental API"}
 
 
 @app.get("/api/v1/ping")

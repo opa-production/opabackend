@@ -250,6 +250,72 @@ def send_usdc_payment(
         return None
 
 
+def get_incoming_payments(public_key: str, limit: int = 50) -> list[dict[str, Any]]:
+    """
+    Fetch incoming payments to a Stellar account from Horizon (payments where account is the destination).
+    Returns list of dicts: { tx_hash, amount, asset_type, asset_code, from_address, created_at }.
+    Horizon /accounts/{id}/payments returns all payments where the account participated; we keep only
+    those where we are the receiver (source_account != our key, or to == our key).
+    """
+    try:
+        base = _get_horizon_url().rstrip("/")
+        url = f"{base}/accounts/{public_key}/payments"
+        r = requests.get(url, params={"limit": limit, "order": "desc"}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        records = data.get("_embedded", {}).get("records", [])
+        usdc_issuer = _get_usdc_issuer()
+        out: list[dict[str, Any]] = []
+        for op in records:
+            # Include both "payment" and "create_account" (initial XLM funding)
+            op_type = op.get("type") or ""
+            if op_type not in ("payment", "create_account"):
+                continue
+            source = op.get("source_account") or op.get("from") or ""
+            to_addr = op.get("to") or op.get("account") or ""
+            # Incoming = we are NOT the source (someone sent to us). For /accounts/OUR_ID/payments, if source != us, we're receiver.
+            if source == public_key:
+                continue
+            from_addr = source
+            amount = op.get("amount", "0")
+            if op_type == "create_account":
+                amount = op.get("starting_balance", amount)
+                asset_code = "XLM"
+                asset_type = "native"
+            else:
+                asset_type = op.get("asset_type", "native")
+                asset_code = (op.get("asset_code") or "").strip().upper() or "XLM"
+                if asset_type == "native":
+                    asset_code = "XLM"
+                elif asset_type in ("credit_alphanum4", "credit_alphanum12") and op.get("asset_issuer") == usdc_issuer:
+                    asset_code = "USDC"
+            tx_hash = op.get("transaction_hash") or ""
+            created_at = op.get("created_at")
+            out.append({
+                "tx_hash": tx_hash,
+                "amount": amount,
+                "asset_type": asset_type,
+                "asset_code": asset_code,
+                "from_address": from_addr,
+                "created_at": created_at,
+            })
+        if records and not out:
+            # Debug: Horizon returned records but none matched; log first record keys/structure
+            first = records[0]
+            logger.info(
+                "[STELLAR] get_incoming_payments debug: first record keys=%s type=%s source=%s to=%s",
+                list(first.keys()),
+                first.get("type"),
+                first.get("source_account") or first.get("from"),
+                first.get("to") or first.get("account"),
+            )
+        logger.info("[STELLAR] get_incoming_payments for %s: %s records from Horizon, %s incoming", public_key[:8], len(records), len(out))
+        return out
+    except Exception as e:
+        logger.warning("[STELLAR] get_incoming_payments failed for %s: %s", public_key[:8], e)
+        return []
+
+
 def create_and_fund_wallet() -> tuple[str, str] | None:
     """
     Create a new Stellar keypair, fund it on testnet, add USDC trust line.

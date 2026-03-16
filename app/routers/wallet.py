@@ -15,13 +15,14 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from app.database import get_db
-from app.models import Client, ClientWallet, StellarPaymentTransaction
+from app.models import Client, ClientWallet, StellarPaymentTransaction, IncomingStellarPayment, Notification
 from app.auth import get_current_client
-from app.schemas import WalletResponse, StellarTransactionResponse
+from app.schemas import WalletResponse, StellarTransactionResponse, IncomingWalletPaymentResponse
 from app.services.stellar_wallet import (
     create_and_fund_wallet,
     get_balances,
     parse_balances_for_response,
+    get_incoming_payments,
     ksh_to_usd_float,
     _is_testnet,
 )
@@ -159,6 +160,83 @@ def list_wallet_transactions(
             from_address=r.from_address,
             to_address=r.to_address,
             created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/client/wallet/incoming", response_model=List[IncomingWalletPaymentResponse])
+def list_incoming_wallet_payments(
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """
+    List incoming Ardena Pay (USDC/XLM) payments to the client's wallet.
+    Fetches from Stellar Horizon, stores new receipts, and creates in-app notifications
+    ("You received X USDC") for new incoming payments so users see them in GET /client/notifications.
+    """
+    wallet = db.query(ClientWallet).filter(ClientWallet.client_id == current_client.id).first()
+    if not wallet:
+        return []
+    incoming_raw = get_incoming_payments(wallet.stellar_public_key, limit=limit + 50)
+    existing_hashes = {
+        row.stellar_tx_hash
+        for row in db.query(IncomingStellarPayment.stellar_tx_hash).filter(
+            IncomingStellarPayment.client_id == current_client.id
+        ).all()
+    }
+    for pay in incoming_raw:
+        tx_hash = pay.get("tx_hash")
+        if not tx_hash or tx_hash in existing_hashes:
+            continue
+        amount_asset = pay.get("asset_code") or "XLM"
+        amount = pay.get("amount") or "0"
+        from_addr = pay.get("from_address") or ""
+        rec = IncomingStellarPayment(
+            client_id=current_client.id,
+            stellar_tx_hash=tx_hash,
+            amount_asset=amount_asset,
+            amount=amount,
+            from_address=from_addr,
+            to_address=wallet.stellar_public_key,
+        )
+        db.add(rec)
+        db.flush()
+        if getattr(current_client, "in_app_notifications_enabled", True):
+            title = f"You received {amount} {amount_asset}"
+            message = f"Your Ardena Pay wallet received {amount} {amount_asset}."
+            notif = Notification(
+                recipient_type="client",
+                recipient_id=current_client.id,
+                title=title[:255],
+                message=message,
+                notification_type="success",
+                sender_name="Ardena Pay",
+            )
+            db.add(notif)
+            db.flush()
+            rec.notification_id = notif.id
+        existing_hashes.add(tx_hash)
+    db.commit()
+    rows = (
+        db.query(IncomingStellarPayment)
+        .filter(IncomingStellarPayment.client_id == current_client.id)
+        .order_by(IncomingStellarPayment.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        IncomingWalletPaymentResponse(
+            id=r.id,
+            amount_asset=r.amount_asset,
+            amount=r.amount,
+            from_address=r.from_address,
+            stellar_tx_hash=r.stellar_tx_hash,
+            created_at=r.created_at,
+            notification_id=r.notification_id,
         )
         for r in rows
     ]

@@ -310,6 +310,24 @@ class StellarPaymentTransaction(Base):
     client: Mapped["Client"] = relationship("Client", backref="stellar_payment_transactions")
 
 
+class IncomingStellarPayment(Base):
+    """Ardena Pay: Incoming payment to a client's wallet (USDC or XLM). Used for in-app messages/notifications."""
+    __tablename__ = "incoming_stellar_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    stellar_tx_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    amount_asset: Mapped[str] = mapped_column(String(10), nullable=False)  # "USDC" or "XLM"
+    amount: Mapped[str] = mapped_column(String(50), nullable=False)
+    from_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(56), nullable=False)  # client's wallet
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Link to the in-app notification we created for this receipt (optional)
+    notification_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+
+    client: Mapped["Client"] = relationship("Client", backref="incoming_stellar_payments")
+
+
 class ClientBiometricToken(Base):
     """Device token used for biometric-based local unlock (no biometrics stored)."""
     __tablename__ = "client_biometric_tokens"

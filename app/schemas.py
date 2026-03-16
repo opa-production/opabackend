@@ -2168,6 +2168,20 @@ class StellarTransactionResponse(BaseModel):
         from_attributes = True
 
 
+class IncomingWalletPaymentResponse(BaseModel):
+    """Incoming Ardena Pay (USDC or XLM) payment to the client's wallet – for in-app 'You received X' messages."""
+    id: int
+    amount_asset: str  # "USDC" or "XLM"
+    amount: str
+    from_address: str
+    stellar_tx_hash: str
+    created_at: datetime
+    notification_id: Optional[int] = None  # In-app notification created for this receipt
+
+    class Config:
+        from_attributes = True
+
+
 class PaymentStatusEnum(str, Enum):
     """Payment attempt status (for UI polling)"""
     PENDING = "pending"
