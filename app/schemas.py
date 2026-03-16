@@ -1688,6 +1688,33 @@ class CarExploreListResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== WISHLIST SCHEMAS ====================
+
+
+class WishlistSummaryResponse(BaseModel):
+    """Summary card for the client's wishlist: count and latest car image."""
+    total_cars: int
+    latest_car_id: Optional[int] = None
+    latest_car_name: Optional[str] = None
+    latest_cover_image: Optional[str] = None
+
+
+class WishlistCarItem(BaseModel):
+    """Single car item in the client's wishlist."""
+    car_id: int
+    name: Optional[str] = None
+    model: Optional[str] = None
+    daily_rate: Optional[float] = None
+    cover_image: Optional[str] = None
+    location_name: Optional[str] = None
+    created_at: datetime
+
+
+class WishlistListResponse(BaseModel):
+    """List of wishlist cars for a client."""
+    cars: List[WishlistCarItem]
+
+
 # ==================== BOOKING SCHEMAS ====================
 
 class BookingStatusEnum(str, Enum):

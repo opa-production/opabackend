@@ -1014,3 +1014,21 @@ class EmergencyReport(Base):
     # Relationships
     client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
     booking: Mapped[Optional["Booking"]] = relationship("Booking", foreign_keys=[booking_id])
+
+
+class WishlistItem(Base):
+    """Client wishlist – a car the client has liked."""
+    __tablename__ = "wishlist_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    car_id: Mapped[int] = mapped_column(ForeignKey("cars.id"), nullable=False, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    car: Mapped["Car"] = relationship("Car", foreign_keys=[car_id])
