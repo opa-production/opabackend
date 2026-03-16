@@ -64,6 +64,7 @@ from app.routers import (
     client_kyc as client_kyc_router,
     veriff_webhook as veriff_webhook_router,
     client_refunds as client_refunds_router,
+    client_emergency as client_emergency_router,
 )
 from app.admin import (
     auth as admin_auth,
@@ -106,6 +107,7 @@ app = FastAPI(
         {"name": "Client Ratings", "description": "Host ratings for clients (renters)"},
         {"name": "Host Earnings", "description": "Host earnings summary, transactions, and withdrawal requests"},
         {"name": "Client Refunds", "description": "Client‑visible refund records for bookings"},
+        {"name": "Client Emergency", "description": "Emergency messages from clients with location"},
         {"name": "Admin Auth", "description": "Admin authentication"},
         {"name": "Admin User Management", "description": "User management"},
         {"name": "Admin Car Management", "description": "Car verification"},
@@ -601,6 +603,13 @@ def _run_sync_startup():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE refunds ADD COLUMN client_deleted_at DATETIME"))
             print("✓ Added client_deleted_at column to refunds table")
+
+    # Ensure emergency_reports table exists
+    if 'emergency_reports' not in table_names:
+        print("⚠️  emergency_reports table missing, creating...")
+        from app.models import EmergencyReport
+        EmergencyReport.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created emergency_reports table")
     
     # Create default super admin if it doesn't exist
     db = SessionLocal()
@@ -775,6 +784,7 @@ app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
 app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
+app.include_router(client_emergency_router.router, prefix="/api/v1", tags=["Client Emergency"])
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
 app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])

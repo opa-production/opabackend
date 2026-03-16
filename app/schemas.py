@@ -2185,6 +2185,47 @@ class ClientRefundListResponse(BaseModel):
     limit: int
 
 
+class ClientEmergencyRequest(BaseModel):
+    """Client emergency message with location."""
+    message: str = Field(..., min_length=1, max_length=2000, description="Emergency message describing the situation")
+    latitude: Optional[float] = Field(
+        None,
+        ge=-90,
+        le=90,
+        description="Client's last known latitude",
+    )
+    longitude: Optional[float] = Field(
+        None,
+        ge=-180,
+        le=180,
+        description="Client's last known longitude",
+    )
+    location_accuracy_m: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Optional accuracy radius in meters as reported by the device",
+    )
+    booking_id: Optional[int] = Field(
+        None,
+        description="Optional numeric booking id this emergency relates to (if known)",
+    )
+
+
+class ClientEmergencyResponse(BaseModel):
+    """Emergency report created for a client."""
+    id: int
+    client_id: int
+    booking_id: Optional[int] = None
+    message: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_accuracy_m: Optional[float] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")

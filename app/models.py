@@ -980,3 +980,37 @@ class Subscriber(Base):
     is_subscribed = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     unsubscribed_at = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EmergencyReport(Base):
+    """Emergency message sent by a client, including their last known location."""
+    __tablename__ = "emergency_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    booking_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=True,
+        index=True,
+        doc="Optional link to the booking the emergency relates to (if any).",
+    )
+
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    # Last known location (as sent from the device)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    location_accuracy_m: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        doc="Optional accuracy radius in meters as reported by the device.",
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    booking: Mapped[Optional["Booking"]] = relationship("Booking", foreign_keys=[booking_id])
