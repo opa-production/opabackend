@@ -187,6 +187,9 @@ def list_incoming_wallet_payments(
             IncomingStellarPayment.client_id == current_client.id
         ).all()
     }
+    in_app_enabled = getattr(current_client, "in_app_notifications_enabled", True)
+    new_notif_count = 0
+
     for pay in incoming_raw:
         tx_hash = pay.get("tx_hash")
         if not tx_hash or tx_hash in existing_hashes:
@@ -204,21 +207,62 @@ def list_incoming_wallet_payments(
         )
         db.add(rec)
         db.flush()
-        if getattr(current_client, "in_app_notifications_enabled", True):
-            title = f"You received {amount} {amount_asset}"
-            message = f"Your Ardena Pay wallet received {amount} {amount_asset}."
-            notif = Notification(
-                recipient_type="client",
-                recipient_id=current_client.id,
-                title=title[:255],
-                message=message,
-                notification_type="success",
-                sender_name="Ardena Pay",
-            )
-            db.add(notif)
-            db.flush()
-            rec.notification_id = notif.id
+        if in_app_enabled:
+            try:
+                title = f"You received {amount} {amount_asset}"
+                message = f"Your Ardena Pay wallet received {amount} {amount_asset}."
+                notif = Notification(
+                    recipient_type="client",
+                    recipient_id=current_client.id,
+                    title=title[:255],
+                    message=message,
+                    notification_type="success",
+                    sender_name="Ardena Pay",
+                )
+                db.add(notif)
+                db.flush()
+                rec.notification_id = notif.id
+                new_notif_count += 1
+            except Exception as e:
+                logger.exception("[WALLET] Failed to create notification for new incoming payment tx=%s: %s", tx_hash[:16], e)
         existing_hashes.add(tx_hash)
+
+    # Backfill notifications for existing incoming payments that never got one (e.g. synced before we created notifs)
+    if in_app_enabled:
+        try:
+            missing = (
+                db.query(IncomingStellarPayment)
+                .filter(
+                    IncomingStellarPayment.client_id == current_client.id,
+                    IncomingStellarPayment.notification_id.is_(None),
+                )
+                .all()
+            )
+            for rec in missing:
+                try:
+                    title = f"You received {rec.amount} {rec.amount_asset}"
+                    message = f"Your Ardena Pay wallet received {rec.amount} {rec.amount_asset}."
+                    notif = Notification(
+                        recipient_type="client",
+                        recipient_id=current_client.id,
+                        title=title[:255],
+                        message=message,
+                        notification_type="success",
+                        sender_name="Ardena Pay",
+                    )
+                    db.add(notif)
+                    db.flush()
+                    rec.notification_id = notif.id
+                    new_notif_count += 1
+                except Exception as e:
+                    logger.exception("[WALLET] Failed to backfill notification for incoming_stellar_payment id=%s: %s", rec.id, e)
+            if missing:
+                logger.info("[WALLET] Backfilled %s notification(s) for client_id=%s", len(missing), current_client.id)
+        except Exception as e:
+            logger.exception("[WALLET] Backfill query failed for client_id=%s: %s", current_client.id, e)
+
+    if new_notif_count:
+        logger.info("[WALLET] Created %s in-app notification(s) for incoming payments, client_id=%s", new_notif_count, current_client.id)
     db.commit()
     rows = (
         db.query(IncomingStellarPayment)

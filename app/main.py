@@ -286,6 +286,12 @@ def migrate_database():
         from app.models import IncomingStellarPayment
         IncomingStellarPayment.__table__.create(bind=engine, checkfirst=True)
         print("✓ Created incoming_stellar_payments table")
+    else:
+        isp_columns = [col['name'] for col in inspector.get_columns('incoming_stellar_payments')]
+        if 'notification_id' not in isp_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE incoming_stellar_payments ADD COLUMN notification_id INTEGER"))
+            print("✓ Added notification_id column to incoming_stellar_payments table")
 
     # Check and add client_id to payment_methods table, and make host_id nullable
     if 'payment_methods' in inspector.get_table_names():
