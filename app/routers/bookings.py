@@ -26,6 +26,7 @@ from app.models import (
     PaymentStatus,
     Refund,
     RefundStatus,
+    StellarPaymentTransaction,
 )
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
@@ -1182,6 +1183,13 @@ async def delete_host_booking(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only completed or cancelled bookings can be deleted.",
         )
+
+    # Delete any related Stellar payment transactions for this booking
+    (
+        db.query(StellarPaymentTransaction)
+        .filter(StellarPaymentTransaction.booking_id == booking.id)
+        .delete(synchronize_session=False)
+    )
 
     db.delete(booking)
     db.commit()
