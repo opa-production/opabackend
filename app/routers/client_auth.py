@@ -1,9 +1,11 @@
 import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import (
@@ -65,11 +67,13 @@ from app.services.email_welcome import (
 from app.services.client_data_export import build_client_data_pdf
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/client/auth/register", response_model=ClientRegisterResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register_client(
-    request: ClientRegisterRequest,
+    body: ClientRegisterRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
@@ -82,7 +86,7 @@ async def register_client(
     - **password_confirmation**: Password confirmation (must match password)
     """
     # Check if email already exists
-    existing_client = await get_client_by_email(db, request.email)
+    existing_client = await get_client_by_email(db, body.email)
     if existing_client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -90,10 +94,10 @@ async def register_client(
         )
     
     # Create new client
-    hashed_password = get_password_hash(request.password)
+    hashed_password = get_password_hash(body.password)
     db_client = Client(
-        full_name=request.full_name,
-        email=request.email,
+        full_name=body.full_name,
+        email=body.email,
         hashed_password=hashed_password
     )
     
@@ -129,8 +133,9 @@ async def register_client(
 
 
 @router.post("/client/auth/login", response_model=ClientLoginResponseWithRefresh)
+@limiter.limit("10/minute")
 async def login_client(
-    request: ClientLoginRequest,
+    body: ClientLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -146,7 +151,7 @@ async def login_client(
     - client: Client profile information
     """
     # Get client by email
-    client = await get_client_by_email(db, request.email)
+    client = await get_client_by_email(db, body.email)
     if not client:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -155,7 +160,7 @@ async def login_client(
         )
     
     # Verify password
-    if not verify_password(request.password, client.hashed_password):
+    if not verify_password(body.password, client.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -172,14 +177,14 @@ async def login_client(
 
     # Optionally issue a device token for biometric login (one-time reveal)
     device_token_raw = None
-    if getattr(request, "enable_biometrics", False):
+    if getattr(body, "enable_biometrics", False):
         device_token_raw = secrets.token_urlsafe(32)
         device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
 
         db_token = ClientBiometricToken(
             client_id=client.id,
             device_token_hash=device_token_hash,
-            device_name=getattr(request, "device_name", None),
+            device_name=getattr(body, "device_name", None),
         )
         db.add(db_token)
         await db.commit()
@@ -195,8 +200,9 @@ async def login_client(
 
 
 @router.post("/client/auth/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
-    request: ForgotPasswordRequest,
+    body: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
@@ -208,7 +214,7 @@ async def forgot_password(
     
     - **email**: Registered email address
     """
-    client = await get_client_by_email(db, request.email)
+    client = await get_client_by_email(db, body.email)
     if not client:
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}

@@ -10,6 +10,9 @@ from datetime import datetime, date, timedelta
 import json
 import logging
 
+from fastapi_cache import FastAPICache
+from fastapi_cache.decorator import cache
+
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
@@ -199,6 +202,7 @@ def car_to_listing_response(car: Car) -> dict:
 
 
 @router.get("/cars", response_model=CarListResponse)
+@cache(expire=300)  # Cache for 5 minutes
 async def get_car_listings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -842,6 +846,7 @@ async def save_car_media_urls(
 
 
 @router.get("/cars/{car_id}", response_model=CarListingResponse)
+@cache(expire=300)  # Cache for 5 minutes
 async def get_car_details(
     car_id: int,
     db: AsyncSession = Depends(get_db)

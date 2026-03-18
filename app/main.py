@@ -1,17 +1,32 @@
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GzipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+# from starlette.middleware.security import SecurityMiddleware
+# from starlette.responses import PlainTextResponse
 import os
 import time
 import logging
 from dotenv import load_dotenv
 from app.config import settings
+
+# Rate limiting
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+
+# Caching
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 # Request logging - logs every API call with status code
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -29,6 +44,47 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         status = response.status_code
         
         logging.info(f"{method} {path} -> {status} ({duration:.0f}ms)")
+        return response
+
+
+# Security Headers Middleware - adds all security headers to responses
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Prevent clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # XSS Protection (legacy but still useful for older browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        
+        # Strict Transport Security (HSTS) - enforce HTTPS
+        # Note: Enable in production with your actual domain
+        hsts_max_age = os.getenv("HSTS_MAX_AGE", "31536000")  # 1 year default
+        response.headers["Strict-Transport-Security"] = f"max-age={hsts_max_age}; includeSubDomains"
+        
+        # Content Security Policy
+        csp_policy = os.getenv(
+            "CSP_POLICY",
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; "
+            "connect-src 'self' https:; "
+            "frame-ancestors 'none'"
+        )
+        response.headers["Content-Security-Policy"] = csp_policy
+        
+        # Referrer Policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        # Permissions Policy (disable features not needed)
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        
         return response
 
 # Load environment variables from .env file
@@ -96,28 +152,68 @@ app = FastAPI(
     servers=[{"url": "/", "description": "Current host"}],
 )
 
-# Add Gzip compression for faster responses
-app.add_middleware(GzipMiddleware, minimum_size=1000)
+# =============================================================================
+# MIDDLEWARE CONFIGURATION (order matters - first added = outermost)
+# =============================================================================
 
-# Add TrustedHostMiddleware to prevent Host Header attacks
-# In production, set allowed_hosts to your domain (e.g. ["example.com", "*.example.com"])
+# 1. Security Headers Middleware (adds X-Frame-Options, CSP, HSTS, etc.)
+# Must be added first so it runs first on request, last on response
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. Trusted Host Middleware
 app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=["*"] # Change this in production!
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Change this in production!
 )
 
-# Request logging (add first so it runs last = closest to handler)
-app.add_middleware(RequestLoggingMiddleware)
+# Add rate limiter state to app
+app.state.limiter = limiter
 
-# CORS middleware
+# Add rate limit exceeded handler
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 3. Gzip compression for faster responses
+app.add_middleware(GzipMiddleware, minimum_size=1000)
+
+# 4. CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS, 
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# 4. Request logging (add last so it runs closest to handler)
+app.add_middleware(RequestLoggingMiddleware)
+
+# =============================================================================
+# CACHE CONFIGURATION
+# =============================================================================
+
+# Initialize cache with Redis backend
+# Note: Cache will only work if Redis is available; graceful fallback if not
+@app.on_event("startup")
+async def startup_event():
+    try:
+        import redis.asyncio as redis
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_client = redis.from_url(redis_url, decode_responses=True)
+        FastAPICache.init(
+            RedisBackend(redis_client),
+            prefix="opa-cache:",
+            expire=300  # Default cache expiration: 5 minutes
+        )
+        logging.info("[CACHE] Redis cache initialized successfully")
+    except Exception as e:
+        logging.warning(f"[CACHE] Redis not available, caching disabled: {e}")
+        # Initialize with dummy cache for graceful degradation
+        FastAPICache.init(
+            backend=None,
+            prefix="opa-cache:",
+            expire=300
+        )
 
 # Include routers
 app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])

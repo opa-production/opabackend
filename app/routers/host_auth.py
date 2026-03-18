@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, B
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import Host, Notification, HostBiometricToken
@@ -44,11 +46,13 @@ from app.config import settings
 from app.services.email_welcome import send_welcome_email_host, send_email
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/host/auth/register", response_model=HostRegisterResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register_host(
-    request: HostRegisterRequest,
+    body: HostRegisterRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
@@ -61,7 +65,7 @@ async def register_host(
     - **password_confirmation**: Password confirmation (must match password)
     """
     # Check if email already exists
-    existing_host = await get_host_by_email(db, request.email)
+    existing_host = await get_host_by_email(db, body.email)
     if existing_host:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,10 +73,10 @@ async def register_host(
         )
     
     # Create new host
-    hashed_password = get_password_hash(request.password)
+    hashed_password = get_password_hash(body.password)
     db_host = Host(
-        full_name=request.full_name,
-        email=request.email,
+        full_name=body.full_name,
+        email=body.email,
         hashed_password=hashed_password
     )
     
@@ -87,8 +91,9 @@ async def register_host(
 
 
 @router.post("/host/auth/login", response_model=HostLoginResponseWithRefresh)
+@limiter.limit("10/minute")
 async def login_host(
-    request: HostLoginRequest,
+    body: HostLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -104,7 +109,7 @@ async def login_host(
     - host: Host profile information
     """
     # Get host by email
-    host = await get_host_by_email(db, request.email)
+    host = await get_host_by_email(db, body.email)
     if not host:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,7 +118,7 @@ async def login_host(
         )
     
     # Verify password
-    if not verify_password(request.password, host.hashed_password):
+    if not verify_password(body.password, host.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -130,14 +135,14 @@ async def login_host(
 
     # Optionally issue a device token for biometric login (one-time reveal, host app)
     device_token_raw = None
-    if getattr(request, "enable_biometrics", False):
+    if getattr(body, "enable_biometrics", False):
         device_token_raw = secrets.token_urlsafe(32)
         device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
 
         db_token = HostBiometricToken(
             host_id=host.id,
             device_token_hash=device_token_hash,
-            device_name=getattr(request, "device_name", None),
+            device_name=getattr(body, "device_name", None),
         )
         db.add(db_token)
         await db.commit()
@@ -369,10 +374,11 @@ async def accept_terms_host(
 
 
 @router.post("/host/auth/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
-    request: ForgotPasswordRequest,
-    http_request: Request,
+    body: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -383,7 +389,7 @@ async def forgot_password(
     
     - **email**: Registered email address
     """
-    host = await get_host_by_email(db, request.email)
+    host = await get_host_by_email(db, body.email)
     if not host:
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
@@ -401,7 +407,7 @@ async def forgot_password(
         sep = "&" if "?" in web_url else "?"
         reset_link = f"{web_url.rstrip('/')}{sep}token={reset_token}"
     else:
-        reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
+        reset_link = f"{request.url_for('host_password_reset_redirect')}?token={reset_token}"
 
     background_tasks.add_task(
         send_email,
