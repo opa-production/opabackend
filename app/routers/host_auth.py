@@ -2,7 +2,7 @@ import html
 import secrets
 from datetime import datetime, timedelta, timezone
 import hashlib
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
@@ -49,6 +49,7 @@ router = APIRouter()
 @router.post("/host/auth/register", response_model=HostRegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register_host(
     request: HostRegisterRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -80,7 +81,7 @@ async def register_host(
     await db.refresh(db_host)
 
     # Send welcome email (non-blocking; registration succeeds even if email fails)
-    send_welcome_email_host(db_host.email, db_host.full_name)
+    background_tasks.add_task(send_welcome_email_host, db_host.email, db_host.full_name)
 
     return db_host
 
@@ -371,6 +372,7 @@ async def accept_terms_host(
 async def forgot_password(
     request: ForgotPasswordRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -401,7 +403,8 @@ async def forgot_password(
     else:
         reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
 
-    send_email(
+    background_tasks.add_task(
+        send_email,
         host.email,
         "Reset your Ardena host password",
         f"""

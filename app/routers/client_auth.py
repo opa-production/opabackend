@@ -70,6 +70,7 @@ router = APIRouter()
 @router.post("/client/auth/register", response_model=ClientRegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register_client(
     request: ClientRegisterRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -122,7 +123,7 @@ async def register_client(
     await db.commit()
 
     # Send welcome email (non-blocking; registration succeeds even if email fails)
-    send_welcome_email_client(db_client.email, db_client.full_name)
+    background_tasks.add_task(send_welcome_email_client, db_client.email, db_client.full_name)
 
     return db_client
 
@@ -196,6 +197,7 @@ async def login_client(
 @router.post("/client/auth/forgot-password")
 async def forgot_password(
     request: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -233,7 +235,7 @@ async def forgot_password(
         else:
             reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
 
-    send_forgotpassword_email(client.email, client.full_name, reset_link)
+    background_tasks.add_task(send_forgotpassword_email, client.email, client.full_name, reset_link)
 
     return {"message": "If an account exists with this email, you will receive a password reset link."}
 

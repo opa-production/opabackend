@@ -156,7 +156,7 @@ async def process_payment(
             elif not mpesa_phone.startswith("254"):
                 mpesa_phone = "254" + mpesa_phone
 
-            mpesa_response = sendStkPush(
+            mpesa_response = await sendStkPush(
                 amount=amount_str,
                 PhoneNumber=mpesa_phone,
                 AccountReference=str(booking.booking_id),
@@ -375,7 +375,7 @@ async def process_extension_payment(
     elif not mpesa_phone.startswith("254"):
         mpesa_phone = "254" + mpesa_phone
 
-    mpesa_response = sendStkPush(
+    mpesa_response = await sendStkPush(
         amount=amount_str,
         PhoneNumber=mpesa_phone,
         AccountReference=str(booking.booking_id),

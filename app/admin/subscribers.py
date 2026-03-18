@@ -5,7 +5,7 @@ List subscribers, view count, trends for chart, and send newsletter email to all
 """
 import logging
 from datetime import datetime, timedelta, timezone, time as dt_time
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
@@ -142,6 +142,7 @@ async def get_subscriber_count(
 @router.post("/admin/subscribers/send")
 async def send_newsletter(
     request: AdminSendNewsletterRequest,
+    background_tasks: BackgroundTasks,
     current_admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -162,17 +163,15 @@ async def send_newsletter(
     
     if not subscribers:
         return {"message": "No subscribers to send to.", "sent": 0, "failed": 0 }
-    sent = 0
-    failed = 0
+    
+    # Use BackgroundTasks for non-blocking email sending
+    # Note: We cannot track individual success/failure when using BackgroundTasks
     for s in subscribers:
-        ok = send_email(s.email, request.subject, request.body_html)
-        if ok:
-            sent += 1
-        else:
-            failed += 1
+        background_tasks.add_task(send_email, s.email, request.subject, request.body_html)
+    
     return {
-        "message": f"Newsletter sent to {sent} subscriber(s)." + (f" {failed} failed." if failed else ""),
-        "sent": sent,
-        "failed": failed,
+        "message": f"Newsletter queued for {len(subscribers)} subscriber(s).",
+        "sent": len(subscribers),
+        "failed": 0,
         "total": len(subscribers),
     }

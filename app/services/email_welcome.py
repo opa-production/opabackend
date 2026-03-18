@@ -3,6 +3,8 @@ Email sending via SendGrid: welcome emails and generic send for password reset e
 """
 import base64
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from app.config import settings
@@ -12,17 +14,15 @@ logger = logging.getLogger(__name__)
 FROM_NAME = "Ardena Group Team"
 DEFAULT_FROM = "Ardena Group Team <hello@ardena.xyz>"
 
+# Global thread pool for email sending
+email_executor = ThreadPoolExecutor(max_workers=3)
 
 def _get_from_email() -> str:
     return settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
 
 
-def send_email(to: str, subject: str, html: str) -> bool:
-    """
-    Send one email via SendGrid (no attachments).
-    Returns True on success, False on failure (logs error).
-    Use this for welcome emails, password reset, etc.
-    """
+def _send_email_sync(to: str, subject: str, html: str) -> bool:
+    """Synchronous internal function for sending email."""
     if not settings.SENDGRID_API_KEY:
         logger.warning("[Email] SENDGRID_API_KEY not set; skipping send")
         return False
@@ -46,19 +46,27 @@ def send_email(to: str, subject: str, html: str) -> bool:
         return False
 
 
-def send_email_with_attachment(
+async def send_email(to: str, subject: str, html: str) -> bool:
+    """
+    Send one email via SendGrid (no attachments).
+    Returns True on success, False on failure (logs error).
+    Use this for welcome emails, password reset, etc.
+    This is non-blocking (runs in a thread pool).
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(email_executor, _send_email_sync, to, subject, html)
+
+
+def _send_email_with_attachment_sync(
     to: str,
     subject: str,
     html: str,
     attachment_bytes: bytes,
     filename: str,
-    mime_type: str = "application/pdf",
-    attachment_disposition: str = "attachment",
+    mime_type: str,
+    attachment_disposition: str,
 ) -> bool:
-    """
-    Send one email via SendGrid with a single attachment.
-    Intended for things like data export PDFs or receipts.
-    """
+    """Synchronous internal function for sending email with attachment."""
     if not settings.SENDGRID_API_KEY:
         logger.warning("[Email] SENDGRID_API_KEY not set; skipping send with attachment")
         return False
@@ -104,7 +112,35 @@ def send_email_with_attachment(
         return False
 
 
-def send_welcome_email_client(to_email: str, full_name: str) -> bool:
+async def send_email_with_attachment(
+    to: str,
+    subject: str,
+    html: str,
+    attachment_bytes: bytes,
+    filename: str,
+    mime_type: str = "application/pdf",
+    attachment_disposition: str = "attachment",
+) -> bool:
+    """
+    Send one email via SendGrid with a single attachment.
+    Intended for things like data export PDFs or receipts.
+    This is non-blocking (runs in a thread pool).
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        email_executor,
+        _send_email_with_attachment_sync,
+        to,
+        subject,
+        html,
+        attachment_bytes,
+        filename,
+        mime_type,
+        attachment_disposition,
+    )
+
+
+async def send_welcome_email_client(to_email: str, full_name: str) -> bool:
     """
     Send welcome email to a new client (car renter).
     """
@@ -121,10 +157,10 @@ def send_welcome_email_client(to_email: str, full_name: str) -> bool:
       <p style="margin-top: 24px;">With warmth,<br><strong>The Ardena Group Team</strong></p>
     </div>
     """
-    return send_email(to_email, subject, html)
+    return await send_email(to_email, subject, html)
 
 
-def send_welcome_email_host(to_email: str, full_name: str) -> bool:
+async def send_welcome_email_host(to_email: str, full_name: str) -> bool:
     """
     Send welcome email to a new host (car owner).
     """
@@ -140,9 +176,9 @@ def send_welcome_email_host(to_email: str, full_name: str) -> bool:
       <p style="margin-top: 24px;">With gratitude,<br><strong>The Ardena Group Team</strong></p>
     </div>
     """
-    return send_email(to_email, subject, html)
+    return await send_email(to_email, subject, html)
 
-def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) -> bool:
+async def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) -> bool:
     """
     Send password reset email to a user (host or client).
     """
@@ -157,4 +193,4 @@ def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) ->
       <p style="margin-top: 24px;">Best regards,<br><strong>The Ardena Group Team</strong></p>
     </div>
     """
-    return send_email(to_email, subject, html)
+    return await send_email(to_email, subject, html)
