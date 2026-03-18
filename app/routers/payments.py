@@ -3,6 +3,8 @@ Payment processing endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, and_, or_
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import json
@@ -43,7 +45,7 @@ def _payment_to_status_response(payment: Payment) -> PaymentStatusResponse:
 async def process_payment(
     request: PaymentRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Process payment for a booking (simulated payment gateway).
@@ -69,13 +71,16 @@ async def process_payment(
     
     # Verify booking exists and belongs to client
     # Accept both string booking_id (e.g. "BK-ABC12345") and numeric id
-    booking_query = db.query(Booking).options(joinedload(Booking.car)).filter(
+    stmt = select(Booking).options(joinedload(Booking.car)).filter(
         Booking.client_id == current_client.id
     )
-    if isinstance(request.booking_id, int):
-        booking = booking_query.filter(Booking.id == request.booking_id).first()
+    if isinstance(request.booking_id, int) or (isinstance(request.booking_id, str) and request.booking_id.isdigit()):
+        stmt = stmt.filter(Booking.id == int(request.booking_id))
     else:
-        booking = booking_query.filter(Booking.booking_id == request.booking_id).first()
+        stmt = stmt.filter(Booking.booking_id == request.booking_id)
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         logger.warning(f"💳 [PROCESS PAYMENT] Booking not found: booking_id={request.booking_id}, client_id={current_client.id}")
@@ -93,10 +98,12 @@ async def process_payment(
         )
     
     # Verify payment method exists and belongs to client
-    payment_method = db.query(PaymentMethod).filter(
+    pm_stmt = select(PaymentMethod).filter(
         PaymentMethod.id == request.payment_method_id,
         PaymentMethod.client_id == current_client.id
-    ).first()
+    )
+    pm_result = await db.execute(pm_stmt)
+    payment_method = pm_result.scalar_one_or_none()
     
     if not payment_method:
         logger.warning(f"💳 [PROCESS PAYMENT] Payment method not found: payment_method_id={request.payment_method_id}, client_id={current_client.id}")
@@ -111,10 +118,12 @@ async def process_payment(
     # ACTUAL PAYMENT PROCESSING
     try:
         # Double-check booking is still available (prevent double payment)
-        booking_check = db.query(Booking).filter(
+        booking_check_stmt = select(Booking).filter(
             Booking.id == booking.id,
             Booking.status == BookingStatus.PENDING
-        ).first()
+        )
+        booking_check_result = await db.execute(booking_check_stmt)
+        booking_check = booking_check_result.scalar_one_or_none()
         
         if not booking_check:
             logger.warning(f"💳 [PROCESS PAYMENT] Booking status changed during payment: booking_id={request.booking_id}")
@@ -173,8 +182,8 @@ async def process_payment(
                 status=PaymentStatus.PENDING,
             )
             db.add(payment)
-            db.commit()
-            db.refresh(payment)
+            await db.commit()
+            await db.refresh(payment)
             
             payment_message = "M-Pesa STK Push initiated. Please check your phone to complete the payment. You can poll GET /client/payments/status?checkout_request_id=... for status."
             # Do NOT set booking to CONFIRMED here; callback will do it when payment succeeds.
@@ -183,17 +192,19 @@ async def process_payment(
             booking.status = BookingStatus.CONFIRMED # type: ignore
             booking.status_updated_at = datetime.now(timezone.utc) # type: ignore
         
-        db.commit()
-        db.refresh(booking)
+        await db.commit()
+        await db.refresh(booking)
         
         logger.info(f"💳 [PROCESS PAYMENT] ✅ Request processed: booking_id={request.booking_id}, "
                    f"amount={booking.total_price}, status={booking.status}")
         
         # Reload booking with relationships for response
         from app.models import Car
-        final_booking = db.query(Booking).options(
+        final_booking_stmt = select(Booking).options(
             joinedload(Booking.car).joinedload(Car.host)
-        ).filter(Booking.id == booking.id).first()
+        ).filter(Booking.id == booking.id)
+        final_booking_result = await db.execute(final_booking_stmt)
+        final_booking = final_booking_result.scalar_one_or_none()
         
         if not final_booking:
              raise HTTPException(status_code=404, detail="Booking lost during processing")
@@ -216,10 +227,10 @@ async def process_payment(
         )
         
     except HTTPException:
-        db.rollback()
+        await db.rollback()
         raise
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"💳 [PROCESS PAYMENT] ❌ Payment processing failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -237,7 +248,7 @@ async def process_extension_payment(
     extension_id: int,
     request: BookingExtensionPaymentRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Start payment for an **approved** booking extension.
@@ -258,15 +269,17 @@ async def process_extension_payment(
     )
 
     # Resolve booking by booking_id (string) for this client
-    booking = (
-        db.query(Booking)
+    booking_stmt = (
+        select(Booking)
         .options(joinedload(Booking.car))
         .filter(
             Booking.client_id == current_client.id,
             Booking.booking_id == booking_id,
         )
-        .first()
     )
+    booking_result = await db.execute(booking_stmt)
+    booking = booking_result.scalar_one_or_none()
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -280,15 +293,17 @@ async def process_extension_payment(
         )
 
     # Find extension request
-    extension = (
-        db.query(BookingExtensionRequest)
+    ext_stmt = (
+        select(BookingExtensionRequest)
         .filter(
             BookingExtensionRequest.id == extension_id,
             BookingExtensionRequest.booking_id == booking.id,
             BookingExtensionRequest.client_id == current_client.id,
         )
-        .first()
     )
+    ext_result = await db.execute(ext_stmt)
+    extension = ext_result.scalar_one_or_none()
+    
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -308,21 +323,23 @@ async def process_extension_payment(
         end = end.replace(tzinfo=timezone.utc)
     if end - now < timedelta(hours=24):
         extension.status = "expired"
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Extension payment must be made at least 24 hours before the current drop-off time.",
         )
 
     # Verify payment method exists and belongs to client
-    payment_method = (
-        db.query(PaymentMethod)
+    pm_stmt = (
+        select(PaymentMethod)
         .filter(
             PaymentMethod.id == request.payment_method_id,
             PaymentMethod.client_id == current_client.id,
         )
-        .first()
     )
+    pm_result = await db.execute(pm_stmt)
+    payment_method = pm_result.scalar_one_or_none()
+    
     if not payment_method:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -388,18 +405,20 @@ async def process_extension_payment(
         extension_request_id=extension.id,
     )
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
 
     # Reload booking with relationships for response
     from app.models import Car  # local import to avoid circular
 
-    final_booking = (
-        db.query(Booking)
+    final_booking_stmt = (
+        select(Booking)
         .options(joinedload(Booking.car).joinedload(Car.host))
         .filter(Booking.id == booking.id)
-        .first()
     )
+    final_booking_result = await db.execute(final_booking_stmt)
+    final_booking = final_booking_result.scalar_one_or_none()
+    
     if not final_booking:
         raise HTTPException(status_code=404, detail="Booking lost during processing")
 
@@ -429,7 +448,7 @@ async def get_payment_status(
     checkout_request_id: Optional[str] = Query(None, description="M-Pesa CheckoutRequestID returned from process payment"),
     booking_id: Optional[str] = Query(None, description="Booking ID (e.g. BK-ABC12345); returns latest payment for this booking"),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get status of an M-Pesa STK push payment. Poll this after initiating payment to detect:
@@ -446,34 +465,40 @@ async def get_payment_status(
             detail="Provide either checkout_request_id or booking_id",
         )
     
+    payment = None
     if checkout_request_id:
-        payment = (
-            db.query(Payment)
+        stmt = (
+            select(Payment)
             .options(joinedload(Payment.booking))
             .filter(
                 Payment.checkout_request_id == checkout_request_id,
                 Payment.client_id == current_client.id,
             )
-            .first()
         )
+        result = await db.execute(stmt)
+        payment = result.scalar_one_or_none()
     else:
-        booking = (
-            db.query(Booking)
+        booking_stmt = (
+            select(Booking)
             .filter(
                 Booking.client_id == current_client.id,
                 Booking.booking_id == booking_id,
             )
-            .first()
         )
+        booking_result = await db.execute(booking_stmt)
+        booking = booking_result.scalar_one_or_none()
+        
         if not booking:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
-        payment = (
-            db.query(Payment)
+        
+        stmt = (
+            select(Payment)
             .options(joinedload(Payment.booking))
             .filter(Payment.booking_id == booking.id, Payment.client_id == current_client.id)
             .order_by(Payment.created_at.desc())
-            .first()
         )
+        result = await db.execute(stmt)
+        payment = result.scalars().first()
     
     if not payment:
         raise HTTPException(
@@ -511,7 +536,7 @@ def _normalize_callback_payload(data: dict) -> dict:
 
 
 @router.post("/mpesa/callback")
-async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
+async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Payhero M-Pesa STK Push Callback URL.
     Called by Payhero after the user completes, cancels, or fails the STK push.
@@ -549,18 +574,27 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         
         payment = None
         if checkout_request_id:
-            payment = db.query(Payment).filter(
+            pay_stmt = select(Payment).filter(
                 Payment.checkout_request_id == checkout_request_id,
                 Payment.status == PaymentStatus.PENDING,
-            ).first()
+            )
+            pay_result = await db.execute(pay_stmt)
+            payment = pay_result.scalar_one_or_none()
+            
         if not payment and external_reference:
             # Fallback: match by ExternalReference (booking_id we sent when initiating STK push)
-            booking = db.query(Booking).filter(Booking.booking_id == str(external_reference)).first()
+            bk_stmt = select(Booking).filter(Booking.booking_id == str(external_reference))
+            bk_result = await db.execute(bk_stmt)
+            booking = bk_result.scalar_one_or_none()
+            
             if booking:
-                payment = db.query(Payment).filter(
+                pay_stmt = select(Payment).filter(
                     Payment.booking_id == booking.id,
                     Payment.status == PaymentStatus.PENDING,
-                ).order_by(Payment.id.desc()).first()
+                ).order_by(Payment.id.desc())
+                pay_result = await db.execute(pay_stmt)
+                payment = pay_result.scalars().first()
+                
                 if payment:
                     payment.checkout_request_id = checkout_request_id or payment.checkout_request_id
                     logger.info("[PAYHERO CALLBACK] Matched payment by ExternalReference=%s (booking_id)", external_reference)
@@ -587,18 +621,22 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             payment.mpesa_phone = str(phone) if phone else None
             payment.mpesa_transaction_date = str(transaction_date) if transaction_date else None
             
-            booking = db.query(Booking).filter(Booking.id == payment.booking_id).first()
+            bk_stmt = select(Booking).filter(Booking.id == payment.booking_id)
+            bk_result = await db.execute(bk_stmt)
+            booking = bk_result.scalar_one_or_none()
 
             if booking and booking.status == BookingStatus.PENDING:
                 booking.status = BookingStatus.CONFIRMED
                 booking.status_updated_at = datetime.now(timezone.utc)
 
             if payment.extension_request_id is not None:
-                extension = (
-                    db.query(BookingExtensionRequest)
+                ext_stmt = (
+                    select(BookingExtensionRequest)
                     .filter(BookingExtensionRequest.id == payment.extension_request_id)
-                    .first()
                 )
+                ext_result = await db.execute(ext_stmt)
+                extension = ext_result.scalar_one_or_none()
+                
                 if extension and booking and extension.status == "host_approved":
                     from app.routers.bookings import DAMAGE_WAIVER_PRICE_PER_DAY  # type: ignore
                     extension.status = "paid"
@@ -616,7 +654,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                     booking.end_date = extension.requested_end_date  # type: ignore
                     booking.status_updated_at = datetime.now(timezone.utc)
 
-            db.commit()
+            await db.commit()
             logger.info("[PAYHERO CALLBACK] Payment successful: Receipt=%s, CheckoutRequestID=%s", receipt, checkout_request_id)
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
@@ -634,7 +672,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             else:
                 payment.result_desc = "Payment failed. Please try again."
             
-            db.commit()
+            await db.commit()
             logger.warning(
                 "[PAYHERO CALLBACK] Payment failed: ResultCode=%s, ResultDesc=%s, CheckoutRequestID=%s",
                 result_code, payment.result_desc, checkout_request_id,
@@ -642,13 +680,13 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error("[PAYHERO CALLBACK] Error processing callback: %s", str(e), exc_info=True)
         return {"ResultCode": 0, "ResultDesc": "Success"}
 
 
 @router.post("/payout/callback")
-async def payout_callback(request: Request, db: Session = Depends(get_db)):
+async def payout_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Payhero M-Pesa B2C (Payout) Callback URL.
     Called by Payhero after a payout to a host is completed or fails.
@@ -678,10 +716,12 @@ async def payout_callback(request: Request, db: Session = Depends(get_db)):
             logger.error(f"[PAYHERO PAYOUT CALLBACK] Invalid ExternalReference: {external_reference}")
             return {"ResultCode": 0, "ResultDesc": "Success"}
         
-        withdrawal = db.query(Withdrawal).filter(
+        wd_stmt = select(Withdrawal).filter(
             Withdrawal.id == withdrawal_id,
             Withdrawal.status == WithdrawalStatus.PENDING,
-        ).first()
+        )
+        wd_result = await db.execute(wd_stmt)
+        withdrawal = wd_result.scalar_one_or_none()
         
         if not withdrawal:
             logger.warning(f"[PAYHERO PAYOUT CALLBACK] No pending withdrawal for ID={withdrawal_id}")
@@ -697,17 +737,16 @@ async def payout_callback(request: Request, db: Session = Depends(get_db)):
         withdrawal.processed_at = datetime.now(timezone.utc)
         
         # Payhero uses result_code 0 for success
-        if str(result_code) == "0" or status_str == "Success":
+        if str(result_code) == "0" or (status_str and str(status_str).lower() == "success"):
             withdrawal.status = WithdrawalStatus.COMPLETED
             logger.info(f"[PAYHERO PAYOUT CALLBACK] ✅ Payout Successful: ID={withdrawal_id}, Receipt={withdrawal.mpesa_receipt_number}")
         else:
             withdrawal.status = WithdrawalStatus.FAILED
             logger.warning(f"[PAYHERO PAYOUT CALLBACK] ❌ Payout Failed: {result_desc} (Code: {result_code}, ID: {withdrawal_id})")
             
-        db.commit()
+        await db.commit()
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"[PAYHERO PAYOUT CALLBACK] ❌ Error processing callback: {str(e)}", exc_info=True)
         return {"ResultCode": 0, "ResultDesc": "Success"}
-

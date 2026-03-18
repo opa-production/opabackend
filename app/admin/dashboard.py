@@ -3,12 +3,13 @@ Admin Dashboard endpoints
 
 These endpoints power the admin web dashboard (`admin-web/`).
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.database import get_db
 from app.models import Host, Client, Car, Booking, VerificationStatus, BookingStatus
@@ -18,7 +19,7 @@ ACTIVITY_LIMIT = 30
 
 
 @router.get("/admin/dashboard/stats")
-def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_dashboard_stats(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     """
     High‑level statistics for the admin dashboard.
 
@@ -29,38 +30,49 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
     - cars_awaiting_verification, verified_cars, rejected_cars
     """
     # Hosts
-    total_hosts = db.query(func.count(Host.id)).scalar() or 0
-    active_hosts = db.query(func.count(Host.id)).filter(Host.is_active.is_(True)).scalar() or 0
+    total_hosts_result = await db.execute(select(func.count(Host.id)))
+    total_hosts = total_hosts_result.scalar() or 0
+    
+    active_hosts_result = await db.execute(select(func.count(Host.id)).filter(Host.is_active.is_(True)))
+    active_hosts = active_hosts_result.scalar() or 0
+    
     inactive_hosts = total_hosts - active_hosts
 
     # Clients
-    total_clients = db.query(func.count(Client.id)).scalar() or 0
-    active_clients = db.query(func.count(Client.id)).filter(Client.is_active.is_(True)).scalar() or 0
+    total_clients_result = await db.execute(select(func.count(Client.id)))
+    total_clients = total_clients_result.scalar() or 0
+    
+    active_clients_result = await db.execute(select(func.count(Client.id)).filter(Client.is_active.is_(True)))
+    active_clients = active_clients_result.scalar() or 0
+    
     inactive_clients = total_clients - active_clients
 
     # Cars
-    total_cars = db.query(func.count(Car.id)).scalar() or 0
-    visible_cars = db.query(func.count(Car.id)).filter(Car.is_hidden.is_(False)).scalar() or 0
+    total_cars_result = await db.execute(select(func.count(Car.id)))
+    total_cars = total_cars_result.scalar() or 0
+    
+    visible_cars_result = await db.execute(select(func.count(Car.id)).filter(Car.is_hidden.is_(False)))
+    visible_cars = visible_cars_result.scalar() or 0
+    
     hidden_cars = total_cars - visible_cars
 
-    cars_awaiting_verification = (
-        db.query(func.count(Car.id))
+    cars_awaiting_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.AWAITING.value)
-        .scalar()
-        or 0
     )
-    verified_cars = (
-        db.query(func.count(Car.id))
+    cars_awaiting_verification = cars_awaiting_result.scalar() or 0
+    
+    verified_cars_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.VERIFIED.value)
-        .scalar()
-        or 0
     )
-    rejected_cars = (
-        db.query(func.count(Car.id))
+    verified_cars = verified_cars_result.scalar() or 0
+    
+    rejected_cars_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.DENIED.value)
-        .scalar()
-        or 0
     )
+    rejected_cars = rejected_cars_result.scalar() or 0
 
     return {
         "total_hosts": total_hosts,
@@ -79,7 +91,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.get("/admin/dashboard/activity")
-def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_recent_activity(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     """
     Recent platform activity for the dashboard.
 
@@ -89,7 +101,8 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
     activities: List[Dict[str, Any]] = []
 
     # Recent host registrations
-    hosts = db.query(Host).order_by(Host.created_at.desc()).limit(10).all()
+    hosts_result = await db.execute(select(Host).order_by(Host.created_at.desc()).limit(10))
+    hosts = hosts_result.scalars().all()
     for h in hosts:
         activities.append({
             "type": "host_registration",
@@ -101,7 +114,8 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
         })
 
     # Recent client registrations
-    clients = db.query(Client).order_by(Client.created_at.desc()).limit(10).all()
+    clients_result = await db.execute(select(Client).order_by(Client.created_at.desc()).limit(10))
+    clients = clients_result.scalars().all()
     for c in clients:
         activities.append({
             "type": "client_registration",
@@ -113,7 +127,8 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
         })
 
     # Recent car submissions
-    cars = db.query(Car).order_by(Car.created_at.desc()).limit(10).all()
+    cars_result = await db.execute(select(Car).order_by(Car.created_at.desc()).limit(10))
+    cars = cars_result.scalars().all()
     for car in cars:
         activities.append({
             "type": "car_submission",
@@ -125,13 +140,13 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
         })
 
     # Car status changes (verified/rejected)
-    cars_updated = (
-        db.query(Car)
+    cars_updated_result = await db.execute(
+        select(Car)
         .filter(Car.updated_at.isnot(None))
         .order_by(Car.updated_at.desc())
         .limit(10)
-        .all()
     )
+    cars_updated = cars_updated_result.scalars().all()
     for car in cars_updated:
         status = car.verification_status or "awaiting"
         activities.append({
@@ -144,13 +159,13 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
         })
 
     # Recent bookings
-    bookings = (
-        db.query(Booking)
+    bookings_result = await db.execute(
+        select(Booking)
         .options(joinedload(Booking.car))
         .order_by(Booking.created_at.desc())
         .limit(10)
-        .all()
     )
+    bookings = bookings_result.scalars().all()
     for b in bookings:
         car_name = b.car.name if b.car else f"Car #{b.car_id}"
         activities.append({
@@ -170,36 +185,35 @@ def get_recent_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.get("/admin/dashboard/verification-queue")
-def get_verification_queue_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_verification_queue_stats(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     """
     Basic stats for the car verification queue.
 
     Useful for future widgets; safe no-op for now.
     """
-    awaiting = (
-        db.query(func.count(Car.id))
+    awaiting_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.AWAITING.value)
-        .scalar()
-        or 0
     )
-    verified = (
-        db.query(func.count(Car.id))
+    awaiting = awaiting_result.scalar() or 0
+    
+    verified_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.VERIFIED.value)
-        .scalar()
-        or 0
     )
-    denied = (
-        db.query(func.count(Car.id))
+    verified = verified_result.scalar() or 0
+    
+    denied_result = await db.execute(
+        select(func.count(Car.id))
         .filter(Car.verification_status == VerificationStatus.DENIED.value)
-        .scalar()
-        or 0
     )
+    denied = denied_result.scalar() or 0
 
     return {
         "cars_awaiting_verification": awaiting,
         "verified_cars": verified,
         "rejected_cars": denied,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -207,7 +221,7 @@ COMMISSION_RATE = 0.15  # 15% platform commission
 
 
 @router.get("/admin/dashboard/revenue")
-def get_revenue_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_revenue_stats(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     """
     Revenue statistics for admin dashboard.
     - money_in: Total from confirmed/active/completed bookings
@@ -218,23 +232,24 @@ def get_revenue_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
     from datetime import timedelta
 
     paid_statuses = [BookingStatus.CONFIRMED.value, BookingStatus.ACTIVE.value, BookingStatus.COMPLETED.value]
-    result = (
-        db.query(func.sum(Booking.total_price))
+    result = await db.execute(
+        select(func.sum(Booking.total_price))
         .filter(Booking.status.in_(paid_statuses))
-        .scalar()
     )
-    money_in = float(result or 0)
-    paid_bookings_count = (
-        db.query(func.count(Booking.id))
+    money_in_val = result.scalar()
+    money_in = float(money_in_val or 0)
+    
+    paid_count_result = await db.execute(
+        select(func.count(Booking.id))
         .filter(Booking.status.in_(paid_statuses))
-        .scalar()
-        or 0
     )
+    paid_bookings_count = paid_count_result.scalar() or 0
+    
     commission_amount = round(money_in * COMMISSION_RATE, 2)
     host_payout = round(money_in - commission_amount, 2)
 
     # Monthly breakdown (last 6 months)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     monthly_data = []
     for i in range(5, -1, -1):
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -246,25 +261,26 @@ def get_revenue_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
         month_end = month_start + timedelta(days=32)
         month_end = month_end.replace(day=1) - timedelta(seconds=1)
 
-        month_total = (
-            db.query(func.coalesce(func.sum(Booking.total_price), 0))
+        month_total_result = await db.execute(
+            select(func.coalesce(func.sum(Booking.total_price), 0))
             .filter(
                 Booking.status.in_(paid_statuses),
                 Booking.created_at >= month_start,
                 Booking.created_at <= month_end,
             )
-            .scalar()
         )
-        month_count = (
-            db.query(func.count(Booking.id))
+        month_total = month_total_result.scalar()
+        
+        month_count_result = await db.execute(
+            select(func.count(Booking.id))
             .filter(
                 Booking.status.in_(paid_statuses),
                 Booking.created_at >= month_start,
                 Booking.created_at <= month_end,
             )
-            .scalar()
-            or 0
         )
+        month_count = month_count_result.scalar() or 0
+        
         monthly_data.append({
             "month": month_start.strftime("%b %Y"),
             "label": month_start.strftime("%b"),

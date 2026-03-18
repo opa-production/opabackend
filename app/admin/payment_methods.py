@@ -1,7 +1,8 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, func, select
 
 from app.database import get_db
 from app.models import PaymentMethod, Host
@@ -63,7 +64,7 @@ async def list_payment_methods(
     sort_by: Optional[str] = Query("created_at", description="Sort field (id, created_at, name)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all payment methods with host information
@@ -76,15 +77,15 @@ async def list_payment_methods(
     - **sort_by**: Field to sort by
     - **order**: Sort order (asc or desc)
     """
-    # Build query with join to host
-    query = db.query(PaymentMethod).join(Host)
+    # Build base statement
+    stmt = select(PaymentMethod).options(joinedload(PaymentMethod.host))
     
     # Apply filters
     if host_id:
-        query = query.filter(PaymentMethod.host_id == host_id)
+        stmt = stmt.filter(PaymentMethod.host_id == host_id)
     
     if method_type:
-        query = query.filter(PaymentMethod.method_type == method_type)
+        stmt = stmt.filter(PaymentMethod.method_type == method_type)
     
     if search:
         search_filter = or_(
@@ -92,21 +93,25 @@ async def list_payment_methods(
             Host.full_name.ilike(f"%{search}%"),
             Host.email.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.filter(search_filter)
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(PaymentMethod, sort_by, PaymentMethod.created_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    payment_methods = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    payment_methods = result.scalars().unique().all()
     
     # Build response with host information
     payment_method_list = []
@@ -128,14 +133,16 @@ async def list_payment_methods(
 async def get_payment_method_details(
     payment_method_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific payment method including host information
     """
-    payment_method = db.query(PaymentMethod).join(Host).filter(
+    stmt = select(PaymentMethod).options(joinedload(PaymentMethod.host)).filter(
         PaymentMethod.id == payment_method_id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -155,14 +162,14 @@ async def get_payment_method_details(
 async def delete_payment_method(
     payment_method_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a payment method (admin only)
     """
-    payment_method = db.query(PaymentMethod).filter(
-        PaymentMethod.id == payment_method_id
-    ).first()
+    stmt = select(PaymentMethod).filter(PaymentMethod.id == payment_method_id)
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -170,7 +177,7 @@ async def delete_payment_method(
             detail="Payment method not found"
         )
     
-    db.delete(payment_method)
-    db.commit()
+    await db.delete(payment_method)
+    await db.commit()
     
     return {"message": "Payment method deleted successfully"}

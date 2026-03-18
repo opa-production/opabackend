@@ -3,6 +3,8 @@ Media upload endpoints for clients and hosts
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Optional, List
 import json
 
@@ -40,7 +42,7 @@ class MultipleMediaUploadResponse(BaseModel):
 async def upload_client_avatar(
     file: UploadFile = File(...),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload or update client profile avatar
@@ -82,8 +84,8 @@ async def upload_client_avatar(
     
     # Update database
     current_client.avatar_url = result["url"]
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
     
     return MediaUploadResponse(
         success=True,
@@ -97,7 +99,7 @@ async def upload_client_document(
     file: UploadFile = File(...),
     document_type: str = Form(...),  # 'id' or 'license'
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload client identity documents
@@ -152,8 +154,8 @@ async def upload_client_document(
     else:
         current_client.license_document_url = result["url"]
     
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
     
     return MediaUploadResponse(
         success=True,
@@ -168,7 +170,7 @@ async def upload_client_document(
 async def upload_host_avatar(
     file: UploadFile = File(...),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload or update host profile avatar
@@ -210,8 +212,8 @@ async def upload_host_avatar(
     
     # Update database
     current_host.avatar_url = result["url"]
-    db.commit()
-    db.refresh(current_host)
+    await db.commit()
+    await db.refresh(current_host)
     
     return MediaUploadResponse(
         success=True,
@@ -224,7 +226,7 @@ async def upload_host_avatar(
 async def upload_host_cover_image(
     file: UploadFile = File(...),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload or update host profile cover image
@@ -266,8 +268,8 @@ async def upload_host_cover_image(
     
     # Update database
     current_host.cover_image_url = result["url"]
-    db.commit()
-    db.refresh(current_host)
+    await db.commit()
+    await db.refresh(current_host)
     
     return MediaUploadResponse(
         success=True,
@@ -281,7 +283,7 @@ async def upload_host_document(
     file: UploadFile = File(...),
     document_type: str = Form(...),  # 'id' or 'license'
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload host identity documents
@@ -336,8 +338,8 @@ async def upload_host_document(
     else:
         current_host.license_document_url = result["url"]
     
-    db.commit()
-    db.refresh(current_host)
+    await db.commit()
+    await db.refresh(current_host)
     
     return MediaUploadResponse(
         success=True,
@@ -351,7 +353,7 @@ async def upload_vehicle_images(
     car_id: int,
     files: List[UploadFile] = File(...),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload multiple images for a vehicle
@@ -363,7 +365,10 @@ async def upload_vehicle_images(
     - Maximum 10 images per vehicle
     """
     # Verify car ownership
-    car = db.query(Car).filter(Car.id == car_id, Car.host_id == current_host.id).first()
+    stmt = select(Car).filter(Car.id == car_id, Car.host_id == current_host.id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -410,8 +415,8 @@ async def upload_vehicle_images(
     
     # Update car image URLs in database
     car.image_urls = json.dumps(uploaded_urls)
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     return MultipleMediaUploadResponse(
         success=True,
@@ -425,7 +430,7 @@ async def upload_vehicle_video(
     car_id: int,
     file: UploadFile = File(...),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload a video for a vehicle
@@ -437,7 +442,10 @@ async def upload_vehicle_video(
     - Automatically replaces existing video
     """
     # Verify car ownership
-    car = db.query(Car).filter(Car.id == car_id, Car.host_id == current_host.id).first()
+    stmt = select(Car).filter(Car.id == car_id, Car.host_id == current_host.id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -478,8 +486,8 @@ async def upload_vehicle_video(
     
     # Update database
     car.video_url = result["url"]
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     return MediaUploadResponse(
         success=True,

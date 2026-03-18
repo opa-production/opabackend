@@ -4,7 +4,8 @@ Booking endpoints for clients (and hosts)
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, func, select
 from typing import Optional, List
 from datetime import datetime, timezone
 import json
@@ -120,12 +121,12 @@ def booking_to_response(booking: Booking) -> dict:
     }
 
 
-def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_date: datetime, exclude_booking_id: Optional[int] = None) -> bool:
+async def check_booking_overlap(db: AsyncSession, car_id: int, start_date: datetime, end_date: datetime, exclude_booking_id: Optional[int] = None) -> bool:
     """
     Check if there's an overlapping booking for the given car and date range.
     Returns True if there's an overlap (NOT available), False if available.
     """
-    query = db.query(Booking).filter(
+    stmt = select(Booking).filter(
         Booking.car_id == car_id,
         Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
         # Overlap condition: booking.start < requested.end AND booking.end > requested.start
@@ -134,12 +135,13 @@ def check_booking_overlap(db: Session, car_id: int, start_date: datetime, end_da
     )
     
     if exclude_booking_id:
-        query = query.filter(Booking.id != exclude_booking_id)
+        stmt = stmt.filter(Booking.id != exclude_booking_id)
     
-    return query.first() is not None
+    result = await db.execute(stmt)
+    return result.first() is not None
 
 
-def check_blocked_date_overlap(db: Session, car_id: int, start_date: datetime, end_date: datetime) -> bool:
+async def check_blocked_date_overlap(db: AsyncSession, car_id: int, start_date: datetime, end_date: datetime) -> bool:
     """
     Check if the requested date range overlaps with any host-blocked dates.
     Returns True if there's an overlap (dates are blocked), False if clear.
@@ -148,7 +150,7 @@ def check_blocked_date_overlap(db: Session, car_id: int, start_date: datetime, e
     start_as_date = start_date.date() if isinstance(start_date, datetime) else start_date
     end_as_date = end_date.date() if isinstance(end_date, datetime) else end_date
 
-    return db.query(CarBlockedDate).filter(
+    stmt = select(CarBlockedDate).filter(
         CarBlockedDate.car_id == car_id,
         or_(
             and_(
@@ -161,14 +163,16 @@ def check_blocked_date_overlap(db: Session, car_id: int, start_date: datetime, e
                 CarBlockedDate.blocked_date < end_as_date
             )
         )
-    ).first() is not None
+    )
+    result = await db.execute(stmt)
+    return result.first() is not None
 
 
 @router.post("/client/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: BookingCreateRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new car booking.
@@ -182,10 +186,13 @@ async def create_booking(
     Requires client authentication.
     """
     # Verify car exists and is verified
-    car = db.query(Car).options(joinedload(Car.host)).filter(
-        Car.id == request.car_id,
-        Car.verification_status == VerificationStatus.VERIFIED.value
-    ).first()
+    result = await db.execute(
+        select(Car).options(joinedload(Car.host)).filter(
+            Car.id == request.car_id,
+            Car.verification_status == VerificationStatus.VERIFIED.value
+        )
+    )
+    car = result.scalar_one_or_none()
     
     if not car:
         raise HTTPException(
@@ -228,14 +235,14 @@ async def create_booking(
         )
     
     # Check for overlapping bookings (prevents double booking)
-    if check_booking_overlap(db, car.id, request.start_date, request.end_date):
+    if await check_booking_overlap(db, car.id, request.start_date, request.end_date):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Car is not available for the selected dates. Please choose different dates."
         )
     
     # Check for host-blocked dates
-    if check_blocked_date_overlap(db, car.id, request.start_date, request.end_date):
+    if await check_blocked_date_overlap(db, car.id, request.start_date, request.end_date):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The host has blocked some of the selected dates. Please choose different dates."
@@ -250,7 +257,10 @@ async def create_booking(
     booking_id = generate_booking_id()
     
     # Ensure booking ID is unique
-    while db.query(Booking).filter(Booking.booking_id == booking_id).first():
+    while True:
+        id_result = await db.execute(select(Booking).filter(Booking.booking_id == booking_id))
+        if id_result.first() is None:
+            break
         booking_id = generate_booking_id()
     
     # Create booking
@@ -277,13 +287,16 @@ async def create_booking(
     )
     
     db.add(booking)
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
     
     # Load relationships for response
-    booking = db.query(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.id == booking.id).first()
+    result = await db.execute(
+        select(Booking).options(
+            joinedload(Booking.car).joinedload(Car.host)
+        ).filter(Booking.id == booking.id)
+    )
+    booking = result.scalar_one_or_none()
     
     return booking_to_response(booking)
 
@@ -294,7 +307,7 @@ async def get_my_bookings(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     status: Optional[str] = Query(None, description="Filter by booking status"),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all bookings for the current authenticated client.
@@ -305,7 +318,7 @@ async def get_my_bookings(
     
     Requires client authentication.
     """
-    query = db.query(Booking).options(
+    stmt = select(Booking).options(
         joinedload(Booking.car).joinedload(Car.host)
     ).filter(Booking.client_id == current_client.id)
     
@@ -313,7 +326,7 @@ async def get_my_bookings(
     if status:
         try:
             status_enum = BookingStatus(status.lower())
-            query = query.filter(Booking.status == status_enum)
+            stmt = stmt.filter(Booking.status == status_enum)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -321,10 +334,14 @@ async def get_my_bookings(
             )
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply pagination and order by newest first
-    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    bookings = result.scalars().all()
     
     # Convert to response format
     booking_responses = [booking_to_response(b) for b in bookings]
@@ -337,20 +354,25 @@ async def get_my_bookings(
     )
 
 
-def _client_booking_query(db: Session, booking_id_param: str, client_id: int):
-    """Resolve booking by either numeric id or string booking_id (e.g. BK-ABC12345). Returns query with client filter."""
-    base = db.query(Booking).options(
+async def _client_booking_query(db: AsyncSession, booking_id_param: str, client_id: int):
+    """Resolve booking by either numeric id or string booking_id (e.g. BK-ABC12345). Returns booking with client filter."""
+    stmt = select(Booking).options(
         joinedload(Booking.car).joinedload(Car.host)
     ).filter(Booking.client_id == client_id)
+    
     if booking_id_param.isdigit():
-        return base.filter(Booking.id == int(booking_id_param)).first()
-    return base.filter(Booking.booking_id == booking_id_param).first()
+        stmt = stmt.filter(Booking.id == int(booking_id_param))
+    else:
+        stmt = stmt.filter(Booking.booking_id == booking_id_param)
+        
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
-def _client_booking_for_receipt(db: Session, booking_id_param: str, client_id: int):
+async def _client_booking_for_receipt(db: AsyncSession, booking_id_param: str, client_id: int):
     """Resolve booking for client with car, host, payments loaded (for receipt)."""
-    base = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -358,15 +380,20 @@ def _client_booking_for_receipt(db: Session, booking_id_param: str, client_id: i
         )
         .filter(Booking.client_id == client_id)
     )
+    
     if booking_id_param.isdigit():
-        return base.filter(Booking.id == int(booking_id_param)).first()
-    return base.filter(Booking.booking_id == booking_id_param).first()
+        stmt = stmt.filter(Booking.id == int(booking_id_param))
+    else:
+        stmt = stmt.filter(Booking.booking_id == booking_id_param)
+        
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
-def _host_booking_for_receipt(db: Session, booking_id_param: str, host_id: int):
+async def _host_booking_for_receipt(db: AsyncSession, booking_id_param: str, host_id: int):
     """Resolve booking by numeric id or booking_id string for host (car must belong to host). Loads car, client, payments."""
-    base = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -375,16 +402,21 @@ def _host_booking_for_receipt(db: Session, booking_id_param: str, host_id: int):
         .join(Car)
         .filter(Car.host_id == host_id)
     )
+    
     if booking_id_param.isdigit():
-        return base.filter(Booking.id == int(booking_id_param)).first()
-    return base.filter(Booking.booking_id == booking_id_param).first()
+        stmt = stmt.filter(Booking.id == int(booking_id_param))
+    else:
+        stmt = stmt.filter(Booking.booking_id == booking_id_param)
+        
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 @router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking_details(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific booking.
@@ -394,7 +426,7 @@ async def get_booking_details(
 
     Requires client authentication.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -407,13 +439,13 @@ async def get_booking_details(
 async def get_client_booking_receipt(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a PDF receipt for this booking. Only the client who made the booking can download.
     Receipt includes booking details, car, client, host, pricing, payment info (M-Pesa receipt), and host payout (after commission).
     """
-    booking = _client_booking_for_receipt(db, booking_id, current_client.id)
+    booking = await _client_booking_for_receipt(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -434,7 +466,7 @@ async def cancel_booking(
     booking_id: str,
     request: Optional[BookingCancelRequest] = None,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Cancel an existing booking.
@@ -445,7 +477,7 @@ async def cancel_booking(
 
     Requires client authentication.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -461,12 +493,12 @@ async def cancel_booking(
     
     # Update booking status
     booking.status = BookingStatus.CANCELLED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     if request and request.reason:
         booking.cancellation_reason = request.reason
     
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
     
     return booking_to_response(booking)
 
@@ -483,7 +515,7 @@ async def create_booking_extension_request(
     booking_id: str,
     request: BookingExtensionCreateRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Request to extend an existing booking (same trip, later drop-off only).
@@ -498,7 +530,7 @@ async def create_booking_extension_request(
     - Only **confirmed** or **active** bookings can be extended (prevents extending unpaid bookings).
     - `new_end_date` must be strictly after the current booking `end_date`.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -525,19 +557,18 @@ async def create_booking_extension_request(
         )
 
     # Prevent multiple active extension requests for the same booking
-    existing_active = (
-        db.query(BookingExtensionRequest)
-        .filter(
-            BookingExtensionRequest.booking_id == booking.id,
-            BookingExtensionRequest.status.in_(
-                [
-                    BookingExtensionStatusEnum.PENDING_HOST_APPROVAL.value,
-                    BookingExtensionStatusEnum.HOST_APPROVED.value,
-                ]
-            ),
-        )
-        .first()
+    existing_stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.booking_id == booking.id,
+        BookingExtensionRequest.status.in_(
+            [
+                BookingExtensionStatusEnum.PENDING_HOST_APPROVAL.value,
+                BookingExtensionStatusEnum.HOST_APPROVED.value,
+            ]
+        ),
     )
+    existing_active_result = await db.execute(existing_stmt)
+    existing_active = existing_active_result.scalar_one_or_none()
+    
     if existing_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -549,13 +580,13 @@ async def create_booking_extension_request(
     extra_end = new_end_utc
 
     # Availability checks (other bookings + host blocked dates)
-    if check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
+    if await check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Car is not available for the requested extension period.",
         )
 
-    if check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
+    if await check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The host has blocked some of the requested extension dates.",
@@ -600,8 +631,8 @@ async def create_booking_extension_request(
     )
 
     db.add(extension)
-    db.commit()
-    db.refresh(extension)
+    await db.commit()
+    await db.refresh(extension)
 
     return extension
 
@@ -612,7 +643,7 @@ async def get_my_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Convenience endpoint to get only **completed** bookings for the current client.
@@ -620,15 +651,20 @@ async def get_my_completed_bookings(
     - Uses the same shape as `/client/bookings`
     - Results are paginated and sorted by creation date (newest first)
     """
-    query = db.query(Booking).options(
+    stmt = select(Booking).options(
         joinedload(Booking.car).joinedload(Car.host)
     ).filter(
         Booking.client_id == current_client.id,
         Booking.status == BookingStatus.COMPLETED,
     )
 
-    total = query.count()
-    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    bookings = result.scalars().all()
     booking_responses = [booking_to_response(b) for b in bookings]
 
     return BookingListResponse(
@@ -647,7 +683,7 @@ async def get_host_bookings(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     status: Optional[str] = Query(None, description="Filter by booking status"),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get bookings for the current authenticated host.
@@ -656,8 +692,8 @@ async def get_host_bookings(
     - Supports filtering by status
     - Results are paginated and sorted by creation date (newest first)
     """
-    query = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -669,15 +705,20 @@ async def get_host_bookings(
     if status:
         try:
             status_enum = BookingStatus(status.lower())
-            query = query.filter(Booking.status == status_enum)
+            stmt = stmt.filter(Booking.status == status_enum)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}",
             )
 
-    total = query.count()
-    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    bookings = result.scalars().all()
     booking_responses = [booking_to_response(b) for b in bookings]
 
     return BookingListResponse(
@@ -693,7 +734,7 @@ async def get_host_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Convenience endpoint to get only **completed** bookings for the current host.
@@ -701,8 +742,8 @@ async def get_host_completed_bookings(
     - Returns bookings where the car belongs to the host
     - Results are paginated and sorted by creation date (newest first)
     """
-    query = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -714,8 +755,13 @@ async def get_host_completed_bookings(
         )
     )
 
-    total = query.count()
-    bookings = query.order_by(Booking.created_at.desc()).offset(skip).limit(limit).all()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    bookings = result.scalars().all()
     booking_responses = [booking_to_response(b) for b in bookings]
 
     return BookingListResponse(
@@ -730,15 +776,15 @@ async def get_host_completed_bookings(
 async def get_host_booking_details(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get detailed information about a specific booking for a host.
 
     - Only returns bookings where the car belongs to the authenticated host
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -748,8 +794,10 @@ async def get_host_booking_details(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -764,13 +812,13 @@ async def get_host_booking_details(
 async def get_host_booking_receipt(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a PDF receipt for this booking. Only the host who owns the car can download.
     Receipt includes booking details, car, client, host, pricing, payment info (M-Pesa receipt), and host payout (after commission).
     """
-    booking = _host_booking_for_receipt(db, booking_id, current_host.id)
+    booking = await _host_booking_for_receipt(db, booking_id, current_host.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -790,7 +838,7 @@ async def get_host_booking_receipt(
 async def delete_host_booking(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Permanently delete a completed or cancelled booking for the current host.
@@ -799,15 +847,17 @@ async def delete_host_booking(
     - Only bookings with status `completed` or `cancelled` can be deleted.
     - This is a hard delete – booking and related payments are removed from the database.
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .join(Car)
         .filter(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -821,8 +871,8 @@ async def delete_host_booking(
             detail="Only completed or cancelled bookings can be deleted.",
         )
 
-    db.delete(booking)
-    db.commit()
+    await db.delete(booking)
+    await db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -831,7 +881,7 @@ async def delete_host_booking(
 async def confirm_pickup_as_host(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Confirm that the client has picked up the car (host side). Moves booking from **confirmed** to **active**.
@@ -839,8 +889,8 @@ async def confirm_pickup_as_host(
     - Only the host who owns the car can confirm pickup
     - Only `confirmed` bookings can be moved to active
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -850,8 +900,10 @@ async def confirm_pickup_as_host(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -881,10 +933,10 @@ async def confirm_pickup_as_host(
         )
 
     booking.status = BookingStatus.ACTIVE
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
 
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
 
     return booking_to_response(booking)
 
@@ -893,7 +945,7 @@ async def confirm_pickup_as_host(
 async def confirm_dropoff_as_host(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Confirm that the client has returned the car (host side). Marks booking as **completed**.
@@ -901,8 +953,8 @@ async def confirm_dropoff_as_host(
     - Only the host who owns the car can confirm dropoff
     - Only `confirmed` or `active` bookings can be marked completed
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -912,8 +964,10 @@ async def confirm_dropoff_as_host(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -931,11 +985,11 @@ async def confirm_dropoff_as_host(
         )
 
     booking.status = BookingStatus.COMPLETED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = None
 
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
 
     return booking_to_response(booking)
 
@@ -962,7 +1016,7 @@ async def report_booking_issue(
     booking_id: str,
     request: ReportIssueRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Report an issue concerning an active (or past) booking.
@@ -971,16 +1025,18 @@ async def report_booking_issue(
     - Booking must be confirmed, active, or completed
     - **issue_type**: damage, late_return, no_show, misconduct, other
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(joinedload(Booking.car))
         .join(Car)
         .filter(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -1005,9 +1061,9 @@ async def report_booking_issue(
         status="open",
     )
     db.add(issue)
-    db.commit()
-    db.refresh(issue)
-    db.refresh(issue.booking)
+    await db.commit()
+    await db.refresh(issue)
+    await db.refresh(issue.booking)
 
     return _issue_to_response(issue)
 
@@ -1015,7 +1071,7 @@ async def report_booking_issue(
 @router.get("/host/issues", response_model=BookingIssueListResponse)
 async def list_host_issues(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None, description="Filter by status: open, in_review, resolved, closed"),
@@ -1023,16 +1079,21 @@ async def list_host_issues(
     """
     List all issues reported by the host, with optional status filter.
     """
-    q = (
-        db.query(BookingIssue)
+    stmt = (
+        select(BookingIssue)
         .options(joinedload(BookingIssue.booking))
         .filter(BookingIssue.host_id == current_host.id)
     )
     if status:
-        q = q.filter(BookingIssue.status == status)
+        stmt = stmt.filter(BookingIssue.status == status)
 
-    total = q.count()
-    issues = q.order_by(BookingIssue.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    stmt = stmt.order_by(BookingIssue.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(stmt)
+    issues = result.scalars().all()
 
     return BookingIssueListResponse(
         issues=[_issue_to_response(i) for i in issues],
@@ -1046,7 +1107,7 @@ async def list_host_issues(
 async def complete_booking_as_host(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Mark a booking as **completed** from the host side (e.g., after drop‑off confirmation).
@@ -1054,8 +1115,8 @@ async def complete_booking_as_host(
     - Only the host who owns the car can complete the booking
     - Only `confirmed` or `active` bookings can be completed
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .options(
             joinedload(Booking.car).joinedload(Car.host),
             joinedload(Booking.client),
@@ -1065,8 +1126,10 @@ async def complete_booking_as_host(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
 
     if not booking:
         raise HTTPException(
@@ -1084,11 +1147,11 @@ async def complete_booking_as_host(
         )
 
     booking.status = BookingStatus.COMPLETED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = None
 
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
 
     return booking_to_response(booking)
 
@@ -1097,7 +1160,7 @@ async def complete_booking_as_host(
 async def delete_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a booking (soft delete by cancelling).
@@ -1107,7 +1170,7 @@ async def delete_booking(
 
     Requires client authentication.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1123,10 +1186,10 @@ async def delete_booking(
     
     # Soft delete by cancelling
     booking.status = BookingStatus.CANCELLED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = "Deleted by client"
     
-    db.commit()
+    await db.commit()
     
     return None
 
@@ -1138,26 +1201,26 @@ async def delete_booking(
 async def get_client_booking_extensions(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all extension requests for a specific booking (client view).
 
     - Only returns extensions for bookings owned by the authenticated client.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found",
         )
 
-    extensions = (
-        db.query(BookingExtensionRequest)
-        .filter(BookingExtensionRequest.booking_id == booking.id)
-        .order_by(BookingExtensionRequest.created_at.desc())
-        .all()
-    )
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.booking_id == booking.id
+    ).order_by(BookingExtensionRequest.created_at.desc())
+    
+    result = await db.execute(stmt)
+    extensions = result.scalars().all()
 
     return BookingExtensionListResponse(extensions=extensions)
 
@@ -1169,34 +1232,37 @@ async def get_client_booking_extensions(
 async def get_host_booking_extensions(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all extension requests for a specific booking (host view).
 
     - Only returns extensions where the car belongs to the authenticated host.
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .join(Car)
         .filter(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found",
         )
 
-    extensions = (
-        db.query(BookingExtensionRequest)
-        .filter(BookingExtensionRequest.booking_id == booking.id)
-        .order_by(BookingExtensionRequest.created_at.desc())
-        .all()
-    )
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.booking_id == booking.id
+    ).order_by(BookingExtensionRequest.created_at.desc())
+    
+    result = await db.execute(stmt)
+    extensions = result.scalars().all()
 
     return BookingExtensionListResponse(extensions=extensions)
 
@@ -1209,7 +1275,7 @@ async def approve_booking_extension(
     booking_id: str,
     extension_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Approve a client's booking extension request.
@@ -1218,29 +1284,32 @@ async def approve_booking_extension(
     - Ensures the extension is still pending.
     - Re-checks availability before approval.
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .join(Car)
         .filter(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found",
         )
 
-    extension = (
-        db.query(BookingExtensionRequest)
-        .filter(
-            BookingExtensionRequest.id == extension_id,
-            BookingExtensionRequest.booking_id == booking.id,
-        )
-        .first()
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.id == extension_id,
+        BookingExtensionRequest.booking_id == booking.id,
     )
+    
+    result = await db.execute(stmt)
+    extension = result.scalar_one_or_none()
+    
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1257,28 +1326,28 @@ async def approve_booking_extension(
     extra_start = extension.old_end_date
     extra_end = extension.requested_end_date
 
-    if check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
+    if await check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
         # Mark as rejected so client sees it's no longer possible
         extension.status = BookingExtensionStatusEnum.REJECTED.value
         extension.host_note = "Car is no longer available for the requested extension period."
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Car is no longer available for the requested extension period.",
         )
 
-    if check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
+    if await check_blocked_date_overlap(db, booking.car_id, extra_start, extra_end):
         extension.status = BookingExtensionStatusEnum.REJECTED.value
         extension.host_note = "Some of the requested extension dates are now blocked."
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Some of the requested extension dates are now blocked.",
         )
 
     extension.status = BookingExtensionStatusEnum.HOST_APPROVED.value
-    db.commit()
-    db.refresh(extension)
+    await db.commit()
+    await db.refresh(extension)
 
     return extension
 
@@ -1292,7 +1361,7 @@ async def reject_booking_extension(
     extension_id: int,
     reason: Optional[str] = Body(None, embed=True, description="Optional reason for rejecting the extension"),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Reject a client's booking extension request.
@@ -1300,29 +1369,32 @@ async def reject_booking_extension(
     - Verifies the booking belongs to the host.
     - Sets extension status to `rejected` and optionally stores a reason.
     """
-    booking = (
-        db.query(Booking)
+    stmt = (
+        select(Booking)
         .join(Car)
         .filter(
             Booking.booking_id == booking_id,
             Car.host_id == current_host.id,
         )
-        .first()
     )
+    
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found",
         )
 
-    extension = (
-        db.query(BookingExtensionRequest)
-        .filter(
-            BookingExtensionRequest.id == extension_id,
-            BookingExtensionRequest.booking_id == booking.id,
-        )
-        .first()
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.id == extension_id,
+        BookingExtensionRequest.booking_id == booking.id,
     )
+    
+    result = await db.execute(stmt)
+    extension = result.scalar_one_or_none()
+    
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1343,7 +1415,7 @@ async def reject_booking_extension(
     if reason:
         extension.host_note = reason.strip()
 
-    db.commit()
-    db.refresh(extension)
+    await db.commit()
+    await db.refresh(extension)
 
     return extension

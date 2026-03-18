@@ -141,3 +141,20 @@ def send_welcome_email_host(to_email: str, full_name: str) -> bool:
     </div>
     """
     return send_email(to_email, subject, html)
+
+def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) -> bool:
+    """
+    Send password reset email to a user (host or client).
+    """
+    subject = "Ardena Password Reset Request"
+    first_name = full_name.split()[0] if full_name else "there"
+    html = f"""
+    <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
+      <p>Dear {first_name},</p>
+      <p>We received a request to reset your password for your Ardena account. If you made this request, please click the link below to set a new password:</p>
+      <p><a href="{reset_link}" style="background-color: #007BFF; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">Reset My Password</a></p>
+      <p>If you did not request a password reset, please ignore this email. Your account is safe.</p>
+      <p style="margin-top: 24px;">Best regards,<br><strong>The Ardena Group Team</strong></p>
+    </div>
+    """
+    return send_email(to_email, subject, html)

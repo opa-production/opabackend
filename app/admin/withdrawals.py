@@ -7,7 +7,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.database import get_db
 from app.models import Withdrawal, WithdrawalStatus, Host, Admin
@@ -36,35 +37,43 @@ def _withdrawal_to_response(w: Withdrawal) -> WithdrawalResponse:
 
 
 @router.get("/admin/withdrawals", response_model=WithdrawalListResponse)
-def list_withdrawals(
+async def list_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
     host_id: Optional[int] = Query(None, description="Filter by host ID"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List all withdrawal requests. Filter by status or host.
     """
-    query = (
-        db.query(Withdrawal)
+    stmt = (
+        select(Withdrawal)
         .options(joinedload(Withdrawal.host))
-        .filter()
     )
     if status_filter:
         try:
             status_enum = WithdrawalStatus(status_filter.lower())
-            query = query.filter(Withdrawal.status == status_enum)
+            stmt = stmt.filter(Withdrawal.status == status_enum)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid status. Valid: pending, completed, rejected, cancelled, failed",
             )
     if host_id is not None:
-        query = query.filter(Withdrawal.host_id == host_id)
-    total = query.count()
-    rows = query.order_by(Withdrawal.created_at.desc()).offset(skip).limit(limit).all()
+        stmt = stmt.filter(Withdrawal.host_id == host_id)
+        
+    # Get total
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar() or 0
+    
+    # Apply pagination
+    stmt = stmt.order_by(Withdrawal.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    rows = result.scalars().unique().all()
+    
     return WithdrawalListResponse(
         withdrawals=[_withdrawal_to_response(w) for w in rows],
         total=total,
@@ -74,29 +83,31 @@ def list_withdrawals(
 
 
 @router.get("/admin/withdrawals/{withdrawal_id}", response_model=WithdrawalResponse)
-def get_withdrawal(
+async def get_withdrawal(
     withdrawal_id: int,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get a single withdrawal by ID."""
-    w = (
-        db.query(Withdrawal)
+    stmt = (
+        select(Withdrawal)
         .options(joinedload(Withdrawal.host))
         .filter(Withdrawal.id == withdrawal_id)
-        .first()
     )
+    result = await db.execute(stmt)
+    w = result.scalar_one_or_none()
+    
     if not w:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found")
     return _withdrawal_to_response(w)
 
 
 @router.patch("/admin/withdrawals/{withdrawal_id}", response_model=WithdrawalResponse)
-def update_withdrawal_status(
+async def update_withdrawal_status(
     withdrawal_id: int,
     request: WithdrawalUpdateRequest,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Update withdrawal status (e.g. mark as completed, rejected, or cancelled).
@@ -104,12 +115,14 @@ def update_withdrawal_status(
     """
     from datetime import datetime, timezone
 
-    w = (
-        db.query(Withdrawal)
+    stmt = (
+        select(Withdrawal)
         .options(joinedload(Withdrawal.host))
         .filter(Withdrawal.id == withdrawal_id)
-        .first()
     )
+    result = await db.execute(stmt)
+    w = result.scalar_one_or_none()
+    
     if not w:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found")
     if w.status != WithdrawalStatus.PENDING:
@@ -136,6 +149,7 @@ def update_withdrawal_status(
     if new_status in (WithdrawalStatus.COMPLETED, WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED):
         w.processed_at = datetime.now(timezone.utc)
         w.processed_by_admin_id = current_admin.id
-    db.commit()
-    db.refresh(w)
+    
+    await db.commit()
+    await db.refresh(w)
     return _withdrawal_to_response(w)

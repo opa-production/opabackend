@@ -7,7 +7,8 @@ import logging
 from datetime import datetime, timedelta, timezone, time as dt_time
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.database import get_db
 from app.models import Subscriber, Admin
@@ -25,24 +26,33 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/admin/subscribers", response_model=SubscriberListResponse)
-def list_subscribers(
+async def list_subscribers(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     subscribed_only: bool = Query(True, description="If true, only list currently subscribed emails"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List newsletter subscribers with pagination.
     Returns total count of subscribers (and total_pages) for the admin UI.
     """
-    query = db.query(Subscriber)
+    stmt = select(Subscriber)
     if subscribed_only:
-        query = query.filter(Subscriber.is_subscribed.is_(True))
-    total = query.count()
+        stmt = stmt.filter(Subscriber.is_subscribed.is_(True))
+        
+    # Get total count
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
     total_pages = max(1, (total + limit - 1) // limit)
     skip = (page - 1) * limit
-    subscribers = query.order_by(Subscriber.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Apply pagination
+    stmt = stmt.order_by(Subscriber.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    subscribers = result.scalars().all()
 
     items = [
         SubscriberItemResponse(
@@ -64,10 +74,10 @@ def list_subscribers(
 
 
 @router.get("/admin/subscribers/trends")
-def get_subscriber_trends(
+async def get_subscriber_trends(
     days: int = Query(30, ge=7, le=90),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return daily subscription and unsubscription counts for the last N days (for chart).
@@ -84,19 +94,25 @@ def get_subscriber_trends(
         unsubscriptions.append(0)
 
     since = datetime.combine(today - timedelta(days=days), dt_time(0, 0, 0), tzinfo=tz)
+    
     # Subscriptions per day (created_at)
     sub_q = (
-        db.query(func.date(Subscriber.created_at).label("d"), func.count(Subscriber.id).label("c"))
+        select(func.date(Subscriber.created_at).label("d"), func.count(Subscriber.id).label("c"))
         .filter(Subscriber.created_at >= since)
         .group_by(func.date(Subscriber.created_at))
     )
-    sub_map = {str(r.d): r.c for r in sub_q if r.d}
+    sub_result = await db.execute(sub_q)
+    sub_rows = sub_result.all()
+    sub_map = {str(r.d): r.c for r in sub_rows if r.d}
+    
     unsub_q = (
-        db.query(func.date(Subscriber.unsubscribed_at).label("d"), func.count(Subscriber.id).label("c"))
+        select(func.date(Subscriber.unsubscribed_at).label("d"), func.count(Subscriber.id).label("c"))
         .filter(Subscriber.unsubscribed_at.isnot(None), Subscriber.unsubscribed_at >= since)
         .group_by(func.date(Subscriber.unsubscribed_at))
     )
-    unsub_map = {str(r.d): r.c for r in unsub_q if r.d}
+    unsub_result = await db.execute(unsub_q)
+    unsub_rows = unsub_result.all()
+    unsub_map = {str(r.d): r.c for r in unsub_rows if r.d}
 
     for i, label in enumerate(labels):
         subscriptions[i] = sub_map.get(label, 0)
@@ -106,26 +122,28 @@ def get_subscriber_trends(
 
 
 @router.get("/admin/subscribers/count")
-def get_subscriber_count(
+async def get_subscriber_count(
     subscribed_only: bool = Query(True, description="Count only currently subscribed"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return total number of subscribers (for dashboard or header).
     """
-    query = db.query(Subscriber)
+    stmt = select(func.count(Subscriber.id))
     if subscribed_only:
-        query = query.filter(Subscriber.is_subscribed.is_(True))
-    count = query.count()
+        stmt = stmt.filter(Subscriber.is_subscribed.is_(True))
+    
+    result = await db.execute(stmt)
+    count = result.scalar() or 0
     return {"count": count, "subscribed_only": subscribed_only }
 
 
 @router.post("/admin/subscribers/send")
-def send_newsletter(
+async def send_newsletter(
     request: AdminSendNewsletterRequest,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Send a newsletter email to all currently subscribed addresses.
@@ -137,7 +155,11 @@ def send_newsletter(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service is not configured. Set SENDGRID_API_KEY.",
         )
-    subscribers = db.query(Subscriber).filter(Subscriber.is_subscribed.is_(True)).all()
+        
+    stmt = select(Subscriber).filter(Subscriber.is_subscribed.is_(True))
+    result = await db.execute(stmt)
+    subscribers = result.scalars().all()
+    
     if not subscribers:
         return {"message": "No subscribers to send to.", "sent": 0, "failed": 0 }
     sent = 0

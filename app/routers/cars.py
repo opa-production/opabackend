@@ -3,7 +3,8 @@ Car listing endpoints for clients (read-only browsing)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, func, select
 from typing import Optional, List
 from datetime import datetime, date, timedelta
 import json
@@ -210,7 +211,7 @@ async def get_car_listings(
     min_seats: Optional[int] = Query(None, ge=1, description="Minimum number of seats"),
     start_date: Optional[datetime] = Query(None, description="Check availability from this date"),
     end_date: Optional[datetime] = Query(None, description="Check availability until this date"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get list of available car listings for clients to browse.
@@ -223,58 +224,62 @@ async def get_car_listings(
     - Results are paginated
     """
     # Base query: only complete listings with host data
-    query = db.query(Car).options(joinedload(Car.host)).filter(Car.is_complete == True)
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.is_complete == True)
     
     # Apply filters
     if location:
-        query = query.filter(Car.location_name.ilike(f"%{location}%"))
+        stmt = stmt.filter(Car.location_name.ilike(f"%{location}%"))
     
     if min_price is not None:
-        query = query.filter(Car.daily_rate >= min_price)
+        stmt = stmt.filter(Car.daily_rate >= min_price)
     
     if max_price is not None:
-        query = query.filter(Car.daily_rate <= max_price)
+        stmt = stmt.filter(Car.daily_rate <= max_price)
     
     if body_type:
-        query = query.filter(Car.body_type.ilike(f"%{body_type}%"))
+        stmt = stmt.filter(Car.body_type.ilike(f"%{body_type}%"))
     
     if fuel_type:
-        query = query.filter(Car.fuel_type.ilike(f"%{fuel_type}%"))
+        stmt = stmt.filter(Car.fuel_type.ilike(f"%{fuel_type}%"))
     
     if transmission:
-        query = query.filter(Car.transmission.ilike(f"%{transmission}%"))
+        stmt = stmt.filter(Car.transmission.ilike(f"%{transmission}%"))
     
     if min_seats:
-        query = query.filter(Car.seats >= min_seats)
+        stmt = stmt.filter(Car.seats >= min_seats)
     
     # Date availability filter (start_date = pickup, end_date = return)
     if start_date and end_date:
         # Exclude cars that have overlapping bookings
         # A booking overlaps if: booking.start < requested.end AND booking.end > requested.start
-        overlapping_bookings = db.query(Booking.car_id).filter(
+        overlapping_bookings = select(Booking.car_id).filter(
             and_(
                 Booking.start_date < end_date,
                 Booking.end_date > start_date,
                 Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE])
             )
-        ).subquery()
-        query = query.filter(~Car.id.in_(overlapping_bookings))
+        )
+        stmt = stmt.filter(~Car.id.in_(overlapping_bookings))
 
         # Exclude cars that have host-blocked dates overlapping the requested range
         # Blocked range overlaps if: blocked.start < requested.end AND blocked.end > requested.start
-        overlapping_blocked = db.query(CarBlockedDate.car_id).filter(
+        overlapping_blocked = select(CarBlockedDate.car_id).filter(
             and_(
                 CarBlockedDate.start_date < end_date,
                 CarBlockedDate.end_date > start_date
             )
-        ).distinct().subquery()
-        query = query.filter(~Car.id.in_(overlapping_blocked))
+        ).distinct()
+        stmt = stmt.filter(~Car.id.in_(overlapping_blocked))
     
     # Get total count before pagination
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply pagination and order by newest first
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().all()
     
     # Convert to response format
     car_responses = [car_to_listing_response(car) for car in cars]
@@ -296,7 +301,7 @@ async def explore_cars(
     min_price: Optional[float] = Query(None, ge=0, description="Minimum daily rate"),
     max_price: Optional[float] = Query(None, ge=0, description="Maximum daily rate"),
     body_type: Optional[str] = Query(None, description="Filter by body type"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get cars for explore page - simplified listing for clients
@@ -321,7 +326,7 @@ async def explore_cars(
                f"max_price={max_price}, body_type={body_type}")
     
     # Base query: only verified and visible listings (is_complete not required for explore)
-    query = db.query(Car).options(joinedload(Car.host)).filter(
+    stmt = select(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.VERIFIED.value,
         Car.is_hidden == False
     )
@@ -333,32 +338,36 @@ async def explore_cars(
             Car.model.ilike(f"%{search}%"),
             Car.location_name.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.filter(search_filter)
     
     # Apply location filter
     if location:
-        query = query.filter(Car.location_name.ilike(f"%{location}%"))
+        stmt = stmt.filter(Car.location_name.ilike(f"%{location}%"))
     
     # Apply price filters
     if min_price is not None:
-        query = query.filter(Car.daily_rate >= min_price)
+        stmt = stmt.filter(Car.daily_rate >= min_price)
     
     if max_price is not None:
-        query = query.filter(Car.daily_rate <= max_price)
+        stmt = stmt.filter(Car.daily_rate <= max_price)
     
     # Apply body type filter
     if body_type:
-        query = query.filter(Car.body_type.ilike(f"%{body_type}%"))
+        stmt = stmt.filter(Car.body_type.ilike(f"%{body_type}%"))
     
     # Get total count before pagination
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Calculate pagination
     skip = (page - 1) * limit
     total_pages = (total + limit - 1) // limit if limit > 0 else 0
     
     # Apply pagination and order by newest first
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().all()
     
     # Convert to explore response format
     car_responses = []
@@ -436,7 +445,7 @@ async def explore_cars(
 async def create_car_basics(
     request: CarBasicsRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Endpoint 1: Create car with basic information
@@ -462,8 +471,8 @@ async def create_car_basics(
     )
     
     db.add(db_car)
-    db.commit()
-    db.refresh(db_car)
+    await db.commit()
+    await db.refresh(db_car)
     
     return _car_to_response(db_car)
 
@@ -473,7 +482,7 @@ async def update_car_specs(
     car_id: int,
     request: CarTechnicalSpecsRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Endpoint 2: Update car with technical specifications
@@ -488,7 +497,8 @@ async def update_car_specs(
     Updates an existing car record with technical specifications.
     """
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -509,8 +519,8 @@ async def update_car_specs(
     db_car.mileage = request.mileage
     db_car.features = json.dumps(request.features) if request.features else None
     
-    db.commit()
-    db.refresh(db_car)
+    await db.commit()
+    await db.refresh(db_car)
     
     return _car_to_response(db_car)
 
@@ -520,7 +530,7 @@ async def update_car_pricing(
     car_id: int,
     request: CarPricingRulesRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Endpoint 3: Update car with pricing and rules
@@ -536,7 +546,8 @@ async def update_car_pricing(
     Updates an existing car record with pricing and rental rules.
     """
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -558,8 +569,8 @@ async def update_car_pricing(
     db_car.min_age_requirement = request.min_age_requirement
     db_car.rules = request.rules
     
-    db.commit()
-    db.refresh(db_car)
+    await db.commit()
+    await db.refresh(db_car)
     
     return _car_to_response(db_car)
 
@@ -569,7 +580,7 @@ async def update_car_location(
     car_id: int,
     request: CarLocationRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Endpoint 4: Update car location and mark as complete
@@ -582,7 +593,8 @@ async def update_car_location(
     Updates an existing car record with location information and marks it as complete.
     """
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -608,10 +620,11 @@ async def update_car_location(
     # Mark car as complete
     db_car.is_complete = True
     
-    db.commit()
-    db.refresh(db_car)
+    await db.commit()
+    await db.refresh(db_car)
     
     return _car_to_response(db_car)
+
 
 
 @router.put("/host/cars/{car_id}/media", response_model=CarResponse)
@@ -619,7 +632,7 @@ async def update_car_media(
     car_id: int,
     request: CarMediaRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update car media URLs after uploading to Supabase
@@ -639,7 +652,8 @@ async def update_car_media(
                 f"cover_image={request.cover_image}, car_video={request.car_video}")
     
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         logger.error(f"🖼️ [UPDATE CAR MEDIA] Car not found: car_id={car_id}")
         raise HTTPException(
@@ -692,15 +706,15 @@ async def update_car_media(
     logger.info(f"🖼️ [UPDATE CAR MEDIA] Prepared updates: {updates}")
     
     try:
-        db.commit()
-        db.refresh(db_car)
+        await db.commit()
+        await db.refresh(db_car)
         logger.info(f"🖼️ [UPDATE CAR MEDIA] ✅ Successfully updated car media for car_id={car_id}. "
                    f"Updates: {updates}")
         logger.info(f"🖼️ [UPDATE CAR MEDIA] Final state: cover_image={db_car.cover_image}, "
                    f"car_images={db_car.car_images}, car_video={db_car.car_video}")
     except Exception as e:
         logger.error(f"🖼️ [UPDATE CAR MEDIA] ❌ Database commit failed: {str(e)}", exc_info=True)
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update car media: {str(e)}"
@@ -714,7 +728,7 @@ async def save_car_media_urls(
     car_id: int,
     request: CarMediaUrlsRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Save car media URLs after app uploads directly to Supabase
@@ -735,7 +749,8 @@ async def save_car_media_urls(
                 f"files_is_none={request.files is None}, files_length={len(request.files) if request.files else 'N/A'}")
     
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         logger.error(f"🖼️ [SAVE IMAGE URLS API] Car not found: car_id={car_id}")
         raise HTTPException(
@@ -809,15 +824,15 @@ async def save_car_media_urls(
     logger.info(f"🖼️ [SAVE IMAGE URLS API] Prepared updates: {updates}")
     
     try:
-        db.commit()
-        db.refresh(db_car)
+        await db.commit()
+        await db.refresh(db_car)
         logger.info(f"🖼️ [SAVE IMAGE URLS API] ✅ Successfully saved car media URLs for car_id={car_id}")
         logger.info(f"🖼️ [SAVE IMAGE URLS API] Final state: cover_image={db_car.cover_image}, "
                    f"car_images={db_car.car_images}, car_video={db_car.car_video}")
         logger.info(f"🖼️ [SAVE IMAGE URLS API] Response data: {updates}")
     except Exception as e:
         logger.error(f"🖼️ [SAVE IMAGE URLS API] ❌ Database commit failed: {str(e)}", exc_info=True)
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save car media URLs: {str(e)}"
@@ -829,7 +844,7 @@ async def save_car_media_urls(
 @router.get("/cars/{car_id}", response_model=CarListingResponse)
 async def get_car_details(
     car_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific car for car details page.
@@ -850,11 +865,14 @@ async def get_car_details(
     """
     logger.info(f"🚗 [CAR DETAILS] Request received for car_id={car_id}")
     
-    car = db.query(Car).options(joinedload(Car.host)).filter(
-        Car.id == car_id,
-        Car.verification_status == VerificationStatus.VERIFIED.value,
-        Car.is_hidden == False
-    ).first()
+    result = await db.execute(
+        select(Car).options(joinedload(Car.host)).filter(
+            Car.id == car_id,
+            Car.verification_status == VerificationStatus.VERIFIED.value,
+            Car.is_hidden == False
+        )
+    )
+    car = result.scalar_one_or_none()
     
     if not car:
         logger.warning(f"🚗 [CAR DETAILS] Car not found or not available: car_id={car_id}")
@@ -868,6 +886,7 @@ async def get_car_details(
                f"name={car.name}, model={car.model}, images_count={car_images_count}")
     
     return car_to_listing_response(car)
+
 
 
 @router.get("/client/cars/{car_id}", response_model=CarListingResponse)
@@ -1071,7 +1090,7 @@ async def get_car_availability(
 @router.get("/cars/{car_id}/status", response_model=CarStatusResponse)
 async def get_car_status(
     car_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get car verification status
@@ -1081,7 +1100,8 @@ async def get_car_status(
     
     - **car_id**: The unique identifier of the car
     """
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1106,22 +1126,26 @@ async def get_car_status(
 @router.get("/host/cars", response_model=List[CarResponse])
 async def list_my_cars(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all cars belonging to the authenticated host
     
     Returns all cars owned by the currently authenticated host, regardless of verification status.
     """
-    cars = db.query(Car).filter(Car.host_id == current_host.id).order_by(Car.created_at.desc()).all()
+    result = await db.execute(
+        select(Car).filter(Car.host_id == current_host.id).order_by(Car.created_at.desc())
+    )
+    cars = result.scalars().all()
     return [_car_to_response(car) for car in cars]
+
 
 
 @router.put("/host/cars/{car_id}/toggle-visibility", response_model=CarResponse)
 async def toggle_car_visibility(
     car_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Toggle car visibility (show/hide) for verified cars
@@ -1132,7 +1156,8 @@ async def toggle_car_visibility(
     - **car_id**: ID of the car to toggle visibility
     """
     # Get car and verify ownership
-    db_car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    db_car = result.scalar_one_or_none()
     if not db_car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1155,8 +1180,8 @@ async def toggle_car_visibility(
     # Toggle visibility
     db_car.is_hidden = not db_car.is_hidden
     
-    db.commit()
-    db.refresh(db_car)
+    await db.commit()
+    await db.refresh(db_car)
     
     return _car_to_response(db_car)
 
@@ -1165,7 +1190,7 @@ async def toggle_car_visibility(
 async def get_car_drive_settings(
     car_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get the drive setting for a car.
@@ -1173,10 +1198,13 @@ async def get_car_drive_settings(
     - **drive_setting**: self_only | self_and_chauffeur | chauffeur_only
     - **allowed_drive_types**: Drive types the client can choose when booking
     """
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id,
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id,
+        )
+    )
+    car = result.scalar_one_or_none()
 
     if not car:
         raise HTTPException(
@@ -1196,7 +1224,7 @@ async def update_car_drive_settings(
     car_id: int,
     request: DriveSettingsRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Update the drive setting for a car.
@@ -1205,10 +1233,13 @@ async def update_car_drive_settings(
     - **self_and_chauffeur**: Client can choose self drive or with chauffeur
     - **chauffeur_only**: Client can only choose with chauffeur
     """
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id,
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id,
+        )
+    )
+    car = result.scalar_one_or_none()
 
     if not car:
         raise HTTPException(
@@ -1217,8 +1248,8 @@ async def update_car_drive_settings(
         )
 
     car.drive_setting = request.drive_setting.value
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
 
     return DriveSettingsResponse(
         drive_setting=car.drive_setting,
@@ -1230,7 +1261,7 @@ async def update_car_drive_settings(
 async def delete_my_car(
     car_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a car listing. Only the car owner (host) can delete it.
@@ -1238,10 +1269,13 @@ async def delete_my_car(
     - Cannot delete if the car has any pending, confirmed, or active bookings.
     - Returns 400 in that case; cancel or complete those bookings first.
     """
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id
+        )
+    )
+    car = result.scalar_one_or_none()
 
     if not car:
         raise HTTPException(
@@ -1250,14 +1284,14 @@ async def delete_my_car(
         )
 
     # Block delete if there are non-finished bookings
-    active_booking = (
-        db.query(Booking)
+    booking_result = await db.execute(
+        select(Booking)
         .filter(
             Booking.car_id == car_id,
             Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
         )
-        .first()
     )
+    active_booking = booking_result.scalar_one_or_none()
     if active_booking:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1267,8 +1301,8 @@ async def delete_my_car(
             ),
         )
 
-    db.delete(car)
-    db.commit()
+    await db.delete(car)
+    await db.commit()
     return {"message": "Car deleted successfully"}
 
 
@@ -1280,14 +1314,17 @@ async def _add_blocked_date_internal(
     blocked_date: date,
     reason: Optional[str],
     current_host: Host,
-    db: Session
+    db: AsyncSession
 ):
     """Internal helper to add a blocked date"""
     # Verify car exists and belongs to host
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id
+        )
+    )
+    car = result.scalar_one_or_none()
     
     if not car:
         raise HTTPException(
@@ -1296,17 +1333,19 @@ async def _add_blocked_date_internal(
         )
     
     # Check if date is already blocked (check both blocked_date and start_date)
-    blocked_datetime = datetime.combine(blocked_date, datetime.min.time())
-    existing = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id,
-        or_(
-            CarBlockedDate.blocked_date == blocked_date,
-            and_(
-                func.date(CarBlockedDate.start_date) <= blocked_date,
-                func.date(CarBlockedDate.end_date) >= blocked_date
+    existing_result = await db.execute(
+        select(CarBlockedDate).filter(
+            CarBlockedDate.car_id == car_id,
+            or_(
+                CarBlockedDate.blocked_date == blocked_date,
+                and_(
+                    func.date(CarBlockedDate.start_date) <= blocked_date,
+                    func.date(CarBlockedDate.end_date) >= blocked_date
+                )
             )
         )
-    ).first()
+    )
+    existing = existing_result.scalar_one_or_none()
     
     if existing:
         raise HTTPException(
@@ -1333,8 +1372,8 @@ async def _add_blocked_date_internal(
     )
     
     db.add(blocked_date_obj)
-    db.commit()
-    db.refresh(blocked_date_obj)
+    await db.commit()
+    await db.refresh(blocked_date_obj)
     
     return {
         "message": f"Date {blocked_date.isoformat()} blocked successfully",
@@ -1351,7 +1390,7 @@ async def _add_blocked_date_internal(
 async def get_car_blocked_dates(
     car_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all blocked dates for a car.
@@ -1360,10 +1399,13 @@ async def get_car_blocked_dates(
     - Returns list of blocked dates with reasons
     """
     # Verify car exists and belongs to host
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id
+        )
+    )
+    car = result.scalar_one_or_none()
     
     if not car:
         raise HTTPException(
@@ -1372,9 +1414,12 @@ async def get_car_blocked_dates(
         )
     
     # Get all blocked dates for this car
-    blocked_dates = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id
-    ).order_by(CarBlockedDate.start_date).all()
+    result = await db.execute(
+        select(CarBlockedDate).filter(
+            CarBlockedDate.car_id == car_id
+        ).order_by(CarBlockedDate.start_date)
+    )
+    blocked_dates = result.scalars().all()
     
     return {
         "car_id": car_id,
@@ -1398,7 +1443,7 @@ async def add_car_blocked_date(
     car_id: int,
     request: CarBlockedDateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add a blocked date for a car.
@@ -1416,7 +1461,7 @@ async def add_car_blocked_date_alias(
     car_id: int,
     request: CarBlockedDateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Alias for /blocked-dates endpoint for client compatibility"""
     return await _add_blocked_date_internal(car_id, request.blocked_date, request.reason, current_host, db)
@@ -1427,7 +1472,7 @@ async def remove_car_blocked_date(
     car_id: int,
     blocked_date_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Remove a blocked date for a car.
@@ -1435,10 +1480,13 @@ async def remove_car_blocked_date(
     - Only the car owner (host) can remove blocked dates
     """
     # Verify car exists and belongs to host
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.host_id == current_host.id
-    ).first()
+    result = await db.execute(
+        select(Car).filter(
+            Car.id == car_id,
+            Car.host_id == current_host.id
+        )
+    )
+    car = result.scalar_one_or_none()
     
     if not car:
         raise HTTPException(
@@ -1447,10 +1495,13 @@ async def remove_car_blocked_date(
         )
     
     # Find the blocked date
-    blocked_date_obj = db.query(CarBlockedDate).filter(
-        CarBlockedDate.id == blocked_date_id,
-        CarBlockedDate.car_id == car_id
-    ).first()
+    result = await db.execute(
+        select(CarBlockedDate).filter(
+            CarBlockedDate.id == blocked_date_id,
+            CarBlockedDate.car_id == car_id
+        )
+    )
+    blocked_date_obj = result.scalar_one_or_none()
     
     if not blocked_date_obj:
         raise HTTPException(
@@ -1458,9 +1509,10 @@ async def remove_car_blocked_date(
             detail="Blocked date not found"
         )
     
-    db.delete(blocked_date_obj)
-    db.commit()
+    await db.delete(blocked_date_obj)
+    await db.commit()
     
     return {
         "message": f"Blocked date {blocked_date_obj.blocked_date.isoformat()} removed successfully"
     }
+
