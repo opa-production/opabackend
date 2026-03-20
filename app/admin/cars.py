@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Set
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
@@ -17,6 +17,15 @@ from app.schemas import (
 )
 from app.auth import get_current_admin
 from app.routers.cars import _car_to_response
+from app.storage import (
+    BUCKETS,
+    SUPABASE_CLIENT_INIT_ERROR,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_URL,
+    build_public_storage_object_url,
+    collect_storage_file_paths_http,
+    supabase,
+)
 import json
 
 router = APIRouter()
@@ -42,6 +51,112 @@ def _parse_features(features_str: Optional[str]) -> Optional[List[str]]:
         return json.loads(features_str)
     except:
         return None
+
+
+def _normalize_public_url(raw_url: Any) -> Optional[str]:
+    """Normalize Supabase get_public_url return shape across SDK versions."""
+    if isinstance(raw_url, str):
+        return raw_url
+    if hasattr(raw_url, "public_url"):
+        return getattr(raw_url, "public_url")
+    if hasattr(raw_url, "publicUrl"):
+        return getattr(raw_url, "publicUrl")
+    if hasattr(raw_url, "data"):
+        data = getattr(raw_url, "data")
+        if isinstance(data, dict):
+            return data.get("publicUrl") or data.get("public_url")
+        if hasattr(data, "publicUrl"):
+            return getattr(data, "publicUrl")
+        if hasattr(data, "public_url"):
+            return getattr(data, "public_url")
+    if isinstance(raw_url, dict):
+        if "publicUrl" in raw_url:
+            return raw_url.get("publicUrl")
+        if "public_url" in raw_url:
+            return raw_url.get("public_url")
+        data = raw_url.get("data")
+        if isinstance(data, dict):
+            return data.get("publicUrl") or data.get("public_url")
+    return None
+
+
+def _extract_legacy_image_urls(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [u for u in parsed if isinstance(u, str)]
+        if isinstance(parsed, dict):
+            # Handle shapes like {"image_urls":[...]} or {"urls":[...]}
+            for key in ("image_urls", "images", "urls", "photos"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    return [u for u in value if isinstance(u, str)]
+            return []
+        if isinstance(parsed, str):
+            return [parsed]
+    except Exception:
+        # Fallback for non-JSON formats (single URL or comma-separated URLs)
+        if "," in raw:
+            return [u.strip() for u in raw.split(",") if u.strip()]
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return [raw]
+    return []
+
+
+def _collect_storage_files_recursive(bucket_name: str, base_path: str, max_depth: int = 4) -> List[str]:
+    """
+    Recursively collect file paths under a base path in Supabase storage.
+    """
+    if supabase is None:
+        return []
+
+    results: List[str] = []
+    visited: Set[str] = set()
+
+    known_exts = {
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg",
+        ".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v"
+    }
+
+    def _looks_like_file(entry: Dict[str, Any]) -> bool:
+        name = (entry.get("name") or "").lower()
+        if not name:
+            return False
+        if "." in name and any(name.endswith(ext) for ext in known_exts):
+            return True
+        if entry.get("metadata") is not None:
+            return True
+        if entry.get("id") is not None:
+            return True
+        return False
+
+    def walk(path: str, depth: int) -> None:
+        if depth > max_depth or path in visited:
+            return
+        visited.add(path)
+
+        try:
+            entries = supabase.storage.from_(bucket_name).list(
+                path,
+                {"limit": 200, "sortBy": {"column": "created_at", "order": "asc"}}
+            ) or []
+        except Exception:
+            return
+
+        for entry in entries:
+            name = entry.get("name")
+            if not name:
+                continue
+            child_path = f"{path}/{name}"
+            if _looks_like_file(entry):
+                results.append(child_path)
+            else:
+                walk(child_path, depth + 1)
+
+    walk(base_path, 0)
+    return results
 
 
 # ==================== CAR LIST & DETAILS ====================
@@ -270,6 +385,141 @@ async def get_car_details(
         created_at=car.created_at,
         updated_at=car.updated_at
     )
+
+
+@router.get("/admin/cars/{car_id}/media")
+async def get_car_media(
+    car_id: int,
+    current_admin=Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Return car media URLs for admin review.
+
+    Tries Supabase folder structures first, then falls back to legacy DB URLs.
+    """
+    car = db.query(Car).filter(Car.id == car_id).first()
+    if not car:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Car not found"
+        )
+
+    image_urls: List[str] = []
+    video_urls: List[str] = []
+    checked_folders: List[str] = []
+    debug_files_found: Dict[str, List[str]] = {}
+    debug_errors: Dict[str, str] = {}
+    source_counts = {
+        "storage_images": 0,
+        "storage_videos": 0,
+        "db_image_urls": 0,
+        "db_cover_image": 0,
+        "db_video_url": 0,
+    }
+    image_exts = (".jpg", ".jpeg", ".png", ".webp")
+    video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
+
+    bucket_name = BUCKETS["vehicle_media"]
+    use_sdk = supabase is not None
+    use_http = (not use_sdk) and bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    listing_mode = "sdk" if use_sdk else ("http" if use_http else "none")
+
+    if listing_mode != "none":
+        # car_{id} matches current mobile / Supabase dashboard layout (e.g. car_20/)
+        folder_candidates = [
+            f"car_{car.id}",
+            f"car_{car.id}/images",
+            f"car_{car.id}/videos",
+            f"user_{car.host_id}/car_{car.id}",
+            f"user_{car.host_id}/car_{car.id}/images",
+            f"user_{car.host_id}/car_{car.id}/videos",
+            f"{car.host_id}/vehicles/{car.id}",
+            f"{car.host_id}/vehicles/{car.id}/images",
+            f"{car.host_id}/vehicles/{car.id}/videos",
+        ]
+        seen = set()
+
+        for folder in folder_candidates:
+            if folder in seen:
+                continue
+            seen.add(folder)
+            checked_folders.append(folder)
+            try:
+                if use_sdk:
+                    collected_paths = _collect_storage_files_recursive(bucket_name, folder)
+                else:
+                    collected_paths = collect_storage_file_paths_http(bucket_name, folder)
+            except Exception as exc:
+                collected_paths = []
+                debug_errors[folder] = str(exc)
+            debug_files_found[folder] = collected_paths
+
+            for full_path in collected_paths:
+                filename = full_path.rsplit("/", 1)[-1].lower()
+                if not filename:
+                    continue
+                if use_sdk:
+                    public_url = _normalize_public_url(
+                        supabase.storage.from_(bucket_name).get_public_url(full_path)
+                    )
+                else:
+                    public_url = build_public_storage_object_url(bucket_name, full_path)
+                if not public_url:
+                    debug_errors[full_path] = "Failed to build public URL"
+                    continue
+
+                if filename.startswith("image_") and filename.endswith(image_exts):
+                    image_urls.append(public_url)
+                    source_counts["storage_images"] += 1
+                elif filename.endswith(image_exts):
+                    image_urls.append(public_url)
+                    source_counts["storage_images"] += 1
+                elif filename.endswith(video_exts):
+                    video_urls.append(public_url)
+                    source_counts["storage_videos"] += 1
+
+    # Fallback to legacy DB-stored URLs if storage listing is unavailable/empty.
+    legacy_images = _extract_legacy_image_urls(car.image_urls)
+    image_urls.extend(legacy_images)
+    source_counts["db_image_urls"] = len(legacy_images)
+    if car.cover_image:
+        image_urls.append(car.cover_image)
+        source_counts["db_cover_image"] = 1
+    if car.video_url:
+        video_urls.append(car.video_url)
+        source_counts["db_video_url"] = 1
+
+    # Preserve order while removing duplicates.
+    image_urls_before_dedupe = len(image_urls)
+    video_urls_before_dedupe = len(video_urls)
+    image_urls = list(dict.fromkeys([u for u in image_urls if isinstance(u, str) and u.strip()]))
+    video_urls = list(dict.fromkeys([u for u in video_urls if isinstance(u, str) and u.strip()]))
+
+    return {
+        "car_id": car.id,
+        "host_id": car.host_id,
+        "folder_paths": checked_folders,
+        "cover_image_url": image_urls[0] if image_urls else None,
+        "image_urls": image_urls,
+        "video_urls": video_urls,
+        "debug": {
+            "bucket": BUCKETS["vehicle_media"],
+            "listing_mode": listing_mode,
+            "supabase_url_configured": bool(SUPABASE_URL),
+            "supabase_service_role_configured": bool(SUPABASE_SERVICE_ROLE_KEY),
+            "supabase_client_initialized": supabase is not None,
+            "supabase_init_error": SUPABASE_CLIENT_INIT_ERROR,
+            "source_counts": source_counts,
+            "checked_folders": checked_folders,
+            "files_found_by_folder": debug_files_found,
+            "errors": debug_errors,
+            "image_count_before_dedupe": image_urls_before_dedupe,
+            "image_count_after_dedupe": len(image_urls),
+            "video_count_before_dedupe": video_urls_before_dedupe,
+            "video_count_after_dedupe": len(video_urls),
+        },
+    }
 
 
 # ==================== CAR VERIFICATION STATUS ====================
