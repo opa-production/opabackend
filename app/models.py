@@ -426,7 +426,7 @@ class StellarPaymentTransaction(Base):
     to_address: Mapped[str] = mapped_column(String(56), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    booking: Mapped["Booking"] = relationship("Booking", backref="stellar_payments")
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="stellar_payments")
     client: Mapped["Client"] = relationship("Client", backref="stellar_payment_transactions")
 
 
@@ -643,6 +643,12 @@ class Booking(Base):
     client: Mapped["Client"] = relationship(back_populates="bookings")
     car: Mapped["Car"] = relationship(back_populates="bookings")
     payments: Mapped[list["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    # Must cascade-delete: booking_id is NOT NULL; otherwise deleting car -> bookings tries to NULL FK and fails
+    stellar_payments: Mapped[list["StellarPaymentTransaction"]] = relationship(
+        "StellarPaymentTransaction",
+        back_populates="booking",
+        cascade="all, delete-orphan",
+    )
 
 
 
