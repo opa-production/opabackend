@@ -1,12 +1,46 @@
 from dotenv import load_dotenv
 import os
 import logging
+import urllib.parse
+from typing import Any, Dict, Optional
+
 import requests
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 PAYHERO_URL = "https://backend.payhero.co.ke/api/v2/payments"
+PAYHERO_TRANSACTION_STATUS_URL = "https://backend.payhero.co.ke/api/v2/transaction-status"
+
+
+def fetch_payhero_transaction_status(reference: str) -> Optional[Dict[str, Any]]:
+    """
+    GET Payhero transaction status by reference (CheckoutRequestID ws_CO_… or external_reference).
+    Used when the M-Pesa webhook did not reach our server but the client polls payment-status.
+    """
+    ref = str(reference).strip() if reference else ""
+    if not ref:
+        return None
+    auth_token = os.getenv("PAYHERO_AUTH_TOKEN")
+    if not auth_token:
+        return None
+    try:
+        qs = urllib.parse.urlencode({"reference": ref})
+        url = f"{PAYHERO_TRANSACTION_STATUS_URL}?{qs}"
+        headers = {"Authorization": f"Basic {auth_token}"}
+        response = requests.get(url, headers=headers, timeout=20)
+        if response.status_code != 200:
+            logger.debug(
+                "[PAYHERO] transaction-status HTTP %s for ref=%s body=%s",
+                response.status_code,
+                ref[:24],
+                (response.text or "")[:300],
+            )
+            return None
+        return response.json()
+    except Exception as e:
+        logger.warning("[PAYHERO] transaction-status error ref=%s: %s", ref[:24], e)
+        return None
 
 def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental"):
     auth_token = os.getenv("PAYHERO_AUTH_TOKEN")

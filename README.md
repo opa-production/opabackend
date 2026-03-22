@@ -201,6 +201,17 @@ Use one ngrok tunnel on port 8001 for both Payhero and Veriff callbacks.
 
 7. **Verify:** After a test payment, check server logs for `[PAYHERO CALLBACK] Received payload:` — if it appears, the callback is working and status will update to completed.
 
+#### Host subscription (same callback)
+
+Hosts can pay for **starter** or **premium** plans via M-Pesa STK. The same Payhero webhook (`POST /api/v1/mpesa/callback`) updates subscription status and sets `hosts.subscription_plan` / `subscription_expires_at`. While status is **pending**, `GET /host/subscription/payment-status` can also sync from Payhero’s transaction-status API if the webhook was missed (`HOST_SUB_SYNC_PAYHERO_STATUS`, default on).
+
+- **Catalog (no auth):** `GET /api/v1/host/subscription/plans`
+- **Current plan (host JWT):** `GET /api/v1/host/subscription/me`
+- **Start STK (host JWT):** `POST /api/v1/host/subscription/checkout` — body `{ "plan": "starter" | "premium", "phone_number": "2547..." }`
+- **Poll after STK:** `GET /api/v1/host/subscription/payment-status?checkout_request_id=...`
+
+Pricing defaults are overridden with env: `HOST_SUB_STARTER_PRICE_KES`, `HOST_SUB_PREMIUM_PRICE_KES`, `HOST_SUB_STARTER_DURATION_DAYS`, `HOST_SUB_PREMIUM_DURATION_DAYS` (see `.env.example`).
+
 ### Pending booking expiry
 
 Unpaid **pending** bookings are automatically cancelled after a set time so the car becomes available again.

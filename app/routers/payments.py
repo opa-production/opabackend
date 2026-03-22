@@ -37,6 +37,8 @@ from app.schemas import (
     StellarTransactionResponse,
 )
 from app.services.mpesa_stk_push import sendStkPush
+from app.services.host_subscription_payment import process_host_subscription_mpesa_callback
+from app.services.mpesa_callback_utils import infer_insufficient_funds, normalize_stk_result_code
 from app.services.pesapal_payment import (
     get_ipn_id,
     submit_order,
@@ -955,28 +957,54 @@ async def get_payment_status(
 
 
 def _normalize_callback_payload(data: dict) -> dict:
-    """Extract and normalize callback payload; Payhero may nest under 'response' or use different casing."""
-    payload = data.get("response", data)
-    if not payload and isinstance(data.get("Body"), dict):
-        # Safaricom-style nesting
-        payload = data.get("Body", {}).get("stkCallback", data)
-    # Normalize keys: prefer PascalCase from Payhero, fall back to snake_case
-    def get_val(p: dict, *keys: str):
+    """
+    Extract and normalize callback payload.
+    Payhero may use `response`, Safaricom uses Body.stkCallback — we must read **both**;
+    otherwise CheckoutRequestID/ResultCode stay null and STK stays pending forever.
+    """
+    if not isinstance(data, dict):
+        data = {}
+
+    def get_val(p: object, *keys: str):
+        if not isinstance(p, dict):
+            return None
         for k in keys:
             if k in p and p[k] is not None:
                 return p[k]
         return None
-    # ExternalReference may be in response or at top level (we send booking_id when initiating)
-    ext_ref = get_val(payload, "ExternalReference", "external_reference") or get_val(data, "ExternalReference", "external_reference")
+
+    response = data.get("response")
+    response = response if isinstance(response, dict) else None
+    stk_callback = None
+    body = data.get("Body")
+    if isinstance(body, dict):
+        sc = body.get("stkCallback")
+        if isinstance(sc, dict):
+            stk_callback = sc
+
+    # Search order: flat response object, Safaricom stkCallback, then top-level body
+    layers = [x for x in (response, stk_callback, data) if isinstance(x, dict)]
+
+    def first(*keys: str):
+        for layer in layers:
+            v = get_val(layer, *keys)
+            if v is not None:
+                return v
+        return None
+
+    ext_ref = first("ExternalReference", "external_reference")
+    if ext_ref is None:
+        ext_ref = get_val(data, "ExternalReference", "external_reference")
+
     return {
-        "CheckoutRequestID": get_val(payload, "CheckoutRequestID", "checkout_request_id", "reference"),
+        "CheckoutRequestID": first("CheckoutRequestID", "checkout_request_id", "reference"),
         "ExternalReference": ext_ref,
-        "ResultCode": get_val(payload, "ResultCode", "result_code"),
-        "ResultDesc": get_val(payload, "ResultDesc", "result_desc"),
-        "Status": get_val(payload, "Status", "status"),
-        "MpesaReceiptNumber": get_val(payload, "MpesaReceiptNumber", "mpesa_receipt_number"),
-        "PhoneNumber": get_val(payload, "PhoneNumber", "Phone", "phone_number"),
-        "TransactionDate": get_val(payload, "TransactionDate", "transaction_date"),
+        "ResultCode": first("ResultCode", "result_code"),
+        "ResultDesc": first("ResultDesc", "result_desc"),
+        "Status": first("Status", "status"),
+        "MpesaReceiptNumber": first("MpesaReceiptNumber", "mpesa_receipt_number"),
+        "PhoneNumber": first("PhoneNumber", "Phone", "phone_number"),
+        "TransactionDate": first("TransactionDate", "transaction_date"),
     }
 
 
@@ -1020,6 +1048,18 @@ async def mpesa_callback(
         if not checkout_request_id and not external_reference:
             logger.warning("[PAYHERO CALLBACK] No CheckoutRequestID or ExternalReference in callback")
             return {"ResultCode": 0, "ResultDesc": "Success"}
+
+        # Host subscription uses ExternalReference H-SUB-{id}. Handle before booking Payment lookup so
+        # we never mis-route if Payhero payload is unusual.
+        ext_for_sub = str(external_reference).strip() if external_reference else ""
+        if ext_for_sub.upper().startswith("H-SUB"):
+            if process_host_subscription_mpesa_callback(db, payload):
+                logger.info(
+                    "[PAYHERO CALLBACK] Handled host subscription (H-SUB first): CheckoutRequestID=%s, ExternalReference=%s",
+                    checkout_request_id,
+                    external_reference,
+                )
+                return {"ResultCode": 0, "ResultDesc": "Success"}
         
         payment = None
         if checkout_request_id:
@@ -1040,13 +1080,21 @@ async def mpesa_callback(
                     logger.info("[PAYHERO CALLBACK] Matched payment by ExternalReference=%s (booking_id)", external_reference)
         
         if not payment:
+            # Host subscription STK (external_reference H-SUB-{id})
+            if process_host_subscription_mpesa_callback(db, payload):
+                logger.info(
+                    "[PAYHERO CALLBACK] Handled host subscription: CheckoutRequestID=%s, ExternalReference=%s",
+                    checkout_request_id,
+                    external_reference,
+                )
+                return {"ResultCode": 0, "ResultDesc": "Success"}
             logger.warning(
                 "[PAYHERO CALLBACK] No pending payment for CheckoutRequestID=%s, ExternalReference=%s",
                 checkout_request_id, external_reference,
             )
             return {"ResultCode": 0, "ResultDesc": "Success"}
         
-        result_code_str = str(result_code) if result_code is not None else ""
+        result_code_str = normalize_stk_result_code(result_code)
         is_success = result_code_str == "0" or (status_str and str(status_str).lower() == "success")
         
         if is_success:
@@ -1105,7 +1153,7 @@ async def mpesa_callback(
                 payment.result_desc = "Payment cancelled. You can try again when ready."
             elif result_code_str == "2029":
                 payment.result_desc = "Payment timed out or failed. Please try again."
-            elif result_code_str == "1":
+            elif infer_insufficient_funds(result_code_str, str(result_desc)):
                 payment.result_desc = "Insufficient funds. Please top up your M-Pesa and try again."
             elif result_desc:
                 payment.result_desc = str(result_desc).strip()

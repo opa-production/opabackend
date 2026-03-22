@@ -2437,3 +2437,98 @@ class MpesaStkPushResponse(BaseModel):
     ResponseDescription: str
     CustomerMessage: str
 
+
+# --- Host subscription (M-Pesa Payhero) ---
+
+class HostSubscriptionPlanCode(str, Enum):
+    """Sellable subscription tiers (free is default on host, not purchased via checkout)."""
+    starter = "starter"
+    premium = "premium"
+
+
+class HostSubscriptionPlanPublic(BaseModel):
+    """One plan row for catalog / pricing UI."""
+    code: str  # free | starter | premium
+    name: str
+    description: str
+    price_kes: int  # 0 for free
+    duration_days: int  # 0 for free (not billed)
+    features: List[str] = Field(default_factory=list)
+
+
+class HostSubscriptionPlansResponse(BaseModel):
+    plans: List[HostSubscriptionPlanPublic]
+
+
+class HostSubscriptionCheckoutRequest(BaseModel):
+    """Start M-Pesa STK for host subscription."""
+    plan: HostSubscriptionPlanCode = Field(..., description="starter or premium")
+    phone_number: str = Field(
+        ...,
+        min_length=9,
+        max_length=20,
+        description="M-Pesa phone (e.g. 254712345678 or 0712345678)",
+    )
+
+
+class HostSubscriptionCheckoutResponse(BaseModel):
+    success: bool = True
+    message: str
+    plan: str
+    amount_kes: int
+    checkout_request_id: Optional[str] = None
+    external_reference: str = Field(
+        ...,
+        description="Reference sent to M-Pesa; poll payment-status with checkout_request_id.",
+    )
+    stk_pending_window_seconds: int = Field(
+        ...,
+        description="Match your UI countdown: pending auto-expires server-side after this if no PIN.",
+    )
+
+
+class HostSubscriptionMeResponse(BaseModel):
+    """Current subscription for the authenticated host."""
+    plan: str  # free | starter | premium
+    expires_at: Optional[datetime] = None
+    is_paid_active: bool = Field(
+        ...,
+        description="True if plan is starter or premium and expires_at is in the future",
+    )
+    days_remaining: Optional[int] = None
+    has_pending_checkout: bool = Field(
+        False,
+        description="True if an STK push is in progress (within server timeout window).",
+    )
+    pending_plan: Optional[str] = Field(None, description="Plan for in-progress checkout, if any.")
+    pending_checkout_request_id: Optional[str] = Field(
+        None,
+        description="Poll payment-status with this id while pending.",
+    )
+    pending_seconds_remaining: Optional[int] = Field(
+        None,
+        description="Seconds left before server clears pending (no PIN); null if no pending.",
+    )
+    stk_pending_window_seconds: int = Field(
+        90,
+        description="Configured STK pending window (seconds); same as checkout response field.",
+    )
+
+
+class HostSubscriptionPaymentStatusEnum(str, Enum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+    expired = "expired"
+
+
+class HostSubscriptionPaymentStatusResponse(BaseModel):
+    checkout_request_id: Optional[str] = None
+    external_reference: str
+    plan: str
+    amount_kes: float
+    status: HostSubscriptionPaymentStatusEnum
+    message: Optional[str] = None
+    mpesa_receipt_number: Optional[str] = None
+

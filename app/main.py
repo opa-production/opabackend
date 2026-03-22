@@ -58,6 +58,7 @@ from app.routers import (
     host_ratings,
     client_ratings,
     host_earnings,
+    host_subscription,
     wallet as wallet_router,
     subscribers as subscribers_router,
     host_kyc as host_kyc_router,
@@ -107,6 +108,7 @@ app = FastAPI(
         {"name": "Host Ratings", "description": "Client ratings for hosts"},
         {"name": "Client Ratings", "description": "Host ratings for clients (renters)"},
         {"name": "Host Earnings", "description": "Host earnings summary, transactions, and withdrawal requests"},
+        {"name": "Host Subscription", "description": "Host paid plans (M-Pesa) and subscription status"},
         {"name": "Client Refunds", "description": "Client‑visible refund records for bookings"},
         {"name": "Client Emergency", "description": "Emergency messages from clients with location"},
         {"name": "Client Wishlist", "description": "Client car wishlist (liked cars)"},
@@ -168,7 +170,24 @@ def migrate_database():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at DATETIME"))
             print("✓ Added terms_accepted_at column to hosts table")
-    
+        if 'subscription_plan' not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE hosts ADD COLUMN subscription_plan VARCHAR(20) DEFAULT 'free'")
+                )
+            print("✓ Added subscription_plan column to hosts table")
+        if 'subscription_expires_at' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hosts ADD COLUMN subscription_expires_at DATETIME"))
+            print("✓ Added subscription_expires_at column to hosts table")
+
+    # Host subscription M-Pesa payment records
+    if "host_subscription_payments" not in table_names:
+        from app.models import HostSubscriptionPayment
+
+        HostSubscriptionPayment.__table__.create(bind=engine, checkfirst=True)
+        print("✓ Created host_subscription_payments table")
+
     # Check and add missing columns to clients table
     if 'clients' in table_names:
         columns = [col['name'] for col in inspector.get_columns('clients')]
@@ -792,6 +811,7 @@ app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
+app.include_router(host_subscription.router, prefix="/api/v1", tags=["Host Subscription"])
 app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
 app.include_router(client_emergency_router.router, prefix="/api/v1", tags=["Client Emergency"])
 app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishlist"])

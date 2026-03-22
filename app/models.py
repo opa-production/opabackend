@@ -251,6 +251,12 @@ class Host(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
+    # Paid subscription (M-Pesa). Default free; starter/premium set after successful payment.
+    subscription_plan: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
+    subscription_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Relationship to cars
     cars: Mapped[list["Car"]] = relationship(back_populates="host")
     # Relationship to payment methods
@@ -270,6 +276,39 @@ class Host(Base):
         back_populates="host",
         cascade="all, delete-orphan"
     )
+    subscription_payments: Mapped[list["HostSubscriptionPayment"]] = relationship(
+        "HostSubscriptionPayment",
+        back_populates="host",
+        cascade="all, delete-orphan",
+    )
+
+
+class HostSubscriptionPayment(Base):
+    """M-Pesa STK checkout for host subscription (starter / premium)."""
+
+    __tablename__ = "host_subscription_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id"), nullable=False, index=True)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False)  # starter | premium
+    amount_ksh: Mapped[float] = mapped_column(Float, nullable=False)
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    checkout_request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    external_reference: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mpesa_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    )
+
+    host: Mapped["Host"] = relationship("Host", back_populates="subscription_payments")
 
 
 class HostKyc(Base):
