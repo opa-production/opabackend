@@ -23,6 +23,7 @@ dependencies = [
     "sendgrid>=6.11.0",
     "slowapi>=0.1.9",
     "sqlalchemy==2.0.23",
+    "starlette>=0.27.0",
     "supabase==2.3.4",
     "ujson>=5.9.0",
     "uvicorn[standard]==0.24.0",
