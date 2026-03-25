@@ -52,6 +52,7 @@ limiter = Limiter(key_func=get_remote_address)
 @router.post("/host/auth/register", response_model=HostRegisterResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register_host(
+    request: Request,
     body: HostRegisterRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
@@ -93,6 +94,7 @@ async def register_host(
 @router.post("/host/auth/login", response_model=HostLoginResponseWithRefresh)
 @limiter.limit("10/minute")
 async def login_host(
+    request: Request,
     body: HostLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):

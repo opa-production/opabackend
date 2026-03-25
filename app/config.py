@@ -1,8 +1,11 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import field_validator
+from typing import Optional, Annotated
 import os
 from pathlib import Path
 import logging
+import json
+from pydantic_settings import NoDecode
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -33,7 +36,31 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # CORS
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8000", "https://ardena.co.ke"]
+    ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:3000", "http://localhost:8000", "https://ardena.co.ke"]
+    
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, value):
+        """
+        Accept both JSON array strings and comma-separated origins from .env.
+        Example valid values:
+        - ["http://localhost:3000","https://ardena.co.ke"]
+        - http://localhost:3000,https://ardena.co.ke
+        """
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith("[") and raw.endswith("]"):
+                try:
+                    parsed = json.loads(raw)
+                    return parsed if isinstance(parsed, list) else []
+                except json.JSONDecodeError:
+                    return []
+            return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        return value
 
     FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
     PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  

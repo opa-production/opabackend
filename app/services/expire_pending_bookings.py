@@ -4,7 +4,8 @@ Expire unpaid PENDING bookings after a configured time so the car becomes availa
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Booking, Payment, BookingStatus, PaymentStatus
 
@@ -24,7 +25,7 @@ def get_expire_minutes() -> int:
         return DEFAULT_EXPIRE_MINUTES
 
 
-def expire_pending_bookings(db: Session, expire_minutes: int | None = None) -> int:
+async def expire_pending_bookings(db: AsyncSession, expire_minutes: int | None = None) -> int:
     """
     Find PENDING bookings older than expire_minutes with no completed payment,
     set them to CANCELLED so the car is available again.
@@ -34,27 +35,23 @@ def expire_pending_bookings(db: Session, expire_minutes: int | None = None) -> i
         expire_minutes = get_expire_minutes()
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=expire_minutes)
 
-    # Bookings that are PENDING, created before cutoff, and have no completed payment
-    pending = (
-        db.query(Booking)
-        .filter(
+    result = await db.execute(
+        select(Booking).where(
             Booking.status == BookingStatus.PENDING,
             Booking.created_at < cutoff,
         )
-        .all()
     )
+    pending = result.scalars().all()
     expired_count = 0
     now = datetime.now(timezone.utc)
     for booking in pending:
-        has_completed = (
-            db.query(Payment)
-            .filter(
+        pay_row = await db.execute(
+            select(Payment.id).where(
                 Payment.booking_id == booking.id,
                 Payment.status == PaymentStatus.COMPLETED,
-            )
-            .first()
-            is not None
+            ).limit(1)
         )
+        has_completed = pay_row.scalar_one_or_none() is not None
         if has_completed:
             continue
         booking.status = BookingStatus.CANCELLED
@@ -68,5 +65,5 @@ def expire_pending_bookings(db: Session, expire_minutes: int | None = None) -> i
             booking.created_at,
         )
     if expired_count:
-        db.commit()
+        await db.commit()
     return expired_count

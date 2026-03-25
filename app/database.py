@@ -12,6 +12,10 @@ if SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 elif SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+# Sync sqlite:// uses pysqlite; create_async_engine needs sqlite+aiosqlite://
+elif SQLALCHEMY_DATABASE_URL.split("://", 1)[0] == "sqlite":
+    rest = SQLALCHEMY_DATABASE_URL.split("://", 1)[1]
+    SQLALCHEMY_DATABASE_URL = f"sqlite+aiosqlite://{rest}"
 
 # For SQLite, we need to ensure check_same_thread is handled if it was a sync connection,
 # but aiosqlite handles it differently. 
