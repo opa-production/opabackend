@@ -13,6 +13,8 @@ import requests
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.auth import get_current_client
 from app.config import settings
@@ -71,7 +73,7 @@ def build_client_kyc_redirect_response(return_to: Optional[str]) -> HTMLResponse
 
 
 @router.get("/client/kyc/redirect", response_class=HTMLResponse)
-def client_kyc_redirect(
+async def client_kyc_redirect(
     return_to: Optional[str] = Query(None, description="Deep link to open the app, e.g. ardena://kyc/result"),
 ):
     """
@@ -82,10 +84,10 @@ def client_kyc_redirect(
 
 
 @router.post("/client/kyc/session", response_model=ClientKycSessionResponse)
-def create_client_kyc_session(
+async def create_client_kyc_session(
     body: Optional[ClientKycSessionRequest] = Body(None),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a Veriff verification session for the current client.
@@ -173,7 +175,7 @@ def create_client_kyc_session(
         status="pending",
     )
     db.add(kyc)
-    db.commit()
+    await db.commit()
 
     return ClientKycSessionResponse(
         verification_url=verification_url,
@@ -182,20 +184,22 @@ def create_client_kyc_session(
 
 
 @router.get("/client/kyc/status", response_model=ClientKycStatusResponse)
-def get_client_kyc_status(
+async def get_client_kyc_status(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return the latest KYC verification status for the current client.
     Use this after the user returns from Veriff to show approved/declined/pending.
     """
-    latest = (
-        db.query(ClientKyc)
+    stmt = (
+        select(ClientKyc)
         .filter(ClientKyc.client_id == current_client.id)
         .order_by(ClientKyc.created_at.desc())
-        .first()
     )
+    result = await db.execute(stmt)
+    latest = result.scalars().first()
+    
     if not latest:
         return ClientKycStatusResponse(
             user_id=current_client.id,

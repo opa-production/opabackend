@@ -1,7 +1,8 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, select, delete
 
 from app.database import get_db
 from app.models import Host, Client, Car, PaymentMethod, Feedback
@@ -46,7 +47,7 @@ async def list_hosts(
     sort_by: Optional[str] = Query("created_at", description="Sort field (id, full_name, email, created_at)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all hosts with pagination and search
@@ -57,8 +58,8 @@ async def list_hosts(
     - **sort_by**: Field to sort by (id, full_name, email, created_at)
     - **order**: Sort order (asc or desc)
     """
-    # Build query
-    query = db.query(Host)
+    # Build base statement
+    stmt = select(Host)
     
     # Apply search filter
     if search:
@@ -66,27 +67,36 @@ async def list_hosts(
             Host.full_name.ilike(f"%{search}%"),
             Host.email.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.filter(search_filter)
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(Host, sort_by, Host.created_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    hosts = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    hosts = result.scalars().all()
     
     # Build response with counts
     host_list = []
     for host in hosts:
-        cars_count = db.query(Car).filter(Car.host_id == host.id).count()
-        payment_methods_count = db.query(PaymentMethod).filter(PaymentMethod.host_id == host.id).count()
+        cars_count_stmt = select(func.count(Car.id)).filter(Car.host_id == host.id)
+        cars_count_result = await db.execute(cars_count_stmt)
+        cars_count = cars_count_result.scalar() or 0
+        
+        pm_count_stmt = select(func.count(PaymentMethod.id)).filter(PaymentMethod.host_id == host.id)
+        pm_count_result = await db.execute(pm_count_stmt)
+        payment_methods_count = pm_count_result.scalar() or 0
         
         host_list.append(HostListResponse(
             id=host.id,
@@ -111,14 +121,17 @@ async def list_hosts(
 async def get_host_details(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific host
     
     Includes counts of cars, payment methods, and feedback.
     """
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -126,9 +139,17 @@ async def get_host_details(
         )
     
     # Get counts
-    cars_count = db.query(Car).filter(Car.host_id == host.id).count()
-    payment_methods_count = db.query(PaymentMethod).filter(PaymentMethod.host_id == host.id).count()
-    feedbacks_count = db.query(Feedback).filter(Feedback.host_id == host.id).count()
+    cars_count_stmt = select(func.count(Car.id)).filter(Car.host_id == host.id)
+    cars_count_result = await db.execute(cars_count_stmt)
+    cars_count = cars_count_result.scalar() or 0
+    
+    pm_count_stmt = select(func.count(PaymentMethod.id)).filter(PaymentMethod.host_id == host.id)
+    pm_count_result = await db.execute(pm_count_stmt)
+    payment_methods_count = pm_count_result.scalar() or 0
+    
+    fb_count_stmt = select(func.count(Feedback.id)).filter(Feedback.host_id == host.id)
+    fb_count_result = await db.execute(fb_count_stmt)
+    feedbacks_count = fb_count_result.scalar() or 0
     
     return HostDetailResponse(
         id=host.id,
@@ -151,14 +172,17 @@ async def update_host(
     host_id: int,
     request: HostUpdateRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update host profile information
     
     Only provided fields will be updated.
     """
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -167,7 +191,9 @@ async def update_host(
     
     # Check if email is being changed and if it's already taken
     if request.email and request.email != host.email:
-        existing_host = db.query(Host).filter(Host.email == request.email).first()
+        existing_stmt = select(Host).filter(Host.email == request.email)
+        existing_result = await db.execute(existing_stmt)
+        existing_host = existing_result.scalar_one_or_none()
         if existing_host:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -186,13 +212,21 @@ async def update_host(
     if request.id_number is not None:
         host.id_number = request.id_number
     
-    db.commit()
-    db.refresh(host)
+    await db.commit()
+    await db.refresh(host)
     
     # Get counts for response
-    cars_count = db.query(Car).filter(Car.host_id == host.id).count()
-    payment_methods_count = db.query(PaymentMethod).filter(PaymentMethod.host_id == host.id).count()
-    feedbacks_count = db.query(Feedback).filter(Feedback.host_id == host.id).count()
+    cars_count_stmt = select(func.count(Car.id)).filter(Car.host_id == host.id)
+    cars_count_result = await db.execute(cars_count_stmt)
+    cars_count = cars_count_result.scalar() or 0
+    
+    pm_count_stmt = select(func.count(PaymentMethod.id)).filter(PaymentMethod.host_id == host.id)
+    pm_count_result = await db.execute(pm_count_stmt)
+    payment_methods_count = pm_count_result.scalar() or 0
+    
+    fb_count_stmt = select(func.count(Feedback.id)).filter(Feedback.host_id == host.id)
+    fb_count_result = await db.execute(fb_count_stmt)
+    feedbacks_count = fb_count_result.scalar() or 0
     
     return HostDetailResponse(
         id=host.id,
@@ -214,10 +248,13 @@ async def update_host(
 async def deactivate_host(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Deactivate a host account (soft delete)"""
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -231,7 +268,7 @@ async def deactivate_host(
         )
     
     host.is_active = False
-    db.commit()
+    await db.commit()
     
     return {"message": "Host account deactivated successfully"}
 
@@ -240,10 +277,13 @@ async def deactivate_host(
 async def activate_host(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Activate a host account"""
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -257,7 +297,7 @@ async def activate_host(
         )
     
     host.is_active = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Host account activated successfully"}
 
@@ -266,7 +306,7 @@ async def activate_host(
 async def delete_host(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Permanently delete a host account and all related data
@@ -279,7 +319,10 @@ async def delete_host(
     
     This action cannot be undone.
     """
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -287,16 +330,24 @@ async def delete_host(
         )
     
     # Get counts for response
-    cars_count = db.query(Car).filter(Car.host_id == host.id).count()
-    payment_methods_count = db.query(PaymentMethod).filter(PaymentMethod.host_id == host.id).count()
-    feedbacks_count = db.query(Feedback).filter(Feedback.host_id == host.id).count()
+    cars_count_stmt = select(func.count(Car.id)).filter(Car.host_id == host.id)
+    cars_count_result = await db.execute(cars_count_stmt)
+    cars_count = cars_count_result.scalar() or 0
+    
+    pm_count_stmt = select(func.count(PaymentMethod.id)).filter(PaymentMethod.host_id == host.id)
+    pm_count_result = await db.execute(pm_count_stmt)
+    payment_methods_count = pm_count_result.scalar() or 0
+    
+    fb_count_stmt = select(func.count(Feedback.id)).filter(Feedback.host_id == host.id)
+    fb_count_result = await db.execute(fb_count_stmt)
+    feedbacks_count = fb_count_result.scalar() or 0
     
     # Delete all cars (cascade should handle payment methods and feedbacks)
-    db.query(Car).filter(Car.host_id == host.id).delete()
+    await db.execute(delete(Car).filter(Car.host_id == host.id))
     
     # Delete the host
-    db.delete(host)
-    db.commit()
+    await db.delete(host)
+    await db.commit()
     
     return {
         "message": "Host account deleted successfully",
@@ -312,17 +363,22 @@ async def delete_host(
 async def get_host_cars(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get all cars owned by a specific host"""
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Host not found"
         )
     
-    cars = db.query(Car).filter(Car.host_id == host_id).all()
+    car_stmt = select(Car).filter(Car.host_id == host_id)
+    car_result = await db.execute(car_stmt)
+    cars = car_result.scalars().all()
     return [_car_to_response(car) for car in cars]
 
 
@@ -330,19 +386,24 @@ async def get_host_cars(
 async def get_host_payment_methods(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get all payment methods for a specific host"""
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Host not found"
         )
     
-    payment_methods = db.query(PaymentMethod).filter(
+    pm_stmt = select(PaymentMethod).filter(
         PaymentMethod.host_id == host_id
-    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc()).all()
+    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc())
+    pm_result = await db.execute(pm_stmt)
+    payment_methods = pm_result.scalars().all()
     
     return PaymentMethodListResponse(payment_methods=payment_methods)
 
@@ -351,19 +412,24 @@ async def get_host_payment_methods(
 async def get_host_feedback(
     host_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get all feedback for a specific host"""
-    host = db.query(Host).filter(Host.id == host_id).first()
+    stmt = select(Host).filter(Host.id == host_id)
+    result = await db.execute(stmt)
+    host = result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Host not found"
         )
     
-    feedbacks = db.query(Feedback).filter(
+    fb_stmt = select(Feedback).filter(
         Feedback.host_id == host_id
-    ).order_by(Feedback.created_at.desc()).all()
+    ).order_by(Feedback.created_at.desc())
+    fb_result = await db.execute(fb_stmt)
+    feedbacks = fb_result.scalars().all()
     
     return FeedbackListResponse(feedbacks=feedbacks)
 
@@ -378,7 +444,7 @@ async def list_clients(
     sort_by: Optional[str] = Query("created_at", description="Sort field (id, full_name, email, created_at)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all clients with pagination and search
@@ -390,7 +456,7 @@ async def list_clients(
     - **order**: Sort order (asc or desc)
     """
     # Build query
-    query = db.query(Client)
+    stmt = select(Client)
     
     # Apply search filter
     if search:
@@ -398,21 +464,25 @@ async def list_clients(
             Client.full_name.ilike(f"%{search}%"),
             Client.email.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.filter(search_filter)
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(Client, sort_by, Client.created_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    clients = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    clients = result.scalars().all()
     
     # Build response
     client_list = [
@@ -439,10 +509,13 @@ async def list_clients(
 async def get_client_details(
     client_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get detailed information about a specific client"""
-    client = db.query(Client).filter(Client.id == client_id).first()
+    stmt = select(Client).filter(Client.id == client_id)
+    result = await db.execute(stmt)
+    client = result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -457,14 +530,17 @@ async def update_client(
     client_id: int,
     request: ClientUpdateRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update client profile information
     
     Only provided fields will be updated.
     """
-    client = db.query(Client).filter(Client.id == client_id).first()
+    stmt = select(Client).filter(Client.id == client_id)
+    result = await db.execute(stmt)
+    client = result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -473,7 +549,9 @@ async def update_client(
     
     # Check if email is being changed and if it's already taken
     if request.email and request.email != client.email:
-        existing_client = db.query(Client).filter(Client.email == request.email).first()
+        existing_stmt = select(Client).filter(Client.email == request.email)
+        existing_result = await db.execute(existing_stmt)
+        existing_client = existing_result.scalar_one_or_none()
         if existing_client:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -494,8 +572,8 @@ async def update_client(
     if request.id_number is not None:
         client.id_number = request.id_number
     
-    db.commit()
-    db.refresh(client)
+    await db.commit()
+    await db.refresh(client)
     
     return client
 
@@ -504,10 +582,13 @@ async def update_client(
 async def deactivate_client(
     client_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Deactivate a client account (soft delete)"""
-    client = db.query(Client).filter(Client.id == client_id).first()
+    stmt = select(Client).filter(Client.id == client_id)
+    result = await db.execute(stmt)
+    client = result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -521,7 +602,7 @@ async def deactivate_client(
         )
     
     client.is_active = False
-    db.commit()
+    await db.commit()
     
     return {"message": "Client account deactivated successfully"}
 
@@ -530,10 +611,13 @@ async def deactivate_client(
 async def activate_client(
     client_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Activate a client account"""
-    client = db.query(Client).filter(Client.id == client_id).first()
+    stmt = select(Client).filter(Client.id == client_id)
+    result = await db.execute(stmt)
+    client = result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -547,7 +631,7 @@ async def activate_client(
         )
     
     client.is_active = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Client account activated successfully"}
 
@@ -556,21 +640,24 @@ async def activate_client(
 async def delete_client(
     client_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Permanently delete a client account
     
     This action cannot be undone.
     """
-    client = db.query(Client).filter(Client.id == client_id).first()
+    stmt = select(Client).filter(Client.id == client_id)
+    result = await db.execute(stmt)
+    client = result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Client not found"
         )
     
-    db.delete(client)
-    db.commit()
+    await db.delete(client)
+    await db.commit()
     
     return {"message": "Client account deleted successfully"}

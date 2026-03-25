@@ -3,7 +3,8 @@ Client-Host Messaging endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, select
 from datetime import datetime, timezone
 from typing import Optional, List
 
@@ -52,7 +53,7 @@ async def send_message_to_host(
     host_id: int,
     request: ClientHostMessageRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send a message to a car host
@@ -64,7 +65,10 @@ async def send_message_to_host(
     Each client-host pair has one continuous conversation thread.
     """
     # Verify host exists
-    host = db.query(Host).filter(Host.id == host_id).first()
+    host_stmt = select(Host).filter(Host.id == host_id)
+    host_result = await db.execute(host_stmt)
+    host = host_result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -72,12 +76,14 @@ async def send_message_to_host(
         )
     
     # Get or create conversation for this client-host pair
-    conversation = db.query(ClientHostConversation).filter(
+    conv_stmt = select(ClientHostConversation).filter(
         and_(
             ClientHostConversation.client_id == current_client.id,
             ClientHostConversation.host_id == host_id
         )
-    ).first()
+    )
+    conv_result = await db.execute(conv_stmt)
+    conversation = conv_result.scalar_one_or_none()
     
     if not conversation:
         # Create new conversation
@@ -88,8 +94,8 @@ async def send_message_to_host(
             is_read_by_host=False  # Host needs to read this
         )
         db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
+        await db.commit()
+        await db.refresh(conversation)
     
     # Create new message
     message = ClientHostMessage(
@@ -108,8 +114,8 @@ async def send_message_to_host(
     conversation.last_message_at = datetime.now(timezone.utc)
     conversation.updated_at = datetime.now(timezone.utc)
     
-    db.commit()
-    db.refresh(message)
+    await db.commit()
+    await db.refresh(message)
     
     return _message_to_response(message, client=current_client, host=host)
 
@@ -118,7 +124,7 @@ async def send_message_to_host(
 async def get_conversation_with_host(
     host_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get the conversation with a specific host
@@ -127,7 +133,10 @@ async def get_conversation_with_host(
     If no conversation exists, returns an empty conversation.
     """
     # Verify host exists
-    host = db.query(Host).filter(Host.id == host_id).first()
+    host_stmt = select(Host).filter(Host.id == host_id)
+    host_result = await db.execute(host_stmt)
+    host = host_result.scalar_one_or_none()
+    
     if not host:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -135,12 +144,14 @@ async def get_conversation_with_host(
         )
     
     # Get conversation for this client-host pair
-    conversation = db.query(ClientHostConversation).filter(
+    conv_stmt = select(ClientHostConversation).filter(
         and_(
             ClientHostConversation.client_id == current_client.id,
             ClientHostConversation.host_id == host_id
         )
-    ).first()
+    )
+    conv_result = await db.execute(conv_stmt)
+    conversation = conv_result.scalar_one_or_none()
     
     if not conversation:
         # Return empty conversation
@@ -163,9 +174,11 @@ async def get_conversation_with_host(
         )
     
     # Get all messages in the conversation
-    messages = db.query(ClientHostMessage).filter(
+    msg_stmt = select(ClientHostMessage).filter(
         ClientHostMessage.conversation_id == conversation.id
-    ).order_by(ClientHostMessage.created_at.asc()).all()
+    ).order_by(ClientHostMessage.created_at.asc())
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
     
     # Mark host messages as read by client (since they're viewing the conversation)
     for msg in messages:
@@ -173,7 +186,7 @@ async def get_conversation_with_host(
             msg.is_read = True
     
     conversation.is_read_by_client = True
-    db.commit()
+    await db.commit()
     
     # Build message responses
     message_list = []
@@ -200,7 +213,7 @@ async def get_conversation_with_host(
 @router.get("/client/messages", response_model=ClientHostConversationListResponse)
 async def get_client_conversations(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all conversations for the authenticated client
@@ -208,9 +221,11 @@ async def get_client_conversations(
     Returns a list of all conversations with hosts, ordered by last message time.
     """
     # Get all conversations for this client
-    conversations = db.query(ClientHostConversation).filter(
+    stmt = select(ClientHostConversation).filter(
         ClientHostConversation.client_id == current_client.id
-    ).order_by(ClientHostConversation.last_message_at.desc()).all()
+    ).order_by(ClientHostConversation.last_message_at.desc())
+    result = await db.execute(stmt)
+    conversations = result.scalars().all()
     
     # Build conversation responses
     conversation_list = []
@@ -218,12 +233,16 @@ async def get_client_conversations(
     
     for conv in conversations:
         # Get host info
-        host = db.query(Host).filter(Host.id == conv.host_id).first()
+        host_stmt = select(Host).filter(Host.id == conv.host_id)
+        host_result = await db.execute(host_stmt)
+        host = host_result.scalar_one_or_none()
         
         # Get all messages
-        messages = db.query(ClientHostMessage).filter(
+        msg_stmt = select(ClientHostMessage).filter(
             ClientHostMessage.conversation_id == conv.id
-        ).order_by(ClientHostMessage.created_at.asc()).all()
+        ).order_by(ClientHostMessage.created_at.asc())
+        msg_result = await db.execute(msg_stmt)
+        messages = msg_result.scalars().all()
         
         # Build message responses
         message_list = []
@@ -266,7 +285,7 @@ async def send_message_to_client(
     client_id: int,
     request: ClientHostMessageRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send a message to a client
@@ -277,7 +296,10 @@ async def send_message_to_client(
     Creates a conversation if it doesn't exist, or adds to existing conversation.
     """
     # Verify client exists
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client_stmt = select(Client).filter(Client.id == client_id)
+    client_result = await db.execute(client_stmt)
+    client = client_result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -285,12 +307,14 @@ async def send_message_to_client(
         )
     
     # Get or create conversation for this client-host pair
-    conversation = db.query(ClientHostConversation).filter(
+    conv_stmt = select(ClientHostConversation).filter(
         and_(
             ClientHostConversation.client_id == client_id,
             ClientHostConversation.host_id == current_host.id
         )
-    ).first()
+    )
+    conv_result = await db.execute(conv_stmt)
+    conversation = conv_result.scalar_one_or_none()
     
     if not conversation:
         # Create new conversation
@@ -301,8 +325,8 @@ async def send_message_to_client(
             is_read_by_host=True  # Host just sent it, so they've read it
         )
         db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
+        await db.commit()
+        await db.refresh(conversation)
     
     # Create new message
     message = ClientHostMessage(
@@ -321,8 +345,8 @@ async def send_message_to_client(
     conversation.last_message_at = datetime.now(timezone.utc)
     conversation.updated_at = datetime.now(timezone.utc)
     
-    db.commit()
-    db.refresh(message)
+    await db.commit()
+    await db.refresh(message)
     
     return _message_to_response(message, client=client, host=current_host)
 
@@ -331,7 +355,7 @@ async def send_message_to_client(
 async def get_conversation_with_client(
     client_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get the conversation with a specific client
@@ -340,7 +364,10 @@ async def get_conversation_with_client(
     If no conversation exists, returns an empty conversation.
     """
     # Verify client exists
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client_stmt = select(Client).filter(Client.id == client_id)
+    client_result = await db.execute(client_stmt)
+    client = client_result.scalar_one_or_none()
+    
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -348,12 +375,14 @@ async def get_conversation_with_client(
         )
     
     # Get conversation for this client-host pair
-    conversation = db.query(ClientHostConversation).filter(
+    conv_stmt = select(ClientHostConversation).filter(
         and_(
             ClientHostConversation.client_id == client_id,
             ClientHostConversation.host_id == current_host.id
         )
-    ).first()
+    )
+    conv_result = await db.execute(conv_stmt)
+    conversation = conv_result.scalar_one_or_none()
     
     if not conversation:
         # Return empty conversation
@@ -376,9 +405,11 @@ async def get_conversation_with_client(
         )
     
     # Get all messages in the conversation
-    messages = db.query(ClientHostMessage).filter(
+    msg_stmt = select(ClientHostMessage).filter(
         ClientHostMessage.conversation_id == conversation.id
-    ).order_by(ClientHostMessage.created_at.asc()).all()
+    ).order_by(ClientHostMessage.created_at.asc())
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
     
     # Mark client messages as read by host (since they're viewing the conversation)
     for msg in messages:
@@ -386,7 +417,7 @@ async def get_conversation_with_client(
             msg.is_read = True
     
     conversation.is_read_by_host = True
-    db.commit()
+    await db.commit()
     
     # Build message responses
     message_list = []
@@ -413,7 +444,7 @@ async def get_conversation_with_client(
 @router.get("/host/messages", response_model=ClientHostConversationListResponse)
 async def get_host_conversations(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all conversations for the authenticated host
@@ -421,9 +452,11 @@ async def get_host_conversations(
     Returns a list of all conversations with clients, ordered by last message time.
     """
     # Get all conversations for this host
-    conversations = db.query(ClientHostConversation).filter(
+    stmt = select(ClientHostConversation).filter(
         ClientHostConversation.host_id == current_host.id
-    ).order_by(ClientHostConversation.last_message_at.desc()).all()
+    ).order_by(ClientHostConversation.last_message_at.desc())
+    result = await db.execute(stmt)
+    conversations = result.scalars().all()
     
     # Build conversation responses
     conversation_list = []
@@ -431,12 +464,16 @@ async def get_host_conversations(
     
     for conv in conversations:
         # Get client info
-        client = db.query(Client).filter(Client.id == conv.client_id).first()
+        client_stmt = select(Client).filter(Client.id == conv.client_id)
+        client_result = await db.execute(client_stmt)
+        client = client_result.scalar_one_or_none()
         
         # Get all messages
-        messages = db.query(ClientHostMessage).filter(
+        msg_stmt = select(ClientHostMessage).filter(
             ClientHostMessage.conversation_id == conv.id
-        ).order_by(ClientHostMessage.created_at.asc()).all()
+        ).order_by(ClientHostMessage.created_at.asc())
+        msg_result = await db.execute(msg_stmt)
+        messages = msg_result.scalars().all()
         
         # Build message responses
         message_list = []

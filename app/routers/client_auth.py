@@ -1,8 +1,11 @@
 import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import (
@@ -59,16 +62,20 @@ from app.services.email_welcome import (
     send_welcome_email_client,
     send_email,
     send_email_with_attachment,
+    send_forgotpassword_email,
 )
 from app.services.client_data_export import build_client_data_pdf
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/client/auth/register", response_model=ClientRegisterResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register_client(
-    request: ClientRegisterRequest,
-    db: Session = Depends(get_db)
+    body: ClientRegisterRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Register a new client (car renter)
@@ -79,7 +86,7 @@ async def register_client(
     - **password_confirmation**: Password confirmation (must match password)
     """
     # Check if email already exists
-    existing_client = get_client_by_email(db, request.email)
+    existing_client = await get_client_by_email(db, body.email)
     if existing_client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -87,16 +94,16 @@ async def register_client(
         )
     
     # Create new client
-    hashed_password = get_password_hash(request.password)
+    hashed_password = get_password_hash(body.password)
     db_client = Client(
-        full_name=request.full_name,
-        email=request.email,
+        full_name=body.full_name,
+        email=body.email,
         hashed_password=hashed_password
     )
     
     db.add(db_client)
-    db.commit()
-    db.refresh(db_client)
+    await db.commit()
+    await db.refresh(db_client)
     
     # Create welcome notification from CEO
     welcome_message = (
@@ -117,10 +124,10 @@ async def register_client(
     )
     
     db.add(welcome_notification)
-    db.commit()
+    await db.commit()
 
     # Send welcome email (non-blocking; registration succeeds even if email fails)
-    send_welcome_email_client(db_client.email, db_client.full_name)
+    background_tasks.add_task(send_welcome_email_client, db_client.email, db_client.full_name)
 
     # Create Ardena Pay (Stellar) wallet for new client (testnet-funded). If it fails, client can POST /client/wallet later.
     try:
@@ -146,9 +153,10 @@ async def register_client(
 
 
 @router.post("/client/auth/login", response_model=ClientLoginResponseWithRefresh)
+@limiter.limit("10/minute")
 async def login_client(
-    request: ClientLoginRequest,
-    db: Session = Depends(get_db)
+    body: ClientLoginRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Login for clients - returns access and refresh tokens
@@ -163,7 +171,7 @@ async def login_client(
     - client: Client profile information
     """
     # Get client by email
-    client = get_client_by_email(db, request.email)
+    client = await get_client_by_email(db, body.email)
     if not client:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -172,7 +180,7 @@ async def login_client(
         )
     
     # Verify password
-    if not verify_password(request.password, client.hashed_password):
+    if not verify_password(body.password, client.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -189,17 +197,17 @@ async def login_client(
 
     # Optionally issue a device token for biometric login (one-time reveal)
     device_token_raw = None
-    if getattr(request, "enable_biometrics", False):
+    if getattr(body, "enable_biometrics", False):
         device_token_raw = secrets.token_urlsafe(32)
         device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
 
         db_token = ClientBiometricToken(
             client_id=client.id,
             device_token_hash=device_token_hash,
-            device_name=getattr(request, "device_name", None),
+            device_name=getattr(body, "device_name", None),
         )
         db.add(db_token)
-        db.commit()
+        await db.commit()
 
     return {
         "access_token": access_token,
@@ -212,9 +220,11 @@ async def login_client(
 
 
 @router.post("/client/auth/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
-    request: ForgotPasswordRequest,
-    db: Session = Depends(get_db)
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Request a password reset email.
@@ -224,7 +234,7 @@ async def forgot_password(
     
     - **email**: Registered email address
     """
-    client = get_client_by_email(db, request.email)
+    client = await get_client_by_email(db, body.email)
     if not client:
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
@@ -251,18 +261,7 @@ async def forgot_password(
         else:
             reset_link = f"{base_url.rstrip('/')}/reset-password?token={reset_token}"
 
-    send_email(
-        client.email,
-        "Reset your Ardena password",
-        f"""
-        <p>Hi {client.full_name},</p>
-        <p>You requested to reset your password for your Ardena account.</p>
-        <p>Click the link below to set a new password (link expires in 1 hour):</p>
-        <p><a href="{reset_link}">{reset_link}</a></p>
-        <p>If you didn't request this, you can safely ignore this email.</p>
-        <p>— The Ardena Team</p>
-        """,
-    )
+    background_tasks.add_task(send_forgotpassword_email, client.email, client.full_name, reset_link)
 
     return {"message": "If an account exists with this email, you will receive a password reset link."}
 
@@ -270,7 +269,7 @@ async def forgot_password(
 @router.post("/client/auth/reset-password")
 async def reset_password(
     request: ResetPasswordRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Reset password using the token from the forgot-password email.
@@ -282,7 +281,8 @@ async def reset_password(
     payload = verify_password_reset_token(request.token)
     client_id = int(payload["sub"])
 
-    client = db.query(Client).filter(Client.id == client_id).first()
+    result = await db.execute(select(Client).filter(Client.id == client_id))
+    client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -290,8 +290,8 @@ async def reset_password(
         )
 
     client.hashed_password = get_password_hash(request.new_password)
-    db.commit()
-    db.refresh(client)
+    await db.commit()
+    await db.refresh(client)
 
     return {"message": "Password has been reset successfully. You can now log in with your new password."}
 
@@ -311,7 +311,7 @@ async def logout_client(current_client: Client = Depends(get_current_client)):
 @router.post("/client/auth/refresh", response_model=TokenPairResponse)
 async def refresh_client_token(
     request: RefreshTokenRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Refresh access token using refresh token
@@ -341,7 +341,8 @@ async def refresh_client_token(
             detail="Invalid token - malformed client ID"
         )
     
-    client = db.query(Client).filter(Client.id == client_id).first()
+    result = await db.execute(select(Client).filter(Client.id == client_id))
+    client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -390,15 +391,15 @@ async def get_current_client_info(current_client: Client = Depends(get_current_c
 @router.post("/client/terms/accept", response_model=ClientProfileResponse)
 async def accept_terms_client(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Record that the authenticated client has accepted the terms and conditions.
     Call this when the user checks the T&C checkbox. Status is stored so you do not prompt again.
     """
     current_client.terms_accepted_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
     return current_client
 
 
@@ -406,7 +407,7 @@ async def accept_terms_client(
 async def update_client_profile(
     request: ClientProfileUpdateRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update client profile information
@@ -436,8 +437,8 @@ async def update_client_profile(
     current_client.date_of_birth = request.date_of_birth
     current_client.gender = request.gender
     
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
     
     return current_client
 
@@ -446,7 +447,7 @@ async def update_client_profile(
 async def change_password(
     request: ClientChangePasswordRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Change client password (when logged in).
@@ -466,7 +467,7 @@ async def change_password(
     
     # Update password
     current_client.hashed_password = get_password_hash(request.new_password)
-    db.commit()
+    await db.commit()
     
     return {"message": "Password changed successfully"}
 
@@ -476,7 +477,7 @@ async def update_email_notifications(
     request: NotificationToggleRequest,
     background_tasks: BackgroundTasks,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Toggle email notifications for the authenticated client.
@@ -486,8 +487,8 @@ async def update_email_notifications(
     """
     previous = getattr(current_client, "email_notifications_enabled", True)
     current_client.email_notifications_enabled = bool(request.enabled)
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
 
     # Only send a confirmation email when toggled from OFF to ON
     if request.enabled and not previous and settings.SENDGRID_API_KEY:
@@ -518,7 +519,7 @@ async def update_email_notifications(
 async def update_in_app_notifications(
     request: NotificationToggleRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Toggle in-app notifications for the authenticated client.
@@ -528,8 +529,8 @@ async def update_in_app_notifications(
     """
     previous = getattr(current_client, "in_app_notifications_enabled", True)
     current_client.in_app_notifications_enabled = bool(request.enabled)
-    db.commit()
-    db.refresh(current_client)
+    await db.commit()
+    await db.refresh(current_client)
 
     # Only create an in-app notification when toggled from OFF to ON
     if request.enabled and not previous:
@@ -545,7 +546,7 @@ async def update_in_app_notifications(
             sender_name="The Ardena Group Team",
         )
         db.add(notif)
-        db.commit()
+        await db.commit()
 
     return current_client
 
@@ -554,7 +555,7 @@ async def update_in_app_notifications(
 async def export_client_data(
     background_tasks: BackgroundTasks,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Generate a PDF export of all data we store for the authenticated client
@@ -570,43 +571,43 @@ async def export_client_data(
         )
 
     # Collect related data for this client
-    bookings = (
-        db.query(Booking)
+    result = await db.execute(
+        select(Booking)
         .filter(Booking.client_id == current_client.id)
         .order_by(Booking.created_at.desc())
-        .all()
     )
+    bookings = result.scalars().all()
 
-    driving_license = (
-        db.query(DrivingLicense)
+    result = await db.execute(
+        select(DrivingLicense)
         .filter(DrivingLicense.client_id == current_client.id)
-        .first()
     )
+    driving_license = result.scalar_one_or_none()
 
-    latest_kyc = (
-        db.query(ClientKyc)
+    result = await db.execute(
+        select(ClientKyc)
         .filter(ClientKyc.client_id == current_client.id)
         .order_by(ClientKyc.created_at.desc())
-        .first()
     )
+    latest_kyc = result.scalars().first()
 
-    payment_methods = (
-        db.query(PaymentMethod)
+    result = await db.execute(
+        select(PaymentMethod)
         .filter(PaymentMethod.client_id == current_client.id)
-        .all()
     )
+    payment_methods = result.scalars().all()
 
-    ratings_from_hosts = (
-        db.query(ClientRating)
+    result = await db.execute(
+        select(ClientRating)
         .filter(ClientRating.client_id == current_client.id)
-        .all()
     )
+    ratings_from_hosts = result.scalars().all()
 
-    ratings_given_to_hosts = (
-        db.query(HostRating)
+    result = await db.execute(
+        select(HostRating)
         .filter(HostRating.client_id == current_client.id)
-        .all()
     )
+    ratings_given_to_hosts = result.scalars().all()
 
     pdf_bytes = build_client_data_pdf(
         client=current_client,
@@ -651,7 +652,7 @@ async def export_client_data(
 @router.delete("/client/account", status_code=status.HTTP_200_OK)
 async def delete_own_account(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Permanently delete the authenticated client's account.
@@ -665,8 +666,8 @@ async def delete_own_account(
     client_id = current_client.id
 
     # Block if any booking is still "in progress" (pending, confirmed, or active)
-    active_booking = (
-        db.query(Booking)
+    result = await db.execute(
+        select(Booking)
         .filter(
             Booking.client_id == client_id,
             Booking.status.in_([
@@ -675,8 +676,8 @@ async def delete_own_account(
                 BookingStatus.ACTIVE,
             ]),
         )
-        .first()
     )
+    active_booking = result.scalar_one_or_none()
     if active_booking:
         bid = getattr(active_booking, "booking_id", None) or ""
         raise HTTPException(
@@ -689,8 +690,8 @@ async def delete_own_account(
         )
 
     # Block if any extension request is still pending or host-approved (not yet paid/expired/rejected)
-    active_extension = (
-        db.query(BookingExtensionRequest)
+    result = await db.execute(
+        select(BookingExtensionRequest)
         .filter(
             BookingExtensionRequest.client_id == client_id,
             BookingExtensionRequest.status.in_([
@@ -698,8 +699,8 @@ async def delete_own_account(
                 "host_approved",
             ]),
         )
-        .first()
     )
+    active_extension = result.scalar_one_or_none()
     if active_extension:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -710,17 +711,17 @@ async def delete_own_account(
         )
 
     # Delete records that reference client but have no cascade from Client (to avoid FK errors / orphan data)
-    db.query(BookingExtensionRequest).filter(BookingExtensionRequest.client_id == client_id).delete()
-    db.query(ClientHostConversation).filter(ClientHostConversation.client_id == client_id).delete()
-    db.query(ClientFeedback).filter(ClientFeedback.client_id == client_id).delete()
-    db.query(Notification).filter(
+    await db.execute(delete(BookingExtensionRequest).filter(BookingExtensionRequest.client_id == client_id))
+    await db.execute(delete(ClientHostConversation).filter(ClientHostConversation.client_id == client_id))
+    await db.execute(delete(ClientFeedback).filter(ClientFeedback.client_id == client_id))
+    await db.execute(delete(Notification).filter(
         Notification.recipient_type == "client",
         Notification.recipient_id == client_id,
-    ).delete()
+    ))
 
     # Delete the client (cascades: bookings, payments, payment_methods, driving_license, client_kycs, biometric_tokens, host_ratings, client_ratings)
-    db.delete(current_client)
-    db.commit()
+    await db.delete(current_client)
+    await db.commit()
 
     return {"message": "Your account has been permanently deleted."}
 
@@ -731,7 +732,7 @@ async def delete_own_account(
 async def add_driving_license(
     request: DrivingLicenseRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add driving license information for the authenticated client
@@ -747,9 +748,10 @@ async def add_driving_license(
     - License number must contain both letters and numbers
     """
     # Check if client already has a license
-    existing_license = db.query(DrivingLicense).filter(
-        DrivingLicense.client_id == current_client.id
-    ).first()
+    result = await db.execute(
+        select(DrivingLicense).filter(DrivingLicense.client_id == current_client.id)
+    )
+    existing_license = result.scalar_one_or_none()
     
     if existing_license:
         raise HTTPException(
@@ -758,10 +760,13 @@ async def add_driving_license(
         )
     
     # Check if license number already exists (belongs to another client)
-    license_number_exists = db.query(DrivingLicense).filter(
-        DrivingLicense.license_number == request.license_number,
-        DrivingLicense.client_id != current_client.id
-    ).first()
+    result = await db.execute(
+        select(DrivingLicense).filter(
+            DrivingLicense.license_number == request.license_number,
+            DrivingLicense.client_id != current_client.id
+        )
+    )
+    license_number_exists = result.scalar_one_or_none()
     
     if license_number_exists:
         raise HTTPException(
@@ -780,8 +785,8 @@ async def add_driving_license(
     )
     
     db.add(db_license)
-    db.commit()
-    db.refresh(db_license)
+    await db.commit()
+    await db.refresh(db_license)
     
     return db_license
 
@@ -790,7 +795,7 @@ async def add_driving_license(
 async def update_driving_license(
     request: DrivingLicenseRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update driving license information for the authenticated client
@@ -804,9 +809,10 @@ async def update_driving_license(
     Note: Updating license information will reset verification status.
     """
     # Get existing license
-    db_license = db.query(DrivingLicense).filter(
-        DrivingLicense.client_id == current_client.id
-    ).first()
+    result = await db.execute(
+        select(DrivingLicense).filter(DrivingLicense.client_id == current_client.id)
+    )
+    db_license = result.scalar_one_or_none()
     
     if not db_license:
         raise HTTPException(
@@ -817,10 +823,13 @@ async def update_driving_license(
     # Check if license number is being changed and if new number exists
     new_license_number = request.license_number.upper().replace(' ', '')
     if new_license_number != db_license.license_number:
-        license_number_exists = db.query(DrivingLicense).filter(
-            DrivingLicense.license_number == new_license_number,
-            DrivingLicense.client_id != current_client.id
-        ).first()
+        result = await db.execute(
+            select(DrivingLicense).filter(
+                DrivingLicense.license_number == new_license_number,
+                DrivingLicense.client_id != current_client.id
+            )
+        )
+        license_number_exists = result.scalar_one_or_none()
         
         if license_number_exists:
             raise HTTPException(
@@ -836,8 +845,8 @@ async def update_driving_license(
     db_license.is_verified = False  # Reset verification when updated
     db_license.verification_notes = None
     
-    db.commit()
-    db.refresh(db_license)
+    await db.commit()
+    await db.refresh(db_license)
     
     return db_license
 
@@ -845,14 +854,15 @@ async def update_driving_license(
 @router.get("/client/driving-license", response_model=DrivingLicenseResponse)
 async def get_driving_license(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get driving license information for the authenticated client
     """
-    db_license = db.query(DrivingLicense).filter(
-        DrivingLicense.client_id == current_client.id
-    ).first()
+    result = await db.execute(
+        select(DrivingLicense).filter(DrivingLicense.client_id == current_client.id)
+    )
+    db_license = result.scalar_one_or_none()
     
     if not db_license:
         raise HTTPException(
@@ -866,14 +876,15 @@ async def get_driving_license(
 @router.delete("/client/driving-license")
 async def delete_driving_license(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete driving license information for the authenticated client
     """
-    db_license = db.query(DrivingLicense).filter(
-        DrivingLicense.client_id == current_client.id
-    ).first()
+    result = await db.execute(
+        select(DrivingLicense).filter(DrivingLicense.client_id == current_client.id)
+    )
+    db_license = result.scalar_one_or_none()
     
     if not db_license:
         raise HTTPException(
@@ -881,8 +892,8 @@ async def delete_driving_license(
             detail="No driving license found"
         )
     
-    db.delete(db_license)
-    db.commit()
+    await db.delete(db_license)
+    await db.commit()
     
     return {"message": "Driving license deleted successfully"}
 
@@ -890,7 +901,7 @@ async def delete_driving_license(
 @router.post("/client/auth/google", response_model=ClientLoginResponseWithRefresh)
 async def client_google_auth(
     request: GoogleLoginRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Continue with Google authentication for clients.
@@ -913,18 +924,20 @@ async def client_google_auth(
     avatar_url = idinfo.get('picture')
 
     # 1. Try to find by google_id
-    client = db.query(Client).filter(Client.google_id == google_id).first()
+    result = await db.execute(select(Client).filter(Client.google_id == google_id))
+    client = result.scalar_one_or_none()
     
     if not client:
         # 2. Try to find by email
-        client = db.query(Client).filter(Client.email == email).first()
+        result = await db.execute(select(Client).filter(Client.email == email))
+        client = result.scalar_one_or_none()
         
         if client:
             # Link Google account to existing email account
             client.google_id = google_id
             if not client.avatar_url and avatar_url:
                 client.avatar_url = avatar_url
-            db.commit()
+            await db.commit()
         else:
             # 3. Create new client
             client = Client(
@@ -936,8 +949,8 @@ async def client_google_auth(
                 is_active=True
             )
             db.add(client)
-            db.commit()
-            db.refresh(client)
+            await db.commit()
+            await db.refresh(client)
             
             # Create welcome notification from CEO
             welcome_message = (
@@ -957,7 +970,7 @@ async def client_google_auth(
                 sender_name="Deon, CEO Ardena"
             )
             db.add(welcome_notification)
-            db.commit()
+            await db.commit()
 
     if not client.is_active:
         raise HTTPException(
@@ -983,7 +996,7 @@ async def client_google_auth(
             device_name=getattr(request, "device_name", None),
         )
         db.add(db_token)
-        db.commit()
+        await db.commit()
 
     return {
         "access_token": access_token,
@@ -998,7 +1011,7 @@ async def client_google_auth(
 @router.post("/client/auth/biometric-login", response_model=ClientLoginResponseWithRefresh)
 async def biometric_login(
     request: BiometricLoginRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Login using a previously issued device token (for biometric unlock).
@@ -1015,14 +1028,14 @@ async def biometric_login(
 
     device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
 
-    db_token = (
-        db.query(ClientBiometricToken)
+    result = await db.execute(
+        select(ClientBiometricToken)
         .filter(
             ClientBiometricToken.device_token_hash == device_hash,
             ClientBiometricToken.revoked == False,
         )
-        .first()
     )
+    db_token = result.scalar_one_or_none()
 
     if not db_token:
         raise HTTPException(
@@ -1030,7 +1043,8 @@ async def biometric_login(
             detail="Invalid or revoked device token",
         )
 
-    client = db.query(Client).filter(Client.id == db_token.client_id).first()
+    result = await db.execute(select(Client).filter(Client.id == db_token.client_id))
+    client = result.scalar_one_or_none()
     if not client or not client.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1039,7 +1053,7 @@ async def biometric_login(
 
     # Update last_used_at for auditing
     db_token.last_used_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
 
     token_data = {"sub": str(client.id), "role": "client"}
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -1060,7 +1074,7 @@ async def biometric_login(
 async def revoke_biometric_tokens(
     request: BiometricRevokeRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Revoke biometric device tokens for the current client.
@@ -1068,22 +1082,19 @@ async def revoke_biometric_tokens(
     - If device_token is provided, only that device is revoked.
     - If omitted, all biometric tokens for this client are revoked.
     """
-    query = db.query(ClientBiometricToken).filter(
+    stmt = update(ClientBiometricToken).filter(
         ClientBiometricToken.client_id == current_client.id,
         ClientBiometricToken.revoked == False,
-    )
+    ).values(revoked=True)
 
     if request.device_token:
         device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
-        query = query.filter(ClientBiometricToken.device_token_hash == device_hash)
+        stmt = stmt.filter(ClientBiometricToken.device_token_hash == device_hash)
 
-    updated = query.update(
-        {ClientBiometricToken.revoked: True},
-        synchronize_session=False,
-    )
-    db.commit()
+    result = await db.execute(stmt)
+    await db.commit()
 
-    if updated == 0:
+    if result.rowcount == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No biometric tokens found to revoke",
@@ -1105,7 +1116,7 @@ async def revoke_biometric_tokens(
 @router.get("/client/notifications", response_model=ClientNotificationListResponse)
 async def get_client_notifications(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all notifications for the authenticated client
@@ -1114,17 +1125,23 @@ async def get_client_notifications(
     Includes unread count.
     """
     # Get all notifications for this client
-    notifications = db.query(Notification).filter(
-        Notification.recipient_type == "client",
-        Notification.recipient_id == current_client.id
-    ).order_by(Notification.created_at.desc()).all()
+    result = await db.execute(
+        select(Notification).filter(
+            Notification.recipient_type == "client",
+            Notification.recipient_id == current_client.id
+        ).order_by(Notification.created_at.desc())
+    )
+    notifications = result.scalars().all()
     
     # Count unread notifications
-    unread_count = db.query(Notification).filter(
-        Notification.recipient_type == "client",
-        Notification.recipient_id == current_client.id,
-        Notification.is_read == False
-    ).count()
+    unread_result = await db.execute(
+        select(func.count(Notification.id)).filter(
+            Notification.recipient_type == "client",
+            Notification.recipient_id == current_client.id,
+            Notification.is_read == False
+        )
+    )
+    unread_count = unread_result.scalar()
     
     # Build response
     notification_list = [ClientNotificationResponse(
@@ -1138,9 +1155,7 @@ async def get_client_notifications(
     ) for notification in notifications]
     
     return ClientNotificationListResponse(
-        notifications=notification_list,
-        total=len(notification_list),
-        unread_count=unread_count
+        notifications=notification_list, total=len(notification_list), unread_count=unread_count
     )
 
 
@@ -1148,18 +1163,21 @@ async def get_client_notifications(
 async def mark_client_notification_as_read(
     notification_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Mark a notification as read
     
     - **notification_id**: ID of the notification to mark as read
     """
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.recipient_type == "client",
-        Notification.recipient_id == current_client.id
-    ).first()
+    result = await db.execute(
+        select(Notification).filter(
+            Notification.id == notification_id,
+            Notification.recipient_type == "client",
+            Notification.recipient_id == current_client.id
+        )
+    )
+    notification = result.scalar_one_or_none()
     
     if not notification:
         raise HTTPException(
@@ -1168,7 +1186,7 @@ async def mark_client_notification_as_read(
         )
     
     notification.is_read = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Notification marked as read"}
 

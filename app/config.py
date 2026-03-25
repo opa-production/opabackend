@@ -14,6 +14,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
+    # Database configuration
+    DATABASE_URL: Optional[str] = None
+    
     # SendGrid API configuration
     SENDGRID_API_KEY: Optional[str] = None
     
@@ -23,6 +26,14 @@ class Settings(BaseSettings):
     # Google Auth
     GOOGLE_CLIENT_ID: Optional[str] = None
     
+    # Security
+    SECRET_KEY: str = "your-secret-key-change-in-production"  # Default for dev only
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    
+    # CORS
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8000", "https://ardena.co.ke"]
 
     FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
     PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  

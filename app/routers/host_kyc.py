@@ -12,6 +12,8 @@ import requests
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.auth import get_current_host
 from app.config import settings
@@ -66,7 +68,7 @@ def build_kyc_redirect_response(return_to: Optional[str]) -> HTMLResponse:
 
 
 @router.get("/host/kyc/redirect", response_class=HTMLResponse)
-def kyc_redirect(
+async def kyc_redirect(
     return_to: Optional[str] = Query(None, description="Deep link to open the app, e.g. ardenahost://kyc/result"),
 ):
     """
@@ -77,10 +79,10 @@ def kyc_redirect(
 
 
 @router.post("/host/kyc/session", response_model=HostKycSessionResponse)
-def create_kyc_session(
+async def create_kyc_session(
     body: Optional[HostKycSessionRequest] = Body(None),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a Veriff verification session for the current host.
@@ -170,7 +172,7 @@ def create_kyc_session(
         status="pending",
     )
     db.add(kyc)
-    db.commit()
+    await db.commit()
 
     return HostKycSessionResponse(
         verification_url=verification_url,
@@ -179,20 +181,22 @@ def create_kyc_session(
 
 
 @router.get("/host/kyc/status", response_model=HostKycStatusResponse)
-def get_kyc_status(
+async def get_kyc_status(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return the latest KYC verification status for the current host.
     Use this after the user returns from Veriff to show approved/declined/pending.
     """
-    latest = (
-        db.query(HostKyc)
+    stmt = (
+        select(HostKyc)
         .filter(HostKyc.host_id == current_host.id)
         .order_by(HostKyc.created_at.desc())
-        .first()
     )
+    result = await db.execute(stmt)
+    latest = result.scalars().first()
+    
     if not latest:
         return HostKycStatusResponse(
             user_id=current_host.id,

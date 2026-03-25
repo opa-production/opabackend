@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from datetime import datetime, timezone
 
 from app.database import get_db
@@ -38,7 +40,7 @@ def _message_to_response(db_message: SupportMessage, host: Host = None, admin_na
 async def send_support_message(
     request: SupportMessageRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send a message in the support conversation
@@ -49,9 +51,11 @@ async def send_support_message(
     Each host has only one continuous conversation thread.
     """
     # Get or create conversation for this host
-    conversation = db.query(SupportConversation).filter(
+    stmt = select(SupportConversation).filter(
         SupportConversation.host_id == current_host.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         # Create new conversation
@@ -62,8 +66,8 @@ async def send_support_message(
             is_read_by_admin=False
         )
         db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
+        await db.commit()
+        await db.refresh(conversation)
     
     # Check if conversation is closed
     if conversation.status == "closed":
@@ -89,8 +93,8 @@ async def send_support_message(
     conversation.last_message_at = datetime.now(timezone.utc)
     conversation.updated_at = datetime.now(timezone.utc)
     
-    db.commit()
-    db.refresh(support_message)
+    await db.commit()
+    await db.refresh(support_message)
     
     return _message_to_response(support_message, host=current_host)
 
@@ -98,7 +102,7 @@ async def send_support_message(
 @router.get("/host/support/conversation", response_model=SupportConversationResponse)
 async def get_support_conversation(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get the support conversation for the authenticated host
@@ -107,9 +111,11 @@ async def get_support_conversation(
     If no conversation exists, returns an empty conversation.
     """
     # Get conversation for this host
-    conversation = db.query(SupportConversation).filter(
+    stmt = select(SupportConversation).filter(
         SupportConversation.host_id == current_host.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         # Return empty conversation
@@ -128,9 +134,11 @@ async def get_support_conversation(
         )
     
     # Get all messages in the conversation
-    messages = db.query(SupportMessage).filter(
+    msg_stmt = select(SupportMessage).filter(
         SupportMessage.conversation_id == conversation.id
-    ).order_by(SupportMessage.created_at.asc()).all()
+    ).order_by(SupportMessage.created_at.asc())
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
     
     # Mark admin messages as read by host (since they're viewing the conversation)
     for msg in messages:
@@ -138,7 +146,7 @@ async def get_support_conversation(
             msg.is_read = True
     
     conversation.is_read_by_host = True
-    db.commit()
+    await db.commit()
     
     # Build message responses
     message_list = []
@@ -147,7 +155,9 @@ async def get_support_conversation(
         if msg.sender_type == "admin":
             # Get admin name if available
             from app.models import Admin
-            admin = db.query(Admin).filter(Admin.id == msg.sender_id).first()
+            admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
+            admin_result = await db.execute(admin_stmt)
+            admin = admin_result.scalar_one_or_none()
             admin_name = admin.full_name if admin else None
         
         message_list.append(_message_to_response(msg, host=current_host, admin_name=admin_name))
@@ -155,8 +165,8 @@ async def get_support_conversation(
     return SupportConversationResponse(
         id=conversation.id,
         host_id=conversation.host_id,
-        host_name=conversation.host.full_name if conversation.host else None,
-        host_email=conversation.host.email if conversation.host else None,
+        host_name=current_host.full_name,
+        host_email=current_host.email,
         status=conversation.status,
         is_read_by_host=conversation.is_read_by_host,
         is_read_by_admin=conversation.is_read_by_admin,

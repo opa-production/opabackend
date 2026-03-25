@@ -2,9 +2,12 @@ import html
 import secrets
 from datetime import datetime, timedelta, timezone
 import hashlib
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, BackgroundTasks
 from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import Host, Notification, HostBiometricToken
@@ -43,12 +46,15 @@ from app.config import settings
 from app.services.email_welcome import send_welcome_email_host, send_email
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/host/auth/register", response_model=HostRegisterResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register_host(
-    request: HostRegisterRequest,
-    db: Session = Depends(get_db)
+    body: HostRegisterRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Register a new host (car owner)
@@ -59,7 +65,7 @@ async def register_host(
     - **password_confirmation**: Password confirmation (must match password)
     """
     # Check if email already exists
-    existing_host = get_host_by_email(db, request.email)
+    existing_host = await get_host_by_email(db, body.email)
     if existing_host:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,27 +73,28 @@ async def register_host(
         )
     
     # Create new host
-    hashed_password = get_password_hash(request.password)
+    hashed_password = get_password_hash(body.password)
     db_host = Host(
-        full_name=request.full_name,
-        email=request.email,
+        full_name=body.full_name,
+        email=body.email,
         hashed_password=hashed_password
     )
     
     db.add(db_host)
-    db.commit()
-    db.refresh(db_host)
+    await db.commit()
+    await db.refresh(db_host)
 
     # Send welcome email (non-blocking; registration succeeds even if email fails)
-    send_welcome_email_host(db_host.email, db_host.full_name)
+    background_tasks.add_task(send_welcome_email_host, db_host.email, db_host.full_name)
 
     return db_host
 
 
 @router.post("/host/auth/login", response_model=HostLoginResponseWithRefresh)
+@limiter.limit("10/minute")
 async def login_host(
-    request: HostLoginRequest,
-    db: Session = Depends(get_db)
+    body: HostLoginRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Login for hosts - returns access and refresh tokens
@@ -102,7 +109,7 @@ async def login_host(
     - host: Host profile information
     """
     # Get host by email
-    host = get_host_by_email(db, request.email)
+    host = await get_host_by_email(db, body.email)
     if not host:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,7 +118,7 @@ async def login_host(
         )
     
     # Verify password
-    if not verify_password(request.password, host.hashed_password):
+    if not verify_password(body.password, host.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -128,17 +135,17 @@ async def login_host(
 
     # Optionally issue a device token for biometric login (one-time reveal, host app)
     device_token_raw = None
-    if getattr(request, "enable_biometrics", False):
+    if getattr(body, "enable_biometrics", False):
         device_token_raw = secrets.token_urlsafe(32)
         device_token_hash = hashlib.sha256(device_token_raw.encode("utf-8")).hexdigest()
 
         db_token = HostBiometricToken(
             host_id=host.id,
             device_token_hash=device_token_hash,
-            device_name=getattr(request, "device_name", None),
+            device_name=getattr(body, "device_name", None),
         )
         db.add(db_token)
-        db.commit()
+        await db.commit()
 
     return {
         "access_token": access_token,
@@ -153,7 +160,7 @@ async def login_host(
 @router.post("/host/auth/biometric-login", response_model=HostLoginResponseWithRefresh)
 async def host_biometric_login(
     request: BiometricLoginRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Host login using a previously issued device token (for biometric unlock in host app).
@@ -170,14 +177,13 @@ async def host_biometric_login(
 
     device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
 
-    db_token = (
-        db.query(HostBiometricToken)
-        .filter(
+    result = await db.execute(
+        select(HostBiometricToken).filter(
             HostBiometricToken.device_token_hash == device_hash,
             HostBiometricToken.revoked == False,
         )
-        .first()
     )
+    db_token = result.scalar_one_or_none()
 
     if not db_token:
         raise HTTPException(
@@ -185,7 +191,8 @@ async def host_biometric_login(
             detail="Invalid or revoked device token",
         )
 
-    host = db.query(Host).filter(Host.id == db_token.host_id).first()
+    result = await db.execute(select(Host).filter(Host.id == db_token.host_id))
+    host = result.scalar_one_or_none()
     if not host or not host.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -194,7 +201,7 @@ async def host_biometric_login(
 
     # Update last_used_at for auditing
     db_token.last_used_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
 
     token_data = {"sub": str(host.id), "role": "host"}
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -215,7 +222,7 @@ async def host_biometric_login(
 async def revoke_host_biometric_tokens(
     request: BiometricRevokeRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Revoke biometric device tokens for the current host.
@@ -223,22 +230,19 @@ async def revoke_host_biometric_tokens(
     - If device_token is provided, only that device is revoked.
     - If omitted, all biometric tokens for this host are revoked.
     """
-    query = db.query(HostBiometricToken).filter(
+    stmt = update(HostBiometricToken).filter(
         HostBiometricToken.host_id == current_host.id,
         HostBiometricToken.revoked == False,
-    )
+    ).values(revoked=True)
 
     if request.device_token:
         device_hash = hashlib.sha256(request.device_token.encode("utf-8")).hexdigest()
-        query = query.filter(HostBiometricToken.device_token_hash == device_hash)
+        stmt = stmt.filter(HostBiometricToken.device_token_hash == device_hash)
 
-    updated = query.update(
-        {HostBiometricToken.revoked: True},
-        synchronize_session=False,
-    )
-    db.commit()
+    result = await db.execute(stmt)
+    await db.commit()
 
-    if updated == 0:
+    if result.rowcount == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No biometric tokens found to revoke",
@@ -263,7 +267,7 @@ async def logout_host(current_host: Host = Depends(get_current_host)):
 @router.post("/host/auth/refresh", response_model=TokenPairResponse)
 async def refresh_host_token(
     request: RefreshTokenRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Refresh access token using refresh token
@@ -293,7 +297,8 @@ async def refresh_host_token(
             detail="Invalid token - malformed host ID"
         )
     
-    host = db.query(Host).filter(Host.id == host_id).first()
+    result = await db.execute(select(Host).filter(Host.id == host_id))
+    host = result.scalar_one_or_none()
     if not host:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -327,7 +332,7 @@ async def get_current_host_info(current_host: Host = Depends(get_current_host)):
 async def update_host_profile(
     request: HostProfileUpdateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update host profile information
@@ -347,8 +352,8 @@ async def update_host_profile(
     if request.id_number is not None:
         current_host.id_number = request.id_number
     
-    db.commit()
-    db.refresh(current_host)
+    await db.commit()
+    await db.refresh(current_host)
     
     return current_host
 
@@ -356,23 +361,25 @@ async def update_host_profile(
 @router.post("/host/terms/accept", response_model=HostProfileResponse)
 async def accept_terms_host(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Record that the authenticated host has accepted the terms and conditions.
     Call this when the user checks the T&C checkbox. Status is stored so you do not prompt again.
     """
     current_host.terms_accepted_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(current_host)
+    await db.commit()
+    await db.refresh(current_host)
     return current_host
 
 
 @router.post("/host/auth/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
-    request: ForgotPasswordRequest,
-    http_request: Request,
-    db: Session = Depends(get_db)
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Request a password reset email for hosts.
@@ -382,7 +389,7 @@ async def forgot_password(
     
     - **email**: Registered email address
     """
-    host = get_host_by_email(db, request.email)
+    host = await get_host_by_email(db, body.email)
     if not host:
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
@@ -400,9 +407,10 @@ async def forgot_password(
         sep = "&" if "?" in web_url else "?"
         reset_link = f"{web_url.rstrip('/')}{sep}token={reset_token}"
     else:
-        reset_link = f"{http_request.url_for('host_password_reset_redirect')}?token={reset_token}"
+        reset_link = f"{request.url_for('host_password_reset_redirect')}?token={reset_token}"
 
-    send_email(
+    background_tasks.add_task(
+        send_email,
         host.email,
         "Reset your Ardena host password",
         f"""
@@ -470,7 +478,7 @@ async def host_password_reset_redirect(
 @router.post("/host/auth/reset-password")
 async def reset_password(
     request: ResetPasswordRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Reset host password using the token from the forgot-password email.
@@ -482,7 +490,8 @@ async def reset_password(
     payload = verify_password_reset_token(request.token)
     host_id = int(payload["sub"])
 
-    host = db.query(Host).filter(Host.id == host_id).first()
+    result = await db.execute(select(Host).filter(Host.id == host_id))
+    host = result.scalar_one_or_none()
     if not host:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -490,8 +499,8 @@ async def reset_password(
         )
 
     host.hashed_password = get_password_hash(request.new_password)
-    db.commit()
-    db.refresh(host)
+    await db.commit()
+    await db.refresh(host)
 
     return {"message": "Password has been reset successfully. You can now log in with your new password."}
 
@@ -500,7 +509,7 @@ async def reset_password(
 async def change_password(
     request: HostChangePasswordRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Change host password (when logged in).
@@ -520,7 +529,7 @@ async def change_password(
     
     # Update password
     current_host.hashed_password = get_password_hash(request.new_password)
-    db.commit()
+    await db.commit()
     
     return {"message": "Password changed successfully"}
 
@@ -528,7 +537,7 @@ async def change_password(
 @router.get("/host/notifications", response_model=HostNotificationListResponse)
 async def get_host_notifications(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all notifications for the authenticated host
@@ -537,17 +546,23 @@ async def get_host_notifications(
     Includes unread count.
     """
     # Get all notifications for this host
-    notifications = db.query(Notification).filter(
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id
-    ).order_by(Notification.created_at.desc()).all()
+    result = await db.execute(
+        select(Notification).filter(
+            Notification.recipient_type == "host",
+            Notification.recipient_id == current_host.id
+        ).order_by(Notification.created_at.desc())
+    )
+    notifications = result.scalars().all()
     
     # Count unread notifications
-    unread_count = db.query(Notification).filter(
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id,
-        Notification.is_read == False
-    ).count()
+    unread_result = await db.execute(
+        select(func.count(Notification.id)).filter(
+            Notification.recipient_type == "host",
+            Notification.recipient_id == current_host.id,
+            Notification.is_read == False
+        )
+    )
+    unread_count = unread_result.scalar()
     
     # Build response
     notification_list = [HostNotificationResponse(
@@ -561,9 +576,7 @@ async def get_host_notifications(
     ) for notification in notifications]
     
     return HostNotificationListResponse(
-        notifications=notification_list,
-        total=len(notification_list),
-        unread_count=unread_count
+        notifications=notification_list, total=len(notification_list), unread_count=unread_count
     )
 
 
@@ -571,7 +584,7 @@ async def get_host_notifications(
 async def mark_host_notification_as_read(
     notification_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Mark a notification as read
@@ -580,11 +593,14 @@ async def mark_host_notification_as_read(
     - Only notifications belonging to the authenticated host can be marked as read
     """
     # Find the notification
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.recipient_type == "host",
-        Notification.recipient_id == current_host.id
-    ).first()
+    result = await db.execute(
+        select(Notification).filter(
+            Notification.id == notification_id,
+            Notification.recipient_type == "host",
+            Notification.recipient_id == current_host.id
+        )
+    )
+    notification = result.scalar_one_or_none()
     
     if not notification:
         raise HTTPException(
@@ -594,7 +610,7 @@ async def mark_host_notification_as_read(
     
     # Mark as read
     notification.is_read = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Notification marked as read"}
 
@@ -602,7 +618,7 @@ async def mark_host_notification_as_read(
 @router.post("/host/auth/google", response_model=HostLoginResponseWithRefresh)
 async def host_google_auth(
     request: GoogleLoginRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Continue with Google authentication for hosts.
@@ -625,18 +641,20 @@ async def host_google_auth(
     avatar_url = idinfo.get('picture')
 
     # 1. Try to find by google_id
-    host = db.query(Host).filter(Host.google_id == google_id).first()
+    result = await db.execute(select(Host).filter(Host.google_id == google_id))
+    host = result.scalar_one_or_none()
     
     if not host:
         # 2. Try to find by email
-        host = db.query(Host).filter(Host.email == email).first()
+        result = await db.execute(select(Host).filter(Host.email == email))
+        host = result.scalar_one_or_none()
         
         if host:
             # Link Google account to existing email account
             host.google_id = google_id
             if not host.avatar_url and avatar_url:
                 host.avatar_url = avatar_url
-            db.commit()
+            await db.commit()
         else:
             # 3. Create new host
             host = Host(
@@ -648,8 +666,8 @@ async def host_google_auth(
                 is_active=True
             )
             db.add(host)
-            db.commit()
-            db.refresh(host)
+            await db.commit()
+            await db.refresh(host)
 
     if not host.is_active:
         raise HTTPException(

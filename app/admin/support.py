@@ -1,7 +1,8 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, func, select
 from datetime import datetime, timezone
 
 from app.database import get_db
@@ -58,7 +59,7 @@ async def list_support_conversations(
     sort_by: Optional[str] = Query("last_message_at", description="Sort field (id, created_at, last_message_at)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all support conversations with filters and pagination
@@ -71,56 +72,66 @@ async def list_support_conversations(
     - **sort_by**: Field to sort by
     - **order**: Sort order (asc or desc)
     """
-    # Build query with join to host
-    query = db.query(SupportConversation).join(Host)
+    # Build base statement
+    stmt = select(SupportConversation).options(joinedload(SupportConversation.host))
     
     # Apply filters
     if host_id:
-        query = query.filter(SupportConversation.host_id == host_id)
+        stmt = stmt.filter(SupportConversation.host_id == host_id)
     
     if status_filter:
-        query = query.filter(SupportConversation.status == status_filter)
+        stmt = stmt.filter(SupportConversation.status == status_filter)
     
     if search:
         search_filter = or_(
             Host.full_name.ilike(f"%{search}%"),
             Host.email.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.join(Host).filter(search_filter)
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Get unread count
-    unread_count = db.query(func.count(SupportConversation.id)).filter(
+    unread_stmt = select(func.count(SupportConversation.id)).filter(
         SupportConversation.is_read_by_admin == False
-    ).scalar() or 0
+    )
+    unread_result = await db.execute(unread_stmt)
+    unread_count = unread_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(SupportConversation, sort_by, SupportConversation.last_message_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    conversations = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    conversations = result.scalars().unique().all()
     
     # Build response with messages
     conversation_list = []
     for conv in conversations:
         # Get all messages for this conversation
-        messages = db.query(SupportMessage).filter(
+        msg_stmt = select(SupportMessage).filter(
             SupportMessage.conversation_id == conv.id
-        ).order_by(SupportMessage.created_at.asc()).all()
+        ).order_by(SupportMessage.created_at.asc())
+        msg_result = await db.execute(msg_stmt)
+        messages = msg_result.scalars().all()
         
         # Build message responses
         message_list = []
         for msg in messages:
             admin = None
             if msg.sender_type == "admin":
-                admin = db.query(Admin).filter(Admin.id == msg.sender_id).first()
+                admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
+                admin_result = await db.execute(admin_stmt)
+                admin = admin_result.scalar_one_or_none()
             
             message_list.append(_message_to_response(msg, host=conv.host, admin=admin))
         
@@ -151,7 +162,7 @@ async def list_support_conversations(
 async def get_support_conversation_details(
     conversation_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific support conversation
@@ -159,9 +170,11 @@ async def get_support_conversation_details(
     Includes all messages in chronological order.
     Marks the conversation as read by admin.
     """
-    conversation = db.query(SupportConversation).join(Host).filter(
+    stmt = select(SupportConversation).options(joinedload(SupportConversation.host)).filter(
         SupportConversation.id == conversation_id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         raise HTTPException(
@@ -170,9 +183,11 @@ async def get_support_conversation_details(
         )
     
     # Get all messages in the conversation
-    messages = db.query(SupportMessage).filter(
+    msg_stmt = select(SupportMessage).filter(
         SupportMessage.conversation_id == conversation.id
-    ).order_by(SupportMessage.created_at.asc()).all()
+    ).order_by(SupportMessage.created_at.asc())
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
     
     # Mark host messages as read by admin (since they're viewing the conversation)
     for msg in messages:
@@ -181,14 +196,16 @@ async def get_support_conversation_details(
     
     # Mark conversation as read by admin
     conversation.is_read_by_admin = True
-    db.commit()
+    await db.commit()
     
     # Build message responses
     message_list = []
     for msg in messages:
         admin = None
         if msg.sender_type == "admin":
-            admin = db.query(Admin).filter(Admin.id == msg.sender_id).first()
+            admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
+            admin_result = await db.execute(admin_stmt)
+            admin = admin_result.scalar_one_or_none()
         
         message_list.append(_message_to_response(msg, host=conversation.host, admin=admin))
     
@@ -212,7 +229,7 @@ async def respond_to_support_conversation(
     conversation_id: int,
     request: AdminResponseRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Respond to a support conversation
@@ -221,9 +238,11 @@ async def respond_to_support_conversation(
     
     Admins can respond to support conversations. The response will be visible to the host.
     """
-    conversation = db.query(SupportConversation).filter(
+    stmt = select(SupportConversation).filter(
         SupportConversation.id == conversation_id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         raise HTTPException(
@@ -254,8 +273,8 @@ async def respond_to_support_conversation(
     conversation.last_message_at = datetime.now(timezone.utc)
     conversation.updated_at = datetime.now(timezone.utc)
     
-    db.commit()
-    db.refresh(support_message)
+    await db.commit()
+    await db.refresh(support_message)
     
     return _message_to_response(support_message, host=conversation.host, admin=current_admin)
 
@@ -264,16 +283,18 @@ async def respond_to_support_conversation(
 async def close_support_conversation(
     conversation_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Close a support conversation
     
     Marks a support conversation as closed. Closed conversations cannot receive new messages.
     """
-    conversation = db.query(SupportConversation).filter(
+    stmt = select(SupportConversation).filter(
         SupportConversation.id == conversation_id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         raise HTTPException(
@@ -289,7 +310,7 @@ async def close_support_conversation(
     
     conversation.status = "closed"
     conversation.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     
     return {"message": "Support conversation closed successfully"}
 
@@ -298,16 +319,18 @@ async def close_support_conversation(
 async def reopen_support_conversation(
     conversation_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Reopen a closed support conversation
     
     Allows admins to reopen closed support conversations if needed.
     """
-    conversation = db.query(SupportConversation).filter(
+    stmt = select(SupportConversation).filter(
         SupportConversation.id == conversation_id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
     if not conversation:
         raise HTTPException(
@@ -323,6 +346,6 @@ async def reopen_support_conversation(
     
     conversation.status = "open"
     conversation.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     
     return {"message": "Support conversation reopened successfully"}

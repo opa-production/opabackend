@@ -1,6 +1,8 @@
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, or_
 
 from app.database import get_db
 from app.models import Host, Client, Notification
@@ -24,7 +26,7 @@ ADMIN_SENDER_NAME = "[Deon,CEO ardena]"
 async def broadcast_notification_to_hosts(
     request: BroadcastNotificationRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send notification to all active hosts
@@ -41,7 +43,9 @@ async def broadcast_notification_to_hosts(
     """
     try:
         # Get all active hosts
-        active_hosts = db.query(Host).filter(Host.is_active == True).all()
+        stmt = select(Host).filter(Host.is_active == True)
+        result = await db.execute(stmt)
+        active_hosts = result.scalars().all()
         
         if not active_hosts:
             return NotificationResponse(
@@ -70,14 +74,14 @@ async def broadcast_notification_to_hosts(
                 continue
         
         # Commit all notifications
-        db.commit()
+        await db.commit()
         
         return NotificationResponse(
             message=f"Notification sent to {sent_count} active host(s)",
             sent_count=sent_count
         )
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending notifications: {str(e)}"
@@ -88,7 +92,7 @@ async def broadcast_notification_to_hosts(
 async def broadcast_notification_to_clients(
     request: BroadcastNotificationRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send notification to all active clients
@@ -105,7 +109,9 @@ async def broadcast_notification_to_clients(
     """
     try:
         # Get all active clients
-        active_clients = db.query(Client).filter(Client.is_active == True).all()
+        stmt = select(Client).filter(Client.is_active == True)
+        result = await db.execute(stmt)
+        active_clients = result.scalars().all()
         
         if not active_clients:
             return NotificationResponse(
@@ -134,14 +140,14 @@ async def broadcast_notification_to_clients(
                 continue
         
         # Commit all notifications
-        db.commit()
+        await db.commit()
         
         return NotificationResponse(
             message=f"Notification sent to {sent_count} active client(s)",
             sent_count=sent_count
         )
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending notifications: {str(e)}"
@@ -152,7 +158,7 @@ async def broadcast_notification_to_clients(
 async def send_notification_to_user(
     request: UserNotificationRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send notification to a specific user (host or client)
@@ -173,7 +179,9 @@ async def send_notification_to_user(
         user = None
         
         if request.user_type == "host":
-            user = db.query(Host).filter(Host.id == request.user_id).first()
+            stmt = select(Host).filter(Host.id == request.user_id)
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -185,7 +193,9 @@ async def send_notification_to_user(
                     detail="Host account is inactive"
                 )
         elif request.user_type == "client":
-            user = db.query(Client).filter(Client.id == request.user_id).first()
+            stmt = select(Client).filter(Client.id == request.user_id)
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -208,7 +218,7 @@ async def send_notification_to_user(
         )
         
         db.add(notification)
-        db.commit()
+        await db.commit()
         
         return NotificationResponse(
             message=f"Notification sent successfully",
@@ -219,7 +229,7 @@ async def send_notification_to_user(
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending notification: {str(e)}"
@@ -234,7 +244,7 @@ async def broadcast_to_clients_respecting_preferences(
     request: AdminMultiChannelBroadcastToClientsRequest,
     background_tasks: BackgroundTasks,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Broadcast a message to all active clients, sending it only through the
@@ -245,17 +255,15 @@ async def broadcast_to_clients_respecting_preferences(
     """
     try:
         # Fetch all active clients who have at least one of the channels enabled
-        clients = (
-            db.query(Client)
-            .filter(
-                Client.is_active == True,  # noqa: E712
-                (
-                    (Client.email_notifications_enabled == True)
-                    | (Client.in_app_notifications_enabled == True)
-                ),
+        stmt = select(Client).filter(
+            Client.is_active == True,
+            or_(
+                Client.email_notifications_enabled == True,
+                Client.in_app_notifications_enabled == True
             )
-            .all()
         )
+        result = await db.execute(stmt)
+        clients = result.scalars().all()
 
         if not clients:
             return NotificationResponse(
@@ -314,7 +322,7 @@ async def broadcast_to_clients_respecting_preferences(
                     print(f"Error scheduling email for client {client.id}: {e}")
 
         # Persist in‑app notifications
-        db.commit()
+        await db.commit()
 
         total_channels = sent_in_app + scheduled_emails
         return NotificationResponse(
@@ -325,7 +333,7 @@ async def broadcast_to_clients_respecting_preferences(
             sent_count=total_channels,
         )
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error broadcasting notifications: {str(e)}",

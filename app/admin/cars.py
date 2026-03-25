@@ -1,7 +1,8 @@
 from typing import Optional, List, Dict, Any, Set
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, func, select
 
 from app.database import get_db
 from app.models import Car, Host, VerificationStatus
@@ -171,7 +172,7 @@ async def list_cars(
     sort_by: Optional[str] = Query("created_at", description="Sort field (id, name, model, year, created_at)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all cars with pagination, filtering, and search
@@ -184,14 +185,14 @@ async def list_cars(
     - **sort_by**: Field to sort by
     - **order**: Sort order (asc or desc)
     """
-    # Build query with join to host
-    query = db.query(Car).join(Host)
+    # Build base statement
+    stmt = select(Car).options(joinedload(Car.host))
     
     # Apply filters
     if status:
         try:
             status_enum = VerificationStatus(status.lower())
-            query = query.filter(Car.verification_status == status_enum.value)
+            stmt = stmt.filter(Car.verification_status == status_enum.value)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -199,28 +200,32 @@ async def list_cars(
             )
     
     if host_id:
-        query = query.filter(Car.host_id == host_id)
+        stmt = stmt.filter(Car.host_id == host_id)
     
     if search:
         search_filter = or_(
             Car.name.ilike(f"%{search}%"),
             Car.model.ilike(f"%{search}%")
         )
-        query = query.filter(search_filter)
+        stmt = stmt.filter(search_filter)
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(Car, sort_by, Car.created_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    cars = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().unique().all()
     
     # Build response
     car_list = []
@@ -251,15 +256,22 @@ async def get_cars_awaiting_verification(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get cars awaiting verification"""
-    query = db.query(Car).join(Host).filter(
+    stmt = select(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.AWAITING.value
     )
-    total = query.count()
+    
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
     skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().unique().all()
+    
     car_list = [
         AdminCarListResponse(
             id=car.id,
@@ -282,15 +294,22 @@ async def get_verified_cars(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get verified cars"""
-    query = db.query(Car).join(Host).filter(
+    stmt = select(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.VERIFIED.value
     )
-    total = query.count()
+    
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
     skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().unique().all()
+    
     car_list = [
         AdminCarListResponse(
             id=car.id,
@@ -313,15 +332,22 @@ async def get_rejected_cars(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get rejected cars"""
-    query = db.query(Car).join(Host).filter(
+    stmt = select(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.DENIED.value
     )
-    total = query.count()
+    
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
     skip = (page - 1) * limit
-    cars = query.order_by(Car.created_at.desc()).offset(skip).limit(limit).all()
+    stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    cars = result.scalars().unique().all()
+    
     car_list = [
         AdminCarListResponse(
             id=car.id,
@@ -343,10 +369,13 @@ async def get_rejected_cars(
 async def get_car_details(
     car_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get detailed information about a specific car including host information"""
-    car = db.query(Car).join(Host).filter(Car.id == car_id).first()
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -529,7 +558,7 @@ async def update_car_status(
     car_id: int,
     request: CarStatusUpdateRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update car verification status
@@ -537,14 +566,17 @@ async def update_car_status(
     - **verification_status**: New status (awaiting/verified/denied)
     - **rejection_reason**: Required if status is "denied"
     """
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Car not found"
         )
     
-    car.verification_status = request.verification_status
+    car.verification_status = request.verification_status.value
     
     if request.verification_status == VerificationStatus.DENIED:
         car.rejection_reason = request.rejection_reason
@@ -552,11 +584,13 @@ async def update_car_status(
         # Clear rejection reason if status is not denied
         car.rejection_reason = None
     
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     # Reload with host info
-    car = db.query(Car).join(Host).filter(Car.id == car_id).first()
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
     
     return CarDetailResponse(
         id=car.id,
@@ -597,7 +631,7 @@ async def update_car_status(
 async def bulk_update_car_status(
     request: BulkCarStatusUpdateRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Bulk update verification status for multiple cars
@@ -607,7 +641,10 @@ async def bulk_update_car_status(
     - **rejection_reason**: Required if status is "denied"
     """
     # Verify all cars exist
-    cars = db.query(Car).filter(Car.id.in_(request.car_ids)).all()
+    stmt = select(Car).filter(Car.id.in_(request.car_ids))
+    result = await db.execute(stmt)
+    cars = result.scalars().all()
+    
     if len(cars) != len(request.car_ids):
         found_ids = {car.id for car in cars}
         missing_ids = set(request.car_ids) - found_ids
@@ -626,7 +663,7 @@ async def bulk_update_car_status(
             car.rejection_reason = None
         updated_count += 1
     
-    db.commit()
+    await db.commit()
     
     return {
         "message": f"Successfully updated {updated_count} car(s)",
@@ -639,10 +676,13 @@ async def bulk_update_car_status(
 async def approve_car(
     car_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Approve a car (set status to verified)"""
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -652,11 +692,13 @@ async def approve_car(
     car.verification_status = VerificationStatus.VERIFIED.value
     car.rejection_reason = None
     
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     # Reload with host info
-    car = db.query(Car).join(Host).filter(Car.id == car_id).first()
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
     
     return CarDetailResponse(
         id=car.id,
@@ -698,10 +740,13 @@ async def reject_car(
     car_id: int,
     request: CarRejectRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Reject a car (set status to denied with rejection reason)"""
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -711,11 +756,13 @@ async def reject_car(
     car.verification_status = VerificationStatus.DENIED.value
     car.rejection_reason = request.rejection_reason
     
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     # Reload with host info
-    car = db.query(Car).join(Host).filter(Car.id == car_id).first()
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
     
     return CarDetailResponse(
         id=car.id,
@@ -759,14 +806,17 @@ async def update_car(
     car_id: int,
     request: CarUpdateRequest,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update car details (admin can edit any field)
     
     Only provided fields will be updated.
     """
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -817,11 +867,13 @@ async def update_car(
     if request.longitude is not None:
         car.longitude = request.longitude
     
-    db.commit()
-    db.refresh(car)
+    await db.commit()
+    await db.refresh(car)
     
     # Reload with host info
-    car = db.query(Car).join(Host).filter(Car.id == car_id).first()
+    stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
     
     return CarDetailResponse(
         id=car.id,
@@ -862,18 +914,21 @@ async def update_car(
 async def delete_car(
     car_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Permanently delete a car listing"""
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Car not found"
         )
     
-    db.delete(car)
-    db.commit()
+    await db.delete(car)
+    await db.commit()
     
     return {"message": "Car deleted successfully"}
 
@@ -882,10 +937,13 @@ async def delete_car(
 async def hide_car(
     car_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Hide car from public listing"""
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -899,7 +957,7 @@ async def hide_car(
         )
     
     car.is_hidden = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Car hidden from public listing successfully"}
 
@@ -908,10 +966,13 @@ async def hide_car(
 async def show_car(
     car_id: int,
     current_admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Show car in public listing"""
-    car = db.query(Car).filter(Car.id == car_id).first()
+    stmt = select(Car).filter(Car.id == car_id)
+    result = await db.execute(stmt)
+    car = result.scalar_one_or_none()
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -925,6 +986,6 @@ async def show_car(
         )
     
     car.is_hidden = False
-    db.commit()
+    await db.commit()
     
     return {"message": "Car is now visible in public listing"}

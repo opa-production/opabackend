@@ -1,7 +1,8 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, select, func
 
 from app.database import get_db
 from app.models import Admin
@@ -53,7 +54,7 @@ async def list_admins(
     sort_by: Optional[str] = Query("created_at", description="Sort field (id, created_at, full_name, email)"),
     order: Optional[str] = Query("desc", pattern="^(asc|desc)$", description="Sort order"),
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all admins (super_admin only)
@@ -67,18 +68,18 @@ async def list_admins(
     - **order**: Sort order (asc or desc)
     """
     # Build query
-    query = db.query(Admin)
+    stmt = select(Admin)
     
     # Apply filters
     if role:
-        query = query.filter(Admin.role == role)
+        stmt = stmt.filter(Admin.role == role)
     
     if is_active is not None:
-        query = query.filter(Admin.is_active == is_active)
+        stmt = stmt.filter(Admin.is_active == is_active)
     
     if search:
         search_pattern = f"%{search}%"
-        query = query.filter(
+        stmt = stmt.filter(
             or_(
                 Admin.full_name.ilike(search_pattern),
                 Admin.email.ilike(search_pattern)
@@ -86,18 +87,22 @@ async def list_admins(
         )
     
     # Get total count
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = getattr(Admin, sort_by, Admin.created_at)
     if order == "asc":
-        query = query.order_by(sort_field.asc())
+        stmt = stmt.order_by(sort_field.asc())
     else:
-        query = query.order_by(sort_field.desc())
+        stmt = stmt.order_by(sort_field.desc())
     
     # Apply pagination
     skip = (page - 1) * limit
-    admins = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    admins = result.scalars().all()
     
     # Build response
     admin_list = [AdminListResponse(
@@ -122,10 +127,13 @@ async def list_admins(
 async def get_admin_details(
     admin_id: int,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get detailed information about a specific admin (super_admin only)"""
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -147,7 +155,7 @@ async def get_admin_details(
 async def create_admin(
     request: AdminCreateRequest,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new admin account (super_admin only)
@@ -156,7 +164,7 @@ async def create_admin(
     - Role must be 'admin' or 'moderator'
     """
     # Check if email already exists
-    existing_admin = get_admin_by_email(db, request.email)
+    existing_admin = await get_admin_by_email(db, request.email)
     if existing_admin:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -173,8 +181,8 @@ async def create_admin(
     )
     
     db.add(new_admin)
-    db.commit()
-    db.refresh(new_admin)
+    await db.commit()
+    await db.refresh(new_admin)
     
     return AdminDetailResponse(
         id=new_admin.id,
@@ -192,7 +200,7 @@ async def update_admin(
     admin_id: int,
     request: AdminUpdateRequest,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update admin profile (super_admin only)
@@ -200,7 +208,10 @@ async def update_admin(
     - Cannot update super_admin role
     - Cannot deactivate super_admin
     """
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -220,7 +231,7 @@ async def update_admin(
     
     if request.email is not None:
         # Check if email is already taken by another admin
-        existing_admin = get_admin_by_email(db, request.email)
+        existing_admin = await get_admin_by_email(db, request.email)
         if existing_admin and existing_admin.id != admin_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -234,8 +245,8 @@ async def update_admin(
     if request.is_active is not None:
         admin.is_active = request.is_active
     
-    db.commit()
-    db.refresh(admin)
+    await db.commit()
+    await db.refresh(admin)
     
     return AdminDetailResponse(
         id=admin.id,
@@ -253,14 +264,17 @@ async def change_admin_password(
     admin_id: int,
     request: AdminPasswordChangeRequest,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Change another admin's password (super_admin only)
     
     - Cannot change super_admin password (use own password change endpoint)
     """
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -276,7 +290,7 @@ async def change_admin_password(
     
     # Update password
     admin.hashed_password = get_password_hash(request.new_password)
-    db.commit()
+    await db.commit()
     
     return {"message": "Password changed successfully"}
 
@@ -285,10 +299,13 @@ async def change_admin_password(
 async def deactivate_admin(
     admin_id: int,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Deactivate an admin account (super_admin only)"""
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -316,7 +333,7 @@ async def deactivate_admin(
         )
     
     admin.is_active = False
-    db.commit()
+    await db.commit()
     
     return {"message": "Admin account deactivated successfully"}
 
@@ -325,10 +342,13 @@ async def deactivate_admin(
 async def activate_admin(
     admin_id: int,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Activate an admin account (super_admin only)"""
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -342,7 +362,7 @@ async def activate_admin(
         )
     
     admin.is_active = True
-    db.commit()
+    await db.commit()
     
     return {"message": "Admin account activated successfully"}
 
@@ -351,7 +371,7 @@ async def activate_admin(
 async def delete_admin(
     admin_id: int,
     current_admin: Admin = Depends(require_super_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete an admin account (super_admin only)
@@ -359,7 +379,10 @@ async def delete_admin(
     - Cannot delete super_admin
     - Cannot delete self
     """
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    stmt = select(Admin).filter(Admin.id == admin_id)
+    result = await db.execute(stmt)
+    admin = result.scalars().first()
+    
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -380,8 +403,8 @@ async def delete_admin(
             detail="Cannot delete your own account"
         )
     
-    db.delete(admin)
-    db.commit()
+    await db.delete(admin)
+    await db.commit()
     
     return {"message": "Admin account deleted successfully"}
 
@@ -391,7 +414,7 @@ async def delete_admin(
 async def update_own_profile(
     request: AdminOwnProfileUpdateRequest,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update own admin profile
@@ -405,7 +428,7 @@ async def update_own_profile(
     
     if request.email is not None:
         # Check if email is already taken by another admin
-        existing_admin = get_admin_by_email(db, request.email)
+        existing_admin = await get_admin_by_email(db, request.email)
         if existing_admin and existing_admin.id != current_admin.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -413,8 +436,8 @@ async def update_own_profile(
             )
         current_admin.email = request.email
     
-    db.commit()
-    db.refresh(current_admin)
+    await db.commit()
+    await db.refresh(current_admin)
     
     return AdminProfileResponse(
         id=current_admin.id,
@@ -431,7 +454,7 @@ async def update_own_profile(
 async def change_own_password(
     request: AdminOwnPasswordChangeRequest,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Change own password
@@ -448,6 +471,6 @@ async def change_own_password(
     
     # Update password
     current_admin.hashed_password = get_password_hash(request.new_password)
-    db.commit()
+    await db.commit()
     
     return {"message": "Password changed successfully"}

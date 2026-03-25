@@ -6,8 +6,9 @@ These endpoints allow hosts to rate clients after completing bookings.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_host
 from app.database import get_db
@@ -43,7 +44,7 @@ def rating_to_response(rating: ClientRating) -> dict:
 async def create_client_rating(
     request: ClientRatingCreateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a rating for a client (renter).
@@ -52,13 +53,15 @@ async def create_client_rating(
     - If booking_id is provided, booking must belong to this host and be completed
     - Only one host rating per booking is allowed
     """
-    client = db.query(Client).filter(Client.id == request.client_id).first()
+    client_stmt = select(Client).filter(Client.id == request.client_id)
+    client_result = await db.execute(client_stmt)
+    client = client_result.scalar_one_or_none()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
 
     if request.booking_id:
-        booking = (
-            db.query(Booking)
+        booking_stmt = (
+            select(Booking)
             .options(joinedload(Booking.car))
             .join(Car)
             .filter(
@@ -66,8 +69,10 @@ async def create_client_rating(
                 Booking.client_id == request.client_id,
                 Car.host_id == current_host.id,
             )
-            .first()
         )
+        booking_result = await db.execute(booking_stmt)
+        booking = booking_result.scalar_one_or_none()
+        
         if not booking:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -79,10 +84,12 @@ async def create_client_rating(
                 detail="You can only rate clients for completed bookings",
             )
 
-        existing = db.query(ClientRating).filter(
+        existing_stmt = select(ClientRating).filter(
             ClientRating.booking_id == request.booking_id,
             ClientRating.host_id == current_host.id,
-        ).first()
+        )
+        existing_result = await db.execute(existing_stmt)
+        existing = existing_result.scalar_one_or_none()
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -97,13 +104,16 @@ async def create_client_rating(
         review=request.review.strip() if request.review else None,
     )
     db.add(rating)
-    db.commit()
-    db.refresh(rating)
+    await db.commit()
+    await db.refresh(rating)
 
-    rating = db.query(ClientRating).options(
+    rating_stmt = select(ClientRating).options(
         joinedload(ClientRating.client),
         joinedload(ClientRating.host),
-    ).filter(ClientRating.id == rating.id).first()
+    ).filter(ClientRating.id == rating.id)
+    rating_result = await db.execute(rating_stmt)
+    rating = rating_result.scalar_one_or_none()
+    
     return rating_to_response(rating)
 
 
@@ -113,19 +123,25 @@ async def get_host_submitted_client_ratings(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     client_id: Optional[int] = Query(None, description="Filter by client ID"),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get ratings submitted by the current host."""
-    query = db.query(ClientRating).options(
+    stmt = select(ClientRating).options(
         joinedload(ClientRating.client),
         joinedload(ClientRating.host),
     ).filter(ClientRating.host_id == current_host.id)
 
     if client_id:
-        query = query.filter(ClientRating.client_id == client_id)
+        stmt = stmt.filter(ClientRating.client_id == client_id)
 
-    total = query.count()
-    ratings = query.order_by(ClientRating.created_at.desc()).offset(skip).limit(limit).all()
+    # Get total count
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    stmt = stmt.order_by(ClientRating.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    ratings = result.scalars().all()
 
     return ClientRatingListResponse(
         ratings=[rating_to_response(r) for r in ratings],
@@ -138,16 +154,18 @@ async def get_host_submitted_client_ratings(
 async def get_host_client_rating_details(
     rating_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get one client rating created by the current host."""
-    rating = db.query(ClientRating).options(
+    stmt = select(ClientRating).options(
         joinedload(ClientRating.client),
         joinedload(ClientRating.host),
     ).filter(
         ClientRating.id == rating_id,
         ClientRating.host_id == current_host.id,
-    ).first()
+    )
+    result = await db.execute(stmt)
+    rating = result.scalar_one_or_none()
 
     if not rating:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rating not found")
@@ -159,25 +177,30 @@ async def update_host_client_rating(
     rating_id: int,
     request: ClientRatingUpdateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a client rating created by the current host."""
-    rating = db.query(ClientRating).filter(
+    stmt = select(ClientRating).filter(
         ClientRating.id == rating_id,
         ClientRating.host_id == current_host.id,
-    ).first()
+    )
+    result = await db.execute(stmt)
+    rating = result.scalar_one_or_none()
     if not rating:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rating not found")
 
     rating.rating = request.rating
     rating.review = request.review.strip() if request.review else None
-    db.commit()
-    db.refresh(rating)
+    await db.commit()
+    await db.refresh(rating)
 
-    rating = db.query(ClientRating).options(
+    rating_stmt = select(ClientRating).options(
         joinedload(ClientRating.client),
         joinedload(ClientRating.host),
-    ).filter(ClientRating.id == rating.id).first()
+    ).filter(ClientRating.id == rating.id)
+    rating_result = await db.execute(rating_stmt)
+    rating = rating_result.scalar_one_or_none()
+    
     return rating_to_response(rating)
 
 
@@ -185,18 +208,20 @@ async def update_host_client_rating(
 async def delete_host_client_rating(
     rating_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a client rating created by the current host."""
-    rating = db.query(ClientRating).filter(
+    stmt = select(ClientRating).filter(
         ClientRating.id == rating_id,
         ClientRating.host_id == current_host.id,
-    ).first()
+    )
+    result = await db.execute(stmt)
+    rating = result.scalar_one_or_none()
     if not rating:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rating not found")
 
-    db.delete(rating)
-    db.commit()
+    await db.delete(rating)
+    await db.commit()
     return None
 
 
@@ -204,7 +229,7 @@ async def delete_host_client_rating(
 async def get_client_profile_for_host(
     client_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get client (renter) profile summary for hosts.
@@ -213,18 +238,24 @@ async def get_client_profile_for_host(
     and **average_rating** (from host ratings) so hosts can show "X trips" and
     rating on the renter's profile.
     """
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client_stmt = select(Client).filter(Client.id == client_id)
+    client_result = await db.execute(client_stmt)
+    client = client_result.scalar_one_or_none()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
 
-    trips_count = db.query(Booking).filter(
+    trips_stmt = select(func.count(Booking.id)).filter(
         Booking.client_id == client_id,
         Booking.status == BookingStatus.COMPLETED,
-    ).count()
+    )
+    trips_result = await db.execute(trips_stmt)
+    trips_count = trips_result.scalar() or 0
 
-    avg_rating = db.query(func.avg(ClientRating.rating)).filter(
+    avg_stmt = select(func.avg(ClientRating.rating)).filter(
         ClientRating.client_id == client_id
-    ).scalar()
+    )
+    avg_result = await db.execute(avg_stmt)
+    avg_rating = avg_result.scalar()
 
     return ClientProfileForHostResponse(
         id=client.id,
@@ -241,26 +272,37 @@ async def get_client_ratings_public(
     client_id: int,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Public endpoint: get ratings for a specific client (renter)."""
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client_stmt = select(Client).filter(Client.id == client_id)
+    client_result = await db.execute(client_stmt)
+    client = client_result.scalar_one_or_none()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
 
-    query = db.query(ClientRating).options(
+    stmt = select(ClientRating).options(
         joinedload(ClientRating.client),
         joinedload(ClientRating.host),
     ).filter(ClientRating.client_id == client_id)
-    total = query.count()
-    avg = db.query(func.avg(ClientRating.rating)).filter(
+    
+    # Get total count
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    avg_stmt = select(func.avg(ClientRating.rating)).filter(
         ClientRating.client_id == client_id
-    ).scalar()
-    ratings = query.order_by(ClientRating.created_at.desc()).offset(skip).limit(limit).all()
+    )
+    avg_result = await db.execute(avg_stmt)
+    avg = avg_result.scalar()
+    
+    stmt = stmt.order_by(ClientRating.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    ratings = result.scalars().all()
 
     return ClientRatingListResponse(
         ratings=[rating_to_response(r) for r in ratings],
         total=total,
         average_rating=round(float(avg), 2) if avg else None,
     )
-

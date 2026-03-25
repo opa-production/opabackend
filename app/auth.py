@@ -6,7 +6,8 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.database import get_db
 from app.models import Host, Client, Admin
@@ -14,10 +15,10 @@ from app.schemas import TokenData
 from app.config import settings
 
 # JWT settings
-SECRET_KEY = "your-secret-key-change-in-production" 
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  
-REFRESH_TOKEN_EXPIRE_DAYS = 7 
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = settings.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
+REFRESH_TOKEN_EXPIRE_DAYS = settings.REFRESH_TOKEN_EXPIRE_DAYS 
 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()
@@ -182,24 +183,27 @@ def verify_refresh_token(token: str) -> dict:
         )
 
 
-def get_host_by_email(db: Session, email: str) -> Optional[Host]:
+async def get_host_by_email(db: AsyncSession, email: str) -> Optional[Host]:
     """Get host by email"""
-    return db.query(Host).filter(Host.email == email).first()
+    result = await db.execute(select(Host).filter(Host.email == email))
+    return result.scalar_one_or_none()
 
 
-def get_client_by_email(db: Session, email: str) -> Optional[Client]:
+async def get_client_by_email(db: AsyncSession, email: str) -> Optional[Client]:
     """Get client by email"""
-    return db.query(Client).filter(Client.email == email).first()
+    result = await db.execute(select(Client).filter(Client.email == email))
+    return result.scalar_one_or_none()
 
 
-def get_admin_by_email(db: Session, email: str) -> Optional[Admin]:
+async def get_admin_by_email(db: AsyncSession, email: str) -> Optional[Admin]:
     """Get admin by email"""
-    return db.query(Admin).filter(Admin.email == email).first()
+    result = await db.execute(select(Admin).filter(Admin.email == email))
+    return result.scalar_one_or_none()
 
 
 async def get_current_host(
     credentials: HTTPAuthorizationCredentials = Security(security),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> Host:
     """Dependency to get current authenticated host from JWT token"""
     credentials_exception = HTTPException(
@@ -257,7 +261,8 @@ async def get_current_host(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    host = db.query(Host).filter(Host.id == host_id).first()
+    result = await db.execute(select(Host).filter(Host.id == host_id))
+    host = result.scalar_one_or_none()
     if host is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -278,7 +283,7 @@ async def get_current_host(
 
 async def get_current_client(
     credentials: HTTPAuthorizationCredentials = Security(client_security),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> Client:
     """Dependency to get current authenticated client from JWT token"""
     credentials_exception = HTTPException(
@@ -336,7 +341,8 @@ async def get_current_client(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    client = db.query(Client).filter(Client.id == client_id).first()
+    result = await db.execute(select(Client).filter(Client.id == client_id))
+    client = result.scalar_one_or_none()
     if client is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -357,7 +363,7 @@ async def get_current_client(
 
 async def get_current_admin(
     credentials: HTTPAuthorizationCredentials = Security(admin_security),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> Admin:
     """Dependency to get current authenticated admin from JWT token"""
     credentials_exception = HTTPException(
@@ -415,7 +421,8 @@ async def get_current_admin(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    result = await db.execute(select(Admin).filter(Admin.id == admin_id))
+    admin = result.scalar_one_or_none()
     if admin is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

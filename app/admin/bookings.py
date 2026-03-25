@@ -4,10 +4,11 @@ Admin Booking Management endpoints
 These endpoints allow admins to view and manage all bookings in the system.
 """
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_, func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, func, desc, select
 
 from app.database import get_db
 from app.models import Booking, BookingStatus, Client, Car, Host, Admin
@@ -35,7 +36,7 @@ async def list_bookings(
     sort_by: Optional[str] = Query("created_at", description="Sort field: created_at, start_date, total_price"),
     order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     List all bookings with advanced filtering and search.
@@ -46,8 +47,8 @@ async def list_bookings(
     - Sort by various fields
     - Requires admin authentication
     """
-    # Build base query with relationships
-    query = db.query(Booking).options(
+    # Build base statement with relationships
+    stmt = select(Booking).options(
         joinedload(Booking.client),
         joinedload(Booking.car).joinedload(Car.host)
     )
@@ -56,7 +57,7 @@ async def list_bookings(
     if status:
         try:
             status_enum = BookingStatus(status.lower())
-            query = query.filter(Booking.status == status_enum)
+            stmt = stmt.filter(Booking.status == status_enum)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -65,30 +66,30 @@ async def list_bookings(
     
     # Filter by client_id
     if client_id:
-        query = query.filter(Booking.client_id == client_id)
+        stmt = stmt.filter(Booking.client_id == client_id)
     
     # Filter by host_id (through car relationship)
     if host_id:
-        query = query.join(Car).filter(Car.host_id == host_id)
+        stmt = stmt.join(Car).filter(Car.host_id == host_id)
     
     # Filter by car_id
     if car_id:
-        query = query.filter(Booking.car_id == car_id)
+        stmt = stmt.filter(Booking.car_id == car_id)
     
     # Filter by booking_id (exact match)
     if booking_id:
-        query = query.filter(Booking.booking_id.ilike(f"%{booking_id}%"))
+        stmt = stmt.filter(Booking.booking_id.ilike(f"%{booking_id}%"))
     
     # Filter by date range
     if start_date_from:
-        query = query.filter(Booking.start_date >= start_date_from)
+        stmt = stmt.filter(Booking.start_date >= start_date_from)
     if start_date_to:
-        query = query.filter(Booking.start_date <= start_date_to)
+        stmt = stmt.filter(Booking.start_date <= start_date_to)
     
     # Search by client name, host name, or car name
     if search:
         search_term = f"%{search}%"
-        query = query.join(Client).join(Car).join(Host).filter(
+        stmt = stmt.join(Client).join(Car).join(Host).filter(
             or_(
                 Client.full_name.ilike(search_term),
                 Client.email.ilike(search_term),
@@ -100,7 +101,9 @@ async def list_bookings(
         )
     
     # Get total count before pagination
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
     
     # Apply sorting
     sort_field = sort_by.lower() if sort_by else "created_at"
@@ -116,13 +119,15 @@ async def list_bookings(
         sort_column = Booking.created_at
     
     if sort_order == "asc":
-        query = query.order_by(sort_column)
+        stmt = stmt.order_by(sort_column)
     else:
-        query = query.order_by(desc(sort_column))
+        stmt = stmt.order_by(desc(sort_column))
     
     # Apply pagination
     skip = (page - 1) * limit
-    bookings = query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    bookings = result.scalars().unique().all()
     
     # Convert to response format
     booking_responses = [booking_to_response(b) for b in bookings]
@@ -141,7 +146,7 @@ async def list_bookings(
 async def get_booking_details(
     booking_id: str,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific booking.
@@ -149,10 +154,12 @@ async def get_booking_details(
     - Returns full booking details including client, host, and car information
     - Requires admin authentication
     """
-    booking = db.query(Booking).options(
+    stmt = select(Booking).options(
         joinedload(Booking.client),
         joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.booking_id == booking_id).first()
+    ).filter(Booking.booking_id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         raise HTTPException(
@@ -171,7 +178,7 @@ async def update_booking_status(
     new_status: str = Query(..., description="New status: pending, confirmed, active, completed, cancelled, rejected"),
     reason: Optional[str] = Query(None, description="Reason for status change (required for cancelled/rejected)"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update booking status.
@@ -181,7 +188,9 @@ async def update_booking_status(
     - Updates status_updated_at timestamp
     - Requires admin authentication
     """
-    booking = db.query(Booking).filter(Booking.booking_id == booking_id).first()
+    stmt = select(Booking).filter(Booking.booking_id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         raise HTTPException(
@@ -208,7 +217,7 @@ async def update_booking_status(
     # Update booking status
     old_status = booking.status
     booking.status = status_enum
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     
     if status_enum in [BookingStatus.CANCELLED, BookingStatus.REJECTED]:
         booking.cancellation_reason = reason
@@ -217,14 +226,16 @@ async def update_booking_status(
     if status_enum not in [BookingStatus.CANCELLED, BookingStatus.REJECTED]:
         booking.cancellation_reason = None
     
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
     
     # Reload with relationships for response
-    booking = db.query(Booking).options(
+    load_stmt = select(Booking).options(
         joinedload(Booking.client),
         joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.id == booking.id).first()
+    ).filter(Booking.id == booking.id)
+    result = await db.execute(load_stmt)
+    booking = result.scalar_one_or_none()
     
     return {
         "message": f"Booking status updated from {old_status.value} to {status_enum.value}",
@@ -237,7 +248,7 @@ async def cancel_booking(
     booking_id: str,
     reason: Optional[str] = Query(None, description="Cancellation reason"),
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Cancel a booking (convenience endpoint).
@@ -246,7 +257,9 @@ async def cancel_booking(
     - Updates status_updated_at timestamp
     - Requires admin authentication
     """
-    booking = db.query(Booking).filter(Booking.booking_id == booking_id).first()
+    stmt = select(Booking).filter(Booking.booking_id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         raise HTTPException(
@@ -268,17 +281,19 @@ async def cancel_booking(
     
     # Update booking
     booking.status = BookingStatus.CANCELLED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = reason or "Cancelled by admin"
     
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
     
     # Reload with relationships for response
-    booking = db.query(Booking).options(
+    load_stmt = select(Booking).options(
         joinedload(Booking.client),
         joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.id == booking.id).first()
+    ).filter(Booking.id == booking.id)
+    result = await db.execute(load_stmt)
+    booking = result.scalar_one_or_none()
     
     return {
         "message": "Booking cancelled successfully",
@@ -290,7 +305,7 @@ async def cancel_booking(
 async def confirm_booking(
     booking_id: str,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Confirm a pending booking.
@@ -299,7 +314,9 @@ async def confirm_booking(
     - Updates status_updated_at timestamp
     - Requires admin authentication
     """
-    booking = db.query(Booking).filter(Booking.booking_id == booking_id).first()
+    stmt = select(Booking).filter(Booking.booking_id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         raise HTTPException(
@@ -315,17 +332,19 @@ async def confirm_booking(
     
     # Update booking
     booking.status = BookingStatus.CONFIRMED
-    booking.status_updated_at = datetime.utcnow()
+    booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = None
     
-    db.commit()
-    db.refresh(booking)
+    await db.commit()
+    await db.refresh(booking)
     
     # Reload with relationships for response
-    booking = db.query(Booking).options(
+    load_stmt = select(Booking).options(
         joinedload(Booking.client),
         joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.id == booking.id).first()
+    ).filter(Booking.id == booking.id)
+    result = await db.execute(load_stmt)
+    booking = result.scalar_one_or_none()
     
     return {
         "message": "Booking confirmed successfully",
@@ -339,7 +358,7 @@ async def confirm_booking(
 async def delete_booking(
     booking_id: str,
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a booking (permanent deletion).
@@ -348,7 +367,9 @@ async def delete_booking(
     - Use with caution - consider cancelling instead
     - Requires admin authentication
     """
-    booking = db.query(Booking).filter(Booking.booking_id == booking_id).first()
+    stmt = select(Booking).filter(Booking.booking_id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalar_one_or_none()
     
     if not booking:
         raise HTTPException(
@@ -363,8 +384,8 @@ async def delete_booking(
             detail=f"Cannot delete booking with status: {booking.status.value}"
         )
     
-    db.delete(booking)
-    db.commit()
+    await db.delete(booking)
+    await db.commit()
     
     return {
         "message": "Booking deleted successfully"
@@ -376,7 +397,7 @@ async def delete_booking(
 @router.get("/admin/bookings/stats")
 async def get_booking_stats(
     current_admin: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get booking statistics for the admin dashboard.
@@ -388,51 +409,67 @@ async def get_booking_stats(
     - Requires admin authentication
     """
     # Total bookings
-    total_bookings = db.query(func.count(Booking.id)).scalar() or 0
+    count_stmt = select(func.count(Booking.id))
+    total_result = await db.execute(count_stmt)
+    total_bookings = total_result.scalar() or 0
     
     # Bookings by status
-    status_counts = db.query(
+    status_counts_stmt = select(
         Booking.status,
         func.count(Booking.id).label('count')
-    ).group_by(Booking.status).all()
+    ).group_by(Booking.status)
+    status_counts_result = await db.execute(status_counts_stmt)
+    status_counts = status_counts_result.all()
     
     status_breakdown = {status.value: 0 for status in BookingStatus}
     for status, count in status_counts:
         status_breakdown[status.value] = count
     
     # Revenue statistics
-    total_revenue = db.query(func.sum(Booking.total_price)).filter(
+    rev_stmt = select(func.sum(Booking.total_price)).filter(
         Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE, BookingStatus.COMPLETED])
-    ).scalar() or 0
+    )
+    rev_result = await db.execute(rev_stmt)
+    total_revenue = rev_result.scalar() or 0
     
-    completed_revenue = db.query(func.sum(Booking.total_price)).filter(
+    comp_rev_stmt = select(func.sum(Booking.total_price)).filter(
         Booking.status == BookingStatus.COMPLETED
-    ).scalar() or 0
+    )
+    comp_rev_result = await db.execute(comp_rev_stmt)
+    completed_revenue = comp_rev_result.scalar() or 0
     
     # Average booking value
-    avg_booking_value = db.query(func.avg(Booking.total_price)).filter(
+    avg_stmt = select(func.avg(Booking.total_price)).filter(
         Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE, BookingStatus.COMPLETED])
-    ).scalar() or 0
+    )
+    avg_result = await db.execute(avg_stmt)
+    avg_booking_value = avg_result.scalar() or 0
     
     # Bookings in date ranges
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
+    now = datetime.now(timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     
-    today_bookings = db.query(func.count(Booking.id)).filter(
+    today_stmt = select(func.count(Booking.id)).filter(
         func.date(Booking.created_at) == func.date(today_start)
-    ).scalar() or 0
+    )
+    today_result = await db.execute(today_stmt)
+    today_bookings = today_result.scalar() or 0
     
     # This week (last 7 days)
     week_ago = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
-    week_bookings = db.query(func.count(Booking.id)).filter(
+    week_stmt = select(func.count(Booking.id)).filter(
         Booking.created_at >= week_ago
-    ).scalar() or 0
+    )
+    week_result = await db.execute(week_stmt)
+    week_bookings = week_result.scalar() or 0
     
     # This month
-    month_start = datetime(now.year, now.month, 1)
-    month_bookings = db.query(func.count(Booking.id)).filter(
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    month_stmt = select(func.count(Booking.id)).filter(
         Booking.created_at >= month_start
-    ).scalar() or 0
+    )
+    month_result = await db.execute(month_stmt)
+    month_bookings = month_result.scalar() or 0
     
     return {
         "total_bookings": total_bookings,
@@ -447,5 +484,5 @@ async def get_booking_stats(
             "this_week": week_bookings,
             "this_month": month_bookings
         },
-        "generated_at": datetime.utcnow().isoformat() + "Z"
+        "generated_at": datetime.now(timezone.utc).isoformat()
     }

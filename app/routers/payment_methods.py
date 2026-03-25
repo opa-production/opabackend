@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import List
 
 from app.database import get_db
@@ -30,7 +32,7 @@ def hash_cvc(cvc: str) -> str:
 async def add_mpesa_payment_method(
     request: MpesaPaymentMethodAddRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add a new M-Pesa payment method for the authenticated host
@@ -43,10 +45,12 @@ async def add_mpesa_payment_method(
     """
     # If setting as default, unset other default payment methods
     if request.is_default:
-        existing_defaults = db.query(PaymentMethod).filter(
+        stmt = select(PaymentMethod).filter(
             PaymentMethod.host_id == current_host.id,
             PaymentMethod.is_default == True
-        ).all()
+        )
+        result = await db.execute(stmt)
+        existing_defaults = result.scalars().all()
         for pm in existing_defaults:
             pm.is_default = False
     
@@ -60,8 +64,8 @@ async def add_mpesa_payment_method(
     )
     
     db.add(db_payment_method)
-    db.commit()
-    db.refresh(db_payment_method)
+    await db.commit()
+    await db.refresh(db_payment_method)
     
     return db_payment_method
 
@@ -70,7 +74,7 @@ async def add_mpesa_payment_method(
 async def add_card_payment_method(
     request: CardPaymentMethodAddRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add a new card payment method (Visa or Mastercard) for the authenticated host
@@ -86,10 +90,12 @@ async def add_card_payment_method(
     """
     # If setting as default, unset other default payment methods
     if request.is_default:
-        existing_defaults = db.query(PaymentMethod).filter(
+        stmt = select(PaymentMethod).filter(
             PaymentMethod.host_id == current_host.id,
             PaymentMethod.is_default == True
-        ).all()
+        )
+        result = await db.execute(stmt)
+        existing_defaults = result.scalars().all()
         for pm in existing_defaults:
             pm.is_default = False
     
@@ -120,8 +126,8 @@ async def add_card_payment_method(
     )
     
     db.add(db_payment_method)
-    db.commit()
-    db.refresh(db_payment_method)
+    await db.commit()
+    await db.refresh(db_payment_method)
     
     return db_payment_method
 
@@ -129,7 +135,7 @@ async def add_card_payment_method(
 @router.get("/host/payment-methods", response_model=PaymentMethodListResponse)
 async def get_payment_methods(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all payment methods for the authenticated host
@@ -137,9 +143,11 @@ async def get_payment_methods(
     Requires Bearer token authentication.
     Returns list of payment methods (sensitive data like full card numbers and CVC are not included).
     """
-    payment_methods = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.host_id == current_host.id
-    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc()).all()
+    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc())
+    result = await db.execute(stmt)
+    payment_methods = result.scalars().all()
     
     return PaymentMethodListResponse(payment_methods=payment_methods)
 
@@ -148,7 +156,7 @@ async def get_payment_methods(
 async def get_payment_method(
     payment_method_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get a specific payment method by ID
@@ -156,10 +164,12 @@ async def get_payment_method(
     Requires Bearer token authentication.
     Returns the payment method if it belongs to the authenticated host.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.host_id == current_host.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -174,7 +184,7 @@ async def get_payment_method(
 async def delete_payment_method(
     payment_method_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a payment method
@@ -182,10 +192,12 @@ async def delete_payment_method(
     Requires Bearer token authentication.
     Only the owner of the payment method can delete it.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.host_id == current_host.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -193,8 +205,8 @@ async def delete_payment_method(
             detail="Payment method not found"
         )
     
-    db.delete(payment_method)
-    db.commit()
+    await db.delete(payment_method)
+    await db.commit()
     
     return None
 
@@ -203,7 +215,7 @@ async def delete_payment_method(
 async def set_default_payment_method(
     payment_method_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Set a payment method as default
@@ -211,10 +223,12 @@ async def set_default_payment_method(
     Requires Bearer token authentication.
     Sets the specified payment method as default and unsets all other default payment methods for the host.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.host_id == current_host.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -223,11 +237,13 @@ async def set_default_payment_method(
         )
     
     # Unset other default payment methods
-    existing_defaults = db.query(PaymentMethod).filter(
+    stmt_others = select(PaymentMethod).filter(
         PaymentMethod.host_id == current_host.id,
         PaymentMethod.is_default == True,
         PaymentMethod.id != payment_method_id
-    ).all()
+    )
+    result_others = await db.execute(stmt_others)
+    existing_defaults = result_others.scalars().all()
     
     for pm in existing_defaults:
         pm.is_default = False
@@ -235,8 +251,8 @@ async def set_default_payment_method(
     # Set this one as default
     payment_method.is_default = True
     
-    db.commit()
-    db.refresh(payment_method)
+    await db.commit()
+    await db.refresh(payment_method)
     
     return payment_method
 
@@ -247,7 +263,7 @@ async def set_default_payment_method(
 async def add_client_mpesa_payment_method(
     request: MpesaPaymentMethodAddRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add a new M-Pesa payment method for the authenticated client
@@ -260,10 +276,12 @@ async def add_client_mpesa_payment_method(
     """
     # If setting as default, unset other default payment methods
     if request.is_default:
-        existing_defaults = db.query(PaymentMethod).filter(
+        stmt = select(PaymentMethod).filter(
             PaymentMethod.client_id == current_client.id,
             PaymentMethod.is_default == True
-        ).all()
+        )
+        result = await db.execute(stmt)
+        existing_defaults = result.scalars().all()
         for pm in existing_defaults:
             pm.is_default = False
     
@@ -278,15 +296,15 @@ async def add_client_mpesa_payment_method(
     )
     
     db.add(db_payment_method)
-    db.commit()
-    db.refresh(db_payment_method)
+    await db.commit()
+    await db.refresh(db_payment_method)
     
     # Ensure created_at is set if it's None (safety check for migration edge cases)
     if db_payment_method.created_at is None:
         from datetime import datetime, timezone
         db_payment_method.created_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(db_payment_method)
+        await db.commit()
+        await db.refresh(db_payment_method)
     
     return db_payment_method
 
@@ -295,7 +313,7 @@ async def add_client_mpesa_payment_method(
 async def add_client_card_payment_method(
     request: CardPaymentMethodAddRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Add a new card payment method (Visa or Mastercard) for the authenticated client
@@ -311,10 +329,12 @@ async def add_client_card_payment_method(
     """
     # If setting as default, unset other default payment methods
     if request.is_default:
-        existing_defaults = db.query(PaymentMethod).filter(
+        stmt = select(PaymentMethod).filter(
             PaymentMethod.client_id == current_client.id,
             PaymentMethod.is_default == True
-        ).all()
+        )
+        result = await db.execute(stmt)
+        existing_defaults = result.scalars().all()
         for pm in existing_defaults:
             pm.is_default = False
     
@@ -346,8 +366,8 @@ async def add_client_card_payment_method(
     )
     
     db.add(db_payment_method)
-    db.commit()
-    db.refresh(db_payment_method)
+    await db.commit()
+    await db.refresh(db_payment_method)
     
     return db_payment_method
 
@@ -392,7 +412,7 @@ async def add_client_card_pesapal(
 @router.get("/client/payment-methods", response_model=PaymentMethodListResponse)
 async def get_client_payment_methods(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all payment methods for the authenticated client
@@ -400,9 +420,11 @@ async def get_client_payment_methods(
     Requires Bearer token authentication.
     Returns list of payment methods (sensitive data like full card numbers and CVC are not included).
     """
-    payment_methods = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.client_id == current_client.id
-    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc()).all()
+    ).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc())
+    result = await db.execute(stmt)
+    payment_methods = result.scalars().all()
     
     return PaymentMethodListResponse(payment_methods=payment_methods)
 
@@ -411,7 +433,7 @@ async def get_client_payment_methods(
 async def get_client_payment_method(
     payment_method_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get a specific payment method by ID
@@ -419,10 +441,12 @@ async def get_client_payment_method(
     Requires Bearer token authentication.
     Returns the payment method if it belongs to the authenticated client.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.client_id == current_client.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -437,7 +461,7 @@ async def get_client_payment_method(
 async def delete_client_payment_method(
     payment_method_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a payment method
@@ -445,10 +469,12 @@ async def delete_client_payment_method(
     Requires Bearer token authentication.
     Only the owner of the payment method can delete it.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.client_id == current_client.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -456,8 +482,8 @@ async def delete_client_payment_method(
             detail="Payment method not found"
         )
     
-    db.delete(payment_method)
-    db.commit()
+    await db.delete(payment_method)
+    await db.commit()
     
     return None
 
@@ -466,7 +492,7 @@ async def delete_client_payment_method(
 async def set_client_default_payment_method(
     payment_method_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Set a payment method as default
@@ -474,10 +500,12 @@ async def set_client_default_payment_method(
     Requires Bearer token authentication.
     Sets the specified payment method as default and unsets all other default payment methods for the client.
     """
-    payment_method = db.query(PaymentMethod).filter(
+    stmt = select(PaymentMethod).filter(
         PaymentMethod.id == payment_method_id,
         PaymentMethod.client_id == current_client.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    payment_method = result.scalar_one_or_none()
     
     if not payment_method:
         raise HTTPException(
@@ -486,11 +514,13 @@ async def set_client_default_payment_method(
         )
     
     # Unset other default payment methods
-    existing_defaults = db.query(PaymentMethod).filter(
+    stmt_others = select(PaymentMethod).filter(
         PaymentMethod.client_id == current_client.id,
         PaymentMethod.is_default == True,
         PaymentMethod.id != payment_method_id
-    ).all()
+    )
+    result_others = await db.execute(stmt_others)
+    existing_defaults = result_others.scalars().all()
     
     for pm in existing_defaults:
         pm.is_default = False
@@ -498,8 +528,7 @@ async def set_client_default_payment_method(
     # Set this one as default
     payment_method.is_default = True
     
-    db.commit()
-    db.refresh(payment_method)
+    await db.commit()
+    await db.refresh(payment_method)
     
     return payment_method
-

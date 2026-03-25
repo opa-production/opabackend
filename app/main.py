@@ -1,7 +1,9 @@
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.gzip import GzipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -11,6 +13,21 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from app.config import settings
+
+# Rate limiting
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+
+# Caching
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 # Request logging - logs every API call with status code
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -21,21 +38,54 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         client_host = request.client.host if request.client else "unknown"
         path = request.url.path
         method = request.method
-        print(f"[REQUEST] {method} {path} from {client_host} (origin: {origin})")
         logging.info(f"[REQUEST] {method} {path} from {client_host} (origin: {origin})")
         
         response = await call_next(request)
         duration = (time.time() - start) * 1000
         status = response.status_code
-        # Color-style prefixes for visibility: 2xx=OK, 3xx=redirect, 4xx=client err, 5xx=server err
-        if 200 <= status < 300:
-            prefix = "200"
-        elif 400 <= status < 500:
-            prefix = "4xx"
-        else:
-            prefix = str(status)
+        
         logging.info(f"{method} {path} -> {status} ({duration:.0f}ms)")
-        print(f"INFO: {method} {path} -> {status} ({duration:.0f}ms)")
+        return response
+
+
+# Security Headers Middleware - adds all security headers to responses
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Prevent clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # XSS Protection (legacy but still useful for older browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        
+        # Strict Transport Security (HSTS) - enforce HTTPS
+        # Note: Enable in production with your actual domain
+        hsts_max_age = os.getenv("HSTS_MAX_AGE", "31536000")  # 1 year default
+        response.headers["Strict-Transport-Security"] = f"max-age={hsts_max_age}; includeSubDomains"
+        
+        # Content Security Policy
+        csp_policy = os.getenv(
+            "CSP_POLICY",
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; "
+            "connect-src 'self' https:; "
+            "frame-ancestors 'none'"
+        )
+        response.headers["Content-Security-Policy"] = csp_policy
+        
+        # Referrer Policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        # Permissions Policy (disable features not needed)
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        
         return response
 
 # Load environment variables from .env file
@@ -132,243 +182,271 @@ app = FastAPI(
     servers=[{"url": "/", "description": "Current host"}],
 )
 
+# =============================================================================
+# MIDDLEWARE CONFIGURATION (order matters - first added = outermost)
+# =============================================================================
 
-def migrate_database():
+# 1. Security Headers Middleware (adds X-Frame-Options, CSP, HSTS, etc.)
+# Must be added first so it runs first on request, last on response
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. Trusted Host Middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Change this in production!
+)
+
+# Add rate limiter state to app
+app.state.limiter = limiter
+
+# Add rate limit exceeded handler
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 3. Gzip compression for faster responses
+app.add_middleware(GzipMiddleware, minimum_size=1000)
+
+# 4. CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+# 4. Request logging (add last so it runs closest to handler)
+app.add_middleware(RequestLoggingMiddleware)
+
+# =============================================================================
+# CACHE CONFIGURATION
+# =============================================================================
+
+# Initialize cache with Redis backend
+# Note: Cache will only work if Redis is available; graceful fallback if not
+@app.on_event("startup")
+async def startup_event():
+    try:
+        import redis.asyncio as redis
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_client = redis.from_url(redis_url, decode_responses=True)
+        FastAPICache.init(
+            RedisBackend(redis_client),
+            prefix="opa-cache:",
+            expire=300  # Default cache expiration: 5 minutes
+        )
+        logging.info("[CACHE] Redis cache initialized successfully")
+    except Exception as e:
+        logging.warning(f"[CACHE] Redis not available, caching disabled: {e}")
+        # Initialize with dummy cache for graceful degradation
+        FastAPICache.init(
+            backend=None,
+            prefix="opa-cache:",
+            expire=300
+        )
+
+# Include routers
+app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])
+app.include_router(client_auth.router, prefix="/api/v1", tags=["Client Auth"])
+app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
+app.include_router(payment_methods.router, prefix="/api/v1", tags=["Payment Methods"])
+app.include_router(feedback.router, prefix="/api/v1", tags=["Feedback"])
+app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
+app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
+app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
+app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
+app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
+app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
+app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
+app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
+app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
+app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
+app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])
+app.include_router(veriff_webhook_router.router, prefix="/api/v1", tags=["Veriff Webhook"])
+app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
+app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
+app.include_router(admin_cars.router, prefix="/api/v1", tags=["Admin Car Management"])
+app.include_router(admin_dashboard.router, prefix="/api/v1", tags=["Admin Dashboard"])
+app.include_router(admin_feedback.router, prefix="/api/v1", tags=["Admin Feedback Management"])
+app.include_router(admin_notifications.router, prefix="/api/v1", tags=["Admin Notifications"])
+app.include_router(admin_admins.router, prefix="/api/v1", tags=["Admin Management"])
+app.include_router(admin_payment_methods.router, prefix="/api/v1", tags=["Admin Payment Methods"])
+app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"])
+app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
+app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
+app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
+
+
+async def migrate_database():
     """Add missing columns to existing tables"""
-    inspector = inspect(engine)
-    table_names = inspector.get_table_names()  # Cache table names
-    
-    # Check and add missing columns to hosts table
-    if 'hosts' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('hosts')]
-        if 'is_active' not in columns:
-            # SQLite uses INTEGER for booleans (0 = False, 1 = True)
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added is_active column to hosts table")
-        if 'avatar_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN avatar_url VARCHAR(500)"))
-            print("✓ Added avatar_url column to hosts table")
-        if 'cover_image_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN cover_image_url VARCHAR(500)"))
-            print("✓ Added cover_image_url column to hosts table")
-        if 'id_document_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN id_document_url VARCHAR(500)"))
-            print("✓ Added id_document_url column to hosts table")
-        if 'license_document_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN license_document_url VARCHAR(500)"))
-            print("✓ Added license_document_url column to hosts table")
-        if 'google_id' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN google_id VARCHAR(255)"))
-            print("✓ Added google_id column to hosts table")
-        if 'terms_accepted_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at DATETIME"))
-            print("✓ Added terms_accepted_at column to hosts table")
-        if 'subscription_plan' not in columns:
-            with engine.begin() as conn:
-                conn.execute(
-                    text("ALTER TABLE hosts ADD COLUMN subscription_plan VARCHAR(20) DEFAULT 'free'")
-                )
-            print("✓ Added subscription_plan column to hosts table")
-        if 'subscription_expires_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hosts ADD COLUMN subscription_expires_at DATETIME"))
-            print("✓ Added subscription_expires_at column to hosts table")
-
-    # Host subscription M-Pesa payment records
-    if "host_subscription_payments" not in table_names:
-        from app.models import HostSubscriptionPayment
-
-        HostSubscriptionPayment.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created host_subscription_payments table")
-
-    # Check and add missing columns to clients table
-    if 'clients' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('clients')]
-        if 'is_active' not in columns:
-            # SQLite uses INTEGER for booleans (0 = False, 1 = True)
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added is_active column to clients table")
-        if 'avatar_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN avatar_url VARCHAR(500)"))
-            print("✓ Added avatar_url column to clients table")
-        if 'id_document_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN id_document_url VARCHAR(500)"))
-            print("✓ Added id_document_url column to clients table")
-        if 'license_document_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN license_document_url VARCHAR(500)"))
-            print("✓ Added license_document_url column to clients table")
-        if 'date_of_birth' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN date_of_birth DATE"))
-            print("✓ Added date_of_birth column to clients table")
-        if 'gender' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN gender VARCHAR(20)"))
-            print("✓ Added gender column to clients table")
-        if 'google_id' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN google_id VARCHAR(255)"))
-            print("✓ Added google_id column to clients table")
-        if 'terms_accepted_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN terms_accepted_at DATETIME"))
-            print("✓ Added terms_accepted_at column to clients table")
-        if 'email_notifications_enabled' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN email_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added email_notifications_enabled column to clients table")
-        if 'sms_notifications_enabled' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN sms_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added sms_notifications_enabled column to clients table")
-        if 'in_app_notifications_enabled' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE clients ADD COLUMN in_app_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added in_app_notifications_enabled column to clients table")
-    
-    # Check and add missing columns to cars table
-    if 'cars' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('cars')]
-        if 'rejection_reason' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN rejection_reason TEXT"))
-            print("✓ Added rejection_reason column to cars table")
-        if 'is_hidden' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN is_hidden INTEGER DEFAULT 0 NOT NULL"))
-            print("✓ Added is_hidden column to cars table")
-        if 'image_urls' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN image_urls TEXT"))
-            print("✓ Added image_urls column to cars table")
-        if 'video_url' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN video_url VARCHAR(500)"))
-            print("✓ Added video_url column to cars table")
-        if 'cover_image' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN cover_image VARCHAR(500)"))
-            print("✓ Added cover_image column to cars table")
-        if 'car_images' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN car_images TEXT"))
-            print("✓ Added car_images column to cars table")
-        if 'car_video' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN car_video VARCHAR(500)"))
-            print("✓ Added car_video column to cars table")
-        if 'drive_setting' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE cars ADD COLUMN drive_setting VARCHAR(30) DEFAULT 'self_only' NOT NULL"))
-            print("✓ Added drive_setting column to cars table")
-    
-    # Check and add is_flagged to feedbacks table
-    if 'feedbacks' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('feedbacks')]
-        if 'is_flagged' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
-            print("✓ Added is_flagged column to feedbacks table")
-
-    # Check and add extension_request_id and Pesapal columns to payments table
-    if 'payments' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('payments')]
-        if 'extension_request_id' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN extension_request_id INTEGER"))
-            print("✓ Added extension_request_id column to payments table")
-        if 'stellar_tx_hash' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN stellar_tx_hash VARCHAR(64)"))
-            print("✓ Added stellar_tx_hash column to payments table")
-        # Pesapal card payment columns (Visa/Mastercard)
-        if 'pesapal_order_tracking_id' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_order_tracking_id VARCHAR(255)"))
-            print("✓ Added pesapal_order_tracking_id column to payments table")
-        if 'pesapal_merchant_reference' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_merchant_reference VARCHAR(255)"))
-            print("✓ Added pesapal_merchant_reference column to payments table")
-        if 'pesapal_confirmation_code' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_confirmation_code VARCHAR(100)"))
-            print("✓ Added pesapal_confirmation_code column to payments table")
-        if 'pesapal_payment_method' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_payment_method VARCHAR(50)"))
-            print("✓ Added pesapal_payment_method column to payments table")
-        if 'pesapal_payment_account' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE payments ADD COLUMN pesapal_payment_account VARCHAR(50)"))
-            print("✓ Added pesapal_payment_account column to payments table")
-
-    # Ensure stellar_payment_transactions table exists (Ardena Pay USDC/XLM payment records)
-    if 'stellar_payment_transactions' not in table_names:
-        print("⚠️  stellar_payment_transactions table missing, creating...")
-        from app.models import StellarPaymentTransaction
-        StellarPaymentTransaction.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created stellar_payment_transactions table")
-    else:
-        spt_columns = [col['name'] for col in inspector.get_columns('stellar_payment_transactions')]
-        if 'amount_xlm' not in spt_columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE stellar_payment_transactions ADD COLUMN amount_xlm VARCHAR(50)"))
-            print("✓ Added amount_xlm column to stellar_payment_transactions table")
-
-    # Ensure incoming_stellar_payments table exists (incoming wallet payments for in-app messages)
-    if 'incoming_stellar_payments' not in table_names:
-        from app.models import IncomingStellarPayment
-        IncomingStellarPayment.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created incoming_stellar_payments table")
-    else:
-        isp_columns = [col['name'] for col in inspector.get_columns('incoming_stellar_payments')]
-        if 'notification_id' not in isp_columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE incoming_stellar_payments ADD COLUMN notification_id INTEGER"))
-            print("✓ Added notification_id column to incoming_stellar_payments table")
-
-    # Check and add client_id to payment_methods table, and make host_id nullable
-    if 'payment_methods' in inspector.get_table_names():
-        columns = [col['name'] for col in inspector.get_columns('payment_methods')]
-        column_info = {col['name']: col for col in inspector.get_columns('payment_methods')}
+    async with engine.connect() as conn:
+        def get_inspector(sync_conn):
+            return inspect(sync_conn)
         
-        # Add client_id if missing
-        if 'client_id' not in columns:
-            with engine.begin() as conn:
+        inspector = await conn.run_sync(get_inspector)
+        table_names = inspector.get_table_names()  # Cache table names
+        
+        # Check and add missing columns to hosts table
+        if 'hosts' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('hosts')]
+            if 'is_active' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added is_active column to hosts table")
+            if 'avatar_url' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN avatar_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added avatar_url column to hosts table")
+            if 'cover_image_url' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN cover_image_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added cover_image_url column to hosts table")
+            if 'id_document_url' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN id_document_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added id_document_url column to hosts table")
+            if 'license_document_url' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN license_document_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added license_document_url column to hosts table")
+            if 'google_id' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN google_id VARCHAR(255)"))
+                await conn.commit()
+                print("✓ Added google_id column to hosts table")
+            if 'terms_accepted_at' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at DATETIME"))
+                await conn.commit()
+                print("✓ Added terms_accepted_at column to hosts table")
+        
+        # Check and add missing columns to clients table
+        if 'clients' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('clients')]
+            if 'is_active' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added is_active column to clients table")
+            if 'avatar_url' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN avatar_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added avatar_url column to clients table")
+            if 'id_document_url' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN id_document_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added id_document_url column to clients table")
+            if 'license_document_url' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN license_document_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added license_document_url column to clients table")
+            if 'date_of_birth' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN date_of_birth DATE"))
+                await conn.commit()
+                print("✓ Added date_of_birth column to clients table")
+            if 'gender' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN gender VARCHAR(20)"))
+                await conn.commit()
+                print("✓ Added gender column to clients table")
+            if 'google_id' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN google_id VARCHAR(255)"))
+                await conn.commit()
+                print("✓ Added google_id column to clients table")
+            if 'terms_accepted_at' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN terms_accepted_at DATETIME"))
+                await conn.commit()
+                print("✓ Added terms_accepted_at column to clients table")
+            if 'email_notifications_enabled' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN email_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added email_notifications_enabled column to clients table")
+            if 'sms_notifications_enabled' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN sms_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added sms_notifications_enabled column to clients table")
+            if 'in_app_notifications_enabled' not in columns:
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN in_app_notifications_enabled INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added in_app_notifications_enabled column to clients table")
+        
+        # Check and add missing columns to cars table
+        if 'cars' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('cars')]
+            if 'rejection_reason' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN rejection_reason TEXT"))
+                await conn.commit()
+                print("✓ Added rejection_reason column to cars table")
+            if 'is_hidden' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN is_hidden INTEGER DEFAULT 0 NOT NULL"))
+                await conn.commit()
+                print("✓ Added is_hidden column to cars table")
+            if 'image_urls' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN image_urls TEXT"))
+                await conn.commit()
+                print("✓ Added image_urls column to cars table")
+            if 'video_url' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN video_url VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added video_url column to cars table")
+            if 'cover_image' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN cover_image VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added cover_image column to cars table")
+            if 'car_images' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN car_images TEXT"))
+                await conn.commit()
+                print("✓ Added car_images column to cars table")
+            if 'car_video' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN car_video VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added car_video column to cars table")
+            if 'drive_setting' not in columns:
+                await conn.execute(text("ALTER TABLE cars ADD COLUMN drive_setting VARCHAR(30) DEFAULT 'self_only' NOT NULL"))
+                await conn.commit()
+                print("✓ Added drive_setting column to cars table")
+        
+        # Check and add is_flagged to feedbacks table
+        if 'feedbacks' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('feedbacks')]
+            if 'is_flagged' not in columns:
+                await conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
+                await conn.commit()
+                print("✓ Added is_flagged column to feedbacks table")
+
+        # Check and add extension_request_id to payments table (for booking extensions)
+        if 'payments' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('payments')]
+            if 'extension_request_id' not in columns:
+                await conn.execute(text("ALTER TABLE payments ADD COLUMN extension_request_id INTEGER"))
+                await conn.commit()
+                print("✓ Added extension_request_id column to payments table")
+        
+        # Check and add client_id to payment_methods table, and make host_id nullable
+        if 'payment_methods' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('payment_methods')]
+            column_info = {col['name']: col for col in inspector.get_columns('payment_methods')}
+            
+            # Add client_id if missing
+            if 'client_id' not in columns:
                 try:
-                    conn.execute(text("ALTER TABLE payment_methods ADD COLUMN client_id INTEGER"))
+                    await conn.execute(text("ALTER TABLE payment_methods ADD COLUMN client_id INTEGER"))
+                    await conn.commit()
                     print("✓ Added client_id column to payment_methods table")
                 except Exception as e:
                     print(f"⚠️  Error adding client_id to payment_methods: {e}")
-        
-        # SQLite doesn't support ALTER COLUMN to change nullability directly
-        # We need to recreate the table. Check if host_id is NOT NULL
-        if 'host_id' in column_info:
-            host_id_nullable = column_info['host_id'].get('nullable', False)
-            if not host_id_nullable:
-                print("⚠️  payment_methods.host_id is NOT NULL, recreating table to make it nullable...")
-                try:
-                    with engine.begin() as conn:
+            
+            # SQLite doesn't support ALTER COLUMN to change nullability directly
+            # We need to recreate the table. Check if host_id is NOT NULL
+            if 'host_id' in column_info:
+                host_id_nullable = column_info['host_id'].get('nullable', False)
+                if not host_id_nullable:
+                    print("⚠️  payment_methods.host_id is NOT NULL, recreating table to make it nullable...")
+                    try:
                         # Drop temp table if it exists from previous failed migration
                         try:
-                            conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
+                            await conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
                         except Exception:
                             pass
                         
                         # Create new table with correct schema
-                        conn.execute(text("""
+                        await conn.execute(text("""
                             CREATE TABLE payment_methods_new (
                                 id INTEGER PRIMARY KEY,
                                 host_id INTEGER,
@@ -391,18 +469,12 @@ def migrate_database():
                         """))
                         
                         # Copy existing data - preserve ALL existing payment methods (both host and client)
-                        # Get all columns from old table BEFORE we modify anything
                         old_columns = [col['name'] for col in inspector.get_columns('payment_methods')]
-                        
-                        # Build SELECT statement: copy all existing columns, add NULL for new client_id column
                         select_parts = []
-                        
-                        # Always include these core columns (they should exist)
                         select_parts.append('id')
-                        select_parts.append('host_id')  # Preserve existing host_id values
-                        select_parts.append('NULL as client_id')  # New column, will be NULL for existing host methods
+                        select_parts.append('host_id')
+                        select_parts.append('NULL as client_id')
                         
-                        # Copy all other existing columns
                         for col in ['name', 'method_type', 'mpesa_number', 'card_number_hash', 
                                    'card_last_four', 'card_type', 'expiry_month', 'expiry_year', 
                                    'cvc_hash', 'is_default', 'created_at', 'updated_at']:
@@ -411,7 +483,6 @@ def migrate_database():
                             else:
                                 select_parts.append(f'NULL as {col}')
                         
-                        # Copy all existing data - this preserves ALL host payment methods
                         select_sql = f"SELECT {', '.join(select_parts)} FROM payment_methods"
                         insert_sql = f"""
                             INSERT INTO payment_methods_new 
@@ -420,263 +491,209 @@ def migrate_database():
                              expiry_year, cvc_hash, is_default, created_at, updated_at)
                             {select_sql}
                         """
-                        conn.execute(text(insert_sql))
-                        print(f"✓ Copied {conn.execute(text('SELECT COUNT(*) FROM payment_methods_new')).scalar()} payment methods to new table")
+                        await conn.execute(text(insert_sql))
                         
                         # Drop old table
-                        conn.execute(text("DROP TABLE payment_methods"))
-                        
+                        await conn.execute(text("DROP TABLE payment_methods"))
                         # Rename new table
-                        conn.execute(text("ALTER TABLE payment_methods_new RENAME TO payment_methods"))
-                        
+                        await conn.execute(text("ALTER TABLE payment_methods_new RENAME TO payment_methods"))
+                        await conn.commit()
                         print("✓ Recreated payment_methods table with nullable host_id and client_id")
-                except Exception as e:
-                    print(f"⚠️  Error recreating payment_methods table: {e}")
-                    # Try to drop temp table if it exists
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
-                    except Exception:
-                        pass
-                    print("   The table will be recreated on next startup with Base.metadata.create_all()")
-    
-    # Create notifications table if it doesn't exist
-    if 'notifications' not in table_names:
-        print("✓ Notifications table will be created")
-    
-    # Migrate support_messages table to new conversation-based schema
-    if 'support_messages' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('support_messages')]
-        # Check if it's the old schema (has host_id, subject, admin_response) vs new schema (has conversation_id, sender_type)
-        if 'conversation_id' not in columns and 'host_id' in columns:
-            print("⚠️  Migrating support_messages table to new conversation-based schema...")
-            with engine.begin() as conn:
-                # Drop old table (data will be lost, but this is a migration)
-                conn.execute(text("DROP TABLE support_messages"))
-            print("✓ Dropped old support_messages table (will be recreated with new schema)")
-    
-    # Ensure support_conversations table exists (created by Base.metadata.create_all)
-    if 'support_conversations' not in table_names:
-        print("✓ Support conversations table will be created")
-
-
-def _run_sync_startup():
-    """
-    All blocking DB work (migrations, create_all, column checks). Run in a thread
-    so the event loop stays free and the server can accept requests immediately.
-    """
-    # Run migrations first (may drop old tables)
-    migrate_database()
-
-    # Then create all tables (will recreate any dropped tables with new schema)
-    Base.metadata.create_all(bind=engine)
-    
-    # Cache inspector and table names to avoid repeated queries
-    inspector = inspect(engine)
-    table_names = inspector.get_table_names()
-    
-    # Double-check that support_messages table exists, create if missing
-    if 'support_messages' not in table_names:
-        print("⚠️  support_messages table missing, creating...")
-        from app.models import SupportMessage, SupportConversation
-        SupportMessage.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created support_messages table")
-    
-    # Double-check that client_host_conversations and client_host_messages tables exist
-    if 'client_host_conversations' not in table_names:
-        print("⚠️  client_host_conversations table missing, creating...")
-        from app.models import ClientHostConversation, ClientHostMessage
-        ClientHostConversation.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created client_host_conversations table")
-    
-    if 'client_host_messages' not in table_names:
-        print("⚠️  client_host_messages table missing, creating...")
-        from app.models import ClientHostMessage
-        ClientHostMessage.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created client_host_messages table")
-    
-    # Double-check that car_blocked_dates table exists
-    if 'car_blocked_dates' not in table_names:
-        print("⚠️  car_blocked_dates table missing, creating...")
-        from app.models import CarBlockedDate
-        CarBlockedDate.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created car_blocked_dates table")
-    else:
-        # Check and add missing columns to car_blocked_dates table
-        columns = [col['name'] for col in inspector.get_columns('car_blocked_dates')]
+                    except Exception as e:
+                        print(f"⚠️  Error recreating payment_methods table: {e}")
         
-        # Handle old schema with start_date - migrate data if needed
-        if 'start_date' in columns and 'blocked_date' not in columns:
-            with engine.begin() as conn:
-                # Add blocked_date column
-                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
-                # Migrate data from start_date to blocked_date
-                conn.execute(text("UPDATE car_blocked_dates SET blocked_date = DATE(start_date) WHERE blocked_date IS NULL"))
-            print("✓ Migrated start_date to blocked_date in car_blocked_dates table")
-        elif 'blocked_date' not in columns:
-            with engine.begin() as conn:
-                # Add as nullable first (SQLite limitation)
-                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
-            print("✓ Added blocked_date column to car_blocked_dates table")
+        # Create notifications table if it doesn't exist
+        if 'notifications' not in table_names:
+            print("✓ Notifications table will be created")
         
-        if 'reason' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN reason TEXT"))
-            print("✓ Added reason column to car_blocked_dates table")
-        if 'created_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at DATETIME"))
-            print("✓ Added created_at column to car_blocked_dates table")
+        # Migrate support_messages table to new conversation-based schema
+        if 'support_messages' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('support_messages')]
+            if 'conversation_id' not in columns and 'host_id' in columns:
+                print("⚠️  Migrating support_messages table to new conversation-based schema...")
+                await conn.execute(text("DROP TABLE support_messages"))
+                await conn.commit()
+                print("✓ Dropped old support_messages table (will be recreated with new schema)")
+        
+        # Ensure support_conversations table exists
+        if 'support_conversations' not in table_names:
+            print("✓ Support conversations table will be created")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Create database tables on startup and create default super admin"""
+    print("🚀 Starting up...")
     
-    # Ensure client_kycs table exists
-    if 'client_kycs' not in table_names:
-        print("⚠️  client_kycs table missing, creating...")
-        from app.models import ClientKyc
-        ClientKyc.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created client_kycs table")
+    # Run migrations first
+    await migrate_database()
+    
+    # Then create all tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    # Cache inspector and table names
+    async with engine.connect() as conn:
+        def get_inspector(sync_conn):
+            return inspect(sync_conn)
+        inspector = await conn.run_sync(get_inspector)
+        table_names = inspector.get_table_names()
+    
+        # Double-check that support_messages table exists, create if missing
+        if 'support_messages' not in table_names:
+            print("⚠️  support_messages table missing, creating...")
+            from app.models import SupportMessage
+            def create_table(sync_conn):
+                SupportMessage.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created support_messages table")
+        
+        # Double-check that client_host_conversations and client_host_messages tables exist
+        if 'client_host_conversations' not in table_names:
+            print("⚠️  client_host_conversations table missing, creating...")
+            from app.models import ClientHostConversation
+            def create_table(sync_conn):
+                ClientHostConversation.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created client_host_conversations table")
+        
+        if 'client_host_messages' not in table_names:
+            print("⚠️  client_host_messages table missing, creating...")
+            from app.models import ClientHostMessage
+            def create_table(sync_conn):
+                ClientHostMessage.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created client_host_messages table")
+        
+        # Double-check that car_blocked_dates table exists
+        if 'car_blocked_dates' not in table_names:
+            print("⚠️  car_blocked_dates table missing, creating...")
+            from app.models import CarBlockedDate
+            def create_table(sync_conn):
+                CarBlockedDate.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created car_blocked_dates table")
+        else:
+            columns = [col['name'] for col in inspector.get_columns('car_blocked_dates')]
+            if 'start_date' in columns and 'blocked_date' not in columns:
+                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
+                await conn.execute(text("UPDATE car_blocked_dates SET blocked_date = DATE(start_date) WHERE blocked_date IS NULL"))
+                await conn.commit()
+                print("✓ Migrated start_date to blocked_date in car_blocked_dates table")
+            elif 'blocked_date' not in columns:
+                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
+                await conn.commit()
+                print("✓ Added blocked_date column to car_blocked_dates table")
+            
+            if 'reason' not in columns:
+                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN reason TEXT"))
+                await conn.commit()
+                print("✓ Added reason column to car_blocked_dates table")
+            if 'created_at' not in columns:
+                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at DATETIME"))
+                await conn.commit()
+                print("✓ Added created_at column to car_blocked_dates table")
+        
+        # Ensure client_kycs table exists
+        if 'client_kycs' not in table_names:
+            print("⚠️  client_kycs table missing, creating...")
+            from app.models import ClientKyc
+            def create_table(sync_conn):
+                ClientKyc.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created client_kycs table")
 
-    # Ensure client_wallets table exists (Ardena Pay / Stellar)
-    if 'client_wallets' not in table_names:
-        print("⚠️  client_wallets table missing, creating...")
-        from app.models import ClientWallet
-        ClientWallet.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created client_wallets table")
-    else:
-        # Add balance cache columns if missing (stored in DB for easier retrieval)
-        cw_columns = [col['name'] for col in inspector.get_columns('client_wallets')]
-        if 'balance_xlm' not in cw_columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_xlm VARCHAR(50) DEFAULT '0'"))
-            print("✓ Added balance_xlm column to client_wallets table")
-        if 'balance_usdc' not in cw_columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_usdc VARCHAR(50) DEFAULT '0'"))
-            print("✓ Added balance_usdc column to client_wallets table")
-        if 'balance_updated_at' not in cw_columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_updated_at DATETIME"))
-            print("✓ Added balance_updated_at column to client_wallets table")
+        # Ensure host_booking_issues table exists
+        if 'host_booking_issues' not in table_names:
+            print("⚠️  host_booking_issues table missing, creating...")
+            from app.models import BookingIssue
+            def create_table(sync_conn):
+                BookingIssue.__table__.create(sync_conn, checkfirst=True)
+            await conn.run_sync(create_table)
+            print("✓ Created host_booking_issues table")
 
-    # Ensure host_booking_issues table exists
-    if 'host_booking_issues' not in table_names:
-        print("⚠️  host_booking_issues table missing, creating...")
-        from app.models import BookingIssue
-        BookingIssue.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created host_booking_issues table")
+        # Check and add missing columns to bookings table
+        if 'bookings' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('bookings')]
+            if 'dropoff_same_as_pickup' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_same_as_pickup INTEGER DEFAULT 1 NOT NULL"))
+                await conn.commit()
+                print("✓ Added dropoff_same_as_pickup column to bookings table")
+            if 'pickup_confirmed_at' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_confirmed_at DATETIME"))
+                await conn.commit()
+                print("✓ Added pickup_confirmed_at column to bookings table")
+            if 'dropoff_confirmed_at' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
+                await conn.commit()
+                print("✓ Added dropoff_confirmed_at column to bookings table")
 
-    # Check and add missing columns to bookings table
-    if 'bookings' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('bookings')]
-        if 'dropoff_same_as_pickup' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_same_as_pickup INTEGER DEFAULT 1 NOT NULL"))
-            print("✓ Added dropoff_same_as_pickup column to bookings table")
-        if 'pickup_confirmed_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_confirmed_at DATETIME"))
-            print("✓ Added pickup_confirmed_at column to bookings table")
-        if 'dropoff_confirmed_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
-            print("✓ Added dropoff_confirmed_at column to bookings table")
-        if 'pickup_reminder_sent_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_reminder_sent_at DATETIME"))
-            print("✓ Added pickup_reminder_sent_at column to bookings table")
-
-        if 'client_deleted_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN client_deleted_at DATETIME"))
-            print("✓ Added client_deleted_at column to bookings table")
-
-    # Check and add missing columns to withdrawals table
-    if 'withdrawals' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('withdrawals')]
-        if 'checkout_request_id' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN checkout_request_id VARCHAR(255)"))
-            print("✓ Added checkout_request_id column to withdrawals table")
-        if 'result_code' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_code INTEGER"))
-            print("✓ Added result_code column to withdrawals table")
-        if 'result_desc' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_desc VARCHAR(500)"))
-            print("✓ Added result_desc column to withdrawals table")
-        if 'mpesa_receipt_number' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_receipt_number VARCHAR(100)"))
-            print("✓ Added mpesa_receipt_number column to withdrawals table")
-        if 'mpesa_phone' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_phone VARCHAR(20)"))
-            print("✓ Added mpesa_phone column to withdrawals table")
-        if 'mpesa_transaction_date' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_transaction_date VARCHAR(50)"))
-            print("✓ Added mpesa_transaction_date column to withdrawals table")
-
-    # Check and add missing columns to refunds table
-    if 'refunds' in table_names:
-        columns = [col['name'] for col in inspector.get_columns('refunds')]
-        if 'client_deleted_at' not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE refunds ADD COLUMN client_deleted_at DATETIME"))
-            print("✓ Added client_deleted_at column to refunds table")
-
-    # Ensure emergency_reports table exists
-    if 'emergency_reports' not in table_names:
-        print("⚠️  emergency_reports table missing, creating...")
-        from app.models import EmergencyReport
-        EmergencyReport.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created emergency_reports table")
-
-    # Ensure wishlist_items table exists
-    if 'wishlist_items' not in table_names:
-        print("⚠️  wishlist_items table missing, creating...")
-        from app.models import WishlistItem
-        WishlistItem.__table__.create(bind=engine, checkfirst=True)
-        print("✓ Created wishlist_items table")
+        # Check and add missing columns to withdrawals table
+        if 'withdrawals' in table_names:
+            columns = [col['name'] for col in inspector.get_columns('withdrawals')]
+            if 'checkout_request_id' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN checkout_request_id VARCHAR(255)"))
+                await conn.commit()
+                print("✓ Added checkout_request_id column to withdrawals table")
+            if 'result_code' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_code INTEGER"))
+                await conn.commit()
+                print("✓ Added result_code column to withdrawals table")
+            if 'result_desc' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN result_desc VARCHAR(500)"))
+                await conn.commit()
+                print("✓ Added result_desc column to withdrawals table")
+            if 'mpesa_receipt_number' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_receipt_number VARCHAR(100)"))
+                await conn.commit()
+                print("✓ Added mpesa_receipt_number column to withdrawals table")
+            if 'mpesa_phone' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_phone VARCHAR(20)"))
+                await conn.commit()
+                print("✓ Added mpesa_phone column to withdrawals table")
+            if 'mpesa_transaction_date' not in columns:
+                await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_transaction_date VARCHAR(50)"))
+                await conn.commit()
+                print("✓ Added mpesa_transaction_date column to withdrawals table")
     
     # Create default super admin if it doesn't exist
-    db = SessionLocal()
-    try:
-        default_admin_email = "admin@carrental.com"
-        existing_admin = get_admin_by_email(db, default_admin_email)
-        
-        if not existing_admin:
-            # Default super admin password: Admin123!
-            default_password = "Admin123!"
-            hashed_password = get_password_hash(default_password)
+    async with SessionLocal() as db:
+        try:
+            default_admin_email = "admin@carrental.com"
+            existing_admin = await get_admin_by_email(db, default_admin_email)
             
-            super_admin = Admin(
-                full_name="Super Admin",
-                email=default_admin_email,
-                hashed_password=hashed_password,
-                role="super_admin",
-                is_active=True
-            )
-            
-            db.add(super_admin)
-            db.commit()
-            db.refresh(super_admin)
-            
-            print("=" * 60)
-            print("DEFAULT SUPER ADMIN CREATED")
-            print("=" * 60)
-            print(f"Email: {default_admin_email}")
-            print(f"Password: {default_password}")
-            print("=" * 60)
-            print("⚠️  IMPORTANT: Change this password after first login!")
-            print("=" * 60)
-        else:
-            print(f"Super admin already exists: {default_admin_email}")
-    except Exception as e:
-        print(f"Error creating default super admin: {e}")
-        db.rollback()
-    finally:
-        db.close()
+            if not existing_admin:
+                # Default super admin password: Admin123!
+                # ⚠️ SECURITY WARNING: This default password is for development only.
+                # In production, use a strong password or environment variable.
+                default_password = "Admin123!"
+                hashed_password = get_password_hash(default_password)
+                
+                super_admin = Admin(
+                    full_name="Super Admin",
+                    email=default_admin_email,
+                    hashed_password=hashed_password,
+                    role="super_admin",
+                    is_active=True
+                )
+                
+                db.add(super_admin)
+                await db.commit()
+                await db.refresh(super_admin)
+                
+                print("=" * 60)
+                print("DEFAULT SUPER ADMIN CREATED")
+                print("=" * 60)
+                print(f"Email: {default_admin_email}")
+                print(f"Password: {default_password}")
+                print("=" * 60)
+                print("⚠️  IMPORTANT: Change this password after first login!")
+                print("=" * 60)
+            else:
+                print(f"Super admin already exists: {default_admin_email}")
+        except Exception as e:
+            print(f"Error creating default super admin: {e}")
+            await db.rollback()
     
     print("✅ Startup complete!")
 
@@ -779,66 +796,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"},
     )
-
-# Request logging (add first so it runs last = closest to handler)
-app.add_middleware(RequestLoggingMiddleware)
-
-# CORS middleware
-# Note: "*" wildcard doesn't work with allow_credentials=True in browsers.
-# For development, we allow all origins by not restricting (but credentials may still work per-origin).
-# In production, list specific allowed origins.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (browsers may still restrict credentials with *)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],  # Expose all headers to client
-)
-
-# Include routers
-app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])
-app.include_router(client_auth.router, prefix="/api/v1", tags=["Client Auth"])
-app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
-app.include_router(payment_methods.router, prefix="/api/v1", tags=["Payment Methods"])
-app.include_router(feedback.router, prefix="/api/v1", tags=["Feedback"])
-app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
-app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
-app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
-app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
-app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay (Wallet)"])
-app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
-app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
-app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
-app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])
-app.include_router(host_subscription.router, prefix="/api/v1", tags=["Host Subscription"])
-app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
-app.include_router(client_emergency_router.router, prefix="/api/v1", tags=["Client Emergency"])
-app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishlist"])
-app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
-app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
-app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])
-app.include_router(veriff_webhook_router.router, prefix="/api/v1", tags=["Veriff Webhook"])
-app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
-app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
-app.include_router(admin_cars.router, prefix="/api/v1", tags=["Admin Car Management"])
-app.include_router(admin_dashboard.router, prefix="/api/v1", tags=["Admin Dashboard"])
-app.include_router(admin_feedback.router, prefix="/api/v1", tags=["Admin Feedback Management"])
-app.include_router(admin_notifications.router, prefix="/api/v1", tags=["Admin Notifications"])
-app.include_router(admin_admins.router, prefix="/api/v1", tags=["Admin Management"])
-app.include_router(admin_payment_methods.router, prefix="/api/v1", tags=["Admin Payment Methods"])
-app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"])
-app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
-app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
-app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
-app.include_router(admin_refunds.router, prefix="/api/v1", tags=["Admin Refunds"])
-
-
-@app.get("/health")
-async def health():
-    """Lightweight readiness check; no DB. Use this to verify the server is reachable (e.g. from UI or load balancer)."""
-    return {"status": "ok", "healthy": True, "service": "Car Rental API"}
-
 
 @app.get("/host/kyc/redirect", response_class=HTMLResponse)
 def kyc_redirect_callback(

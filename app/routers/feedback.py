@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from typing import List
 
 from app.database import get_db
 from app.models import Host, Client, Feedback, ClientFeedback
@@ -23,7 +26,7 @@ router = APIRouter()
 async def create_host_feedback(
     request: FeedbackCreateRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a new feedback entry for the authenticated host.
@@ -38,8 +41,8 @@ async def create_host_feedback(
     )
 
     db.add(db_feedback)
-    db.commit()
-    db.refresh(db_feedback)
+    await db.commit()
+    await db.refresh(db_feedback)
 
     return db_feedback
 
@@ -47,19 +50,20 @@ async def create_host_feedback(
 @router.get("/host/feedback", response_model=FeedbackListResponse)
 async def get_host_feedbacks(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all feedback entries submitted by the authenticated host.
     
     Requires host Bearer token authentication.
     """
-    feedbacks = (
-        db.query(Feedback)
+    stmt = (
+        select(Feedback)
         .filter(Feedback.host_id == current_host.id)
         .order_by(Feedback.created_at.desc())
-        .all()
     )
+    result = await db.execute(stmt)
+    feedbacks = result.scalars().all()
 
     return FeedbackListResponse(feedbacks=feedbacks)
 
@@ -68,16 +72,14 @@ async def get_host_feedbacks(
 async def get_host_feedback(
     feedback_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a specific feedback entry by ID for the authenticated host.
     """
-    feedback = (
-        db.query(Feedback)
-        .filter(Feedback.id == feedback_id, Feedback.host_id == current_host.id)
-        .first()
-    )
+    stmt = select(Feedback).filter(Feedback.id == feedback_id, Feedback.host_id == current_host.id)
+    result = await db.execute(stmt)
+    feedback = result.scalar_one_or_none()
 
     if not feedback:
         raise HTTPException(
@@ -92,16 +94,14 @@ async def get_host_feedback(
 async def delete_host_feedback(
     feedback_id: int,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete a feedback entry for the authenticated host.
     """
-    feedback = (
-        db.query(Feedback)
-        .filter(Feedback.id == feedback_id, Feedback.host_id == current_host.id)
-        .first()
-    )
+    stmt = select(Feedback).filter(Feedback.id == feedback_id, Feedback.host_id == current_host.id)
+    result = await db.execute(stmt)
+    feedback = result.scalar_one_or_none()
 
     if not feedback:
         raise HTTPException(
@@ -109,8 +109,8 @@ async def delete_host_feedback(
             detail="Feedback not found",
         )
 
-    db.delete(feedback)
-    db.commit()
+    await db.delete(feedback)
+    await db.commit()
 
     return None
 
@@ -126,7 +126,7 @@ async def delete_host_feedback(
 async def create_client_feedback(
     request: ClientFeedbackCreateRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a new feedback entry for the authenticated client.
@@ -141,8 +141,8 @@ async def create_client_feedback(
     )
 
     db.add(db_feedback)
-    db.commit()
-    db.refresh(db_feedback)
+    await db.commit()
+    await db.refresh(db_feedback)
 
     return db_feedback
 
@@ -153,19 +153,20 @@ async def create_client_feedback(
 )
 async def get_client_feedbacks(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all feedback entries submitted by the authenticated client.
     
     Requires client Bearer token authentication.
     """
-    feedbacks = (
-        db.query(ClientFeedback)
+    stmt = (
+        select(ClientFeedback)
         .filter(ClientFeedback.client_id == current_client.id)
         .order_by(ClientFeedback.created_at.desc())
-        .all()
     )
+    result = await db.execute(stmt)
+    feedbacks = result.scalars().all()
 
     return ClientFeedbackListResponse(feedbacks=feedbacks)
 
@@ -177,19 +178,17 @@ async def get_client_feedbacks(
 async def get_client_feedback(
     feedback_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a specific feedback entry by ID for the authenticated client.
     """
-    feedback = (
-        db.query(ClientFeedback)
-        .filter(
-            ClientFeedback.id == feedback_id,
-            ClientFeedback.client_id == current_client.id,
-        )
-        .first()
+    stmt = select(ClientFeedback).filter(
+        ClientFeedback.id == feedback_id,
+        ClientFeedback.client_id == current_client.id,
     )
+    result = await db.execute(stmt)
+    feedback = result.scalar_one_or_none()
 
     if not feedback:
         raise HTTPException(
@@ -207,19 +206,17 @@ async def get_client_feedback(
 async def delete_client_feedback(
     feedback_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete a feedback entry for the authenticated client.
     """
-    feedback = (
-        db.query(ClientFeedback)
-        .filter(
-            ClientFeedback.id == feedback_id,
-            ClientFeedback.client_id == current_client.id,
-        )
-        .first()
+    stmt = select(ClientFeedback).filter(
+        ClientFeedback.id == feedback_id,
+        ClientFeedback.client_id == current_client.id,
     )
+    result = await db.execute(stmt)
+    feedback = result.scalar_one_or_none()
 
     if not feedback:
         raise HTTPException(
@@ -227,7 +224,7 @@ async def delete_client_feedback(
             detail="Feedback not found",
         )
 
-    db.delete(feedback)
-    db.commit()
+    await db.delete(feedback)
+    await db.commit()
 
     return None

@@ -1,10 +1,7 @@
 from dotenv import load_dotenv
 import os
 import logging
-import urllib.parse
-from typing import Any, Dict, Optional
-
-import requests
+import httpx
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -42,7 +39,7 @@ def fetch_payhero_transaction_status(reference: str) -> Optional[Dict[str, Any]]
         logger.warning("[PAYHERO] transaction-status error ref=%s: %s", ref[:24], e)
         return None
 
-def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental"):
+async def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRental"):
     auth_token = os.getenv("PAYHERO_AUTH_TOKEN")
     channel_id = os.getenv("PAYHERO_CHANNEL_ID")
     callback_url = os.getenv("PAYHERO_CALLBACK_URL")
@@ -91,7 +88,8 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
 
         logger.info(f"[PAYHERO] Initiating STK push: {PhoneNumber}, amount={amount_val}, ref={AccountReference}")
 
-        response = requests.post(PAYHERO_URL, json=payload, headers=headers, timeout=30)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(PAYHERO_URL, json=payload, headers=headers, timeout=30.0)
 
         if response.status_code in (200, 201):
             data = response.json()
@@ -127,7 +125,7 @@ def sendStkPush(amount: str, PhoneNumber: str, AccountReference: str = "CarRenta
                 "ResponseDescription": msg.strip() if isinstance(msg, str) else str(msg)
             }
 
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logger.error(f"[PAYHERO] Request exception: {str(e)}")
         return {
             "ResponseCode": "1",
