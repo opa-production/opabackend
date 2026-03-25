@@ -191,6 +191,17 @@ class ClientProfileUpdateRequest(BaseModel):
     gender: str = Field(..., min_length=1, max_length=20, description="Gender (required, e.g., 'male', 'female', 'other')")
 
 
+class WalletResponse(BaseModel):
+    """Ardena Pay (Stellar) wallet: public key, balances (stored in DB, refreshed from Horizon on GET), optional secret (testnet only)."""
+    public_key: str = Field(..., description="Stellar public key (address) – share this to receive USDC")
+    network: str = Field("testnet", description="Network: testnet or mainnet")
+    balance_xlm: str = Field("0", description="Native XLM balance")
+    balance_usdc: str = Field("0", description="USDC balance")
+    balance_updated_at: Optional[datetime] = Field(None, description="When balances were last fetched from Stellar")
+    secret_key: Optional[str] = Field(None, description="Secret key – only on testnet; keep private and use to import into Freighter/Lobstr")
+    created_at: Optional[datetime] = None
+
+
 class ClientProfileResponse(BaseModel):
     """Complete client profile response"""
     id: int
@@ -586,6 +597,34 @@ class CardPaymentMethodAddRequest(BaseModel):
         self.card_number = card_clean
         self.cvc = cvc_clean
         
+        return self
+
+
+class ClientCardAddPesapalRequest(BaseModel):
+    """
+    Add a card payment method for paying via Pesapal (Visa/Mastercard).
+    No card number or CVC is stored — the user enters card details on Pesapal's page when they pay.
+    Use this to avoid collecting or storing sensitive card data (PCI-friendly).
+    """
+    name: Optional[str] = Field("", max_length=255, description="Display name (e.g. 'My Visa'). If empty, defaults to card type.")
+    card_type: Literal["visa", "mastercard"] = Field(..., description="Card type (visa or mastercard)")
+    is_default: Optional[bool] = Field(False, description="Set as default payment method")
+
+    @field_validator("is_default", mode="before")
+    @classmethod
+    def coerce_is_default(cls, v):
+        if v is None or v == "" or v is False:
+            return False
+        if v is True or (isinstance(v, str) and v.lower() in ("true", "1", "yes")):
+            return True
+        return False
+
+    @model_validator(mode="after")
+    def normalize_name(self):
+        if not (self.name and str(self.name).strip()):
+            self.name = "Visa" if self.card_type == "visa" else "Mastercard"
+        else:
+            self.name = str(self.name).strip()[:255]
         return self
 
 
@@ -1649,6 +1688,33 @@ class CarExploreListResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== WISHLIST SCHEMAS ====================
+
+
+class WishlistSummaryResponse(BaseModel):
+    """Summary card for the client's wishlist: count and latest car image."""
+    total_cars: int
+    latest_car_id: Optional[int] = None
+    latest_car_name: Optional[str] = None
+    latest_cover_image: Optional[str] = None
+
+
+class WishlistCarItem(BaseModel):
+    """Single car item in the client's wishlist."""
+    car_id: int
+    name: Optional[str] = None
+    model: Optional[str] = None
+    daily_rate: Optional[float] = None
+    cover_image: Optional[str] = None
+    location_name: Optional[str] = None
+    created_at: datetime
+
+
+class WishlistListResponse(BaseModel):
+    """List of wishlist cars for a client."""
+    cars: List[WishlistCarItem]
+
+
 # ==================== BOOKING SCHEMAS ====================
 
 class BookingStatusEnum(str, Enum):
@@ -1706,6 +1772,42 @@ class BookingCreateRequest(BaseModel):
         return self
 
 
+class BookingUpdateRequest(BaseModel):
+    """
+    Request to update a PENDING booking (e.g. change dates or details before paying).
+    All fields are optional; only provided fields are updated.
+    """
+    start_date: Optional[datetime] = Field(None, description="New rental start date")
+    end_date: Optional[datetime] = Field(None, description="New rental end date")
+    pickup_time: Optional[str] = Field(None, max_length=10)
+    return_time: Optional[str] = Field(None, max_length=10)
+    pickup_location: Optional[str] = Field(None, max_length=500)
+    return_location: Optional[str] = Field(None, max_length=500)
+    damage_waiver_enabled: Optional[bool] = None
+    drive_type: Optional[str] = Field(None, description="'self' or 'withDriver'")
+    check_in_preference: Optional[str] = Field(None, description="'self' or 'assisted'")
+    special_requirements: Optional[str] = Field(None, max_length=2000)
+    dropoff_same_as_pickup: Optional[bool] = Field(None, description="If true, return_location = pickup_location")
+
+    @field_validator("pickup_location", "return_location", mode="before")
+    @classmethod
+    def parse_location(cls, v: Union[str, List[str], None]) -> Optional[str]:
+        return _location_to_str(v)
+
+    @model_validator(mode="after")
+    def validate_dates_if_provided(self):
+        if self.start_date is not None and self.end_date is not None and self.start_date >= self.end_date:
+            raise ValueError("End date must be after start date")
+        if self.start_date is not None:
+            now = datetime.now(timezone.utc)
+            start = self.start_date.replace(tzinfo=timezone.utc) if self.start_date.tzinfo is None else self.start_date
+            if start < now:
+                raise ValueError("Start date cannot be in the past")
+        if self.dropoff_same_as_pickup and not self.return_location and self.pickup_location:
+            self.return_location = self.pickup_location
+        return self
+
+
 class BookingResponse(BaseModel):
     """Booking response with full details"""
     id: int
@@ -1751,6 +1853,28 @@ class BookingResponse(BaseModel):
     status: str
     status_updated_at: Optional[datetime] = None
     cancellation_reason: Optional[str] = None
+    
+    # Refund / cancellation details (for client visibility)
+    refund_eligible: Optional[bool] = Field(
+        default=None,
+        description="Whether this booking is currently eligible for an automatic refund under the platform policy",
+    )
+    refund_amount: Optional[float] = Field(
+        default=None,
+        description="Estimated refund amount in KES if the client cancels now (base trip only, excludes extensions)",
+    )
+    refund_percentage: Optional[float] = Field(
+        default=None,
+        description="Estimated refund percentage (0.0‑1.0) that applies if cancelled now",
+    )
+    refund_policy_code: Optional[str] = Field(
+        default=None,
+        description="Short code for the policy rule applied, e.g. FULL_BEFORE_24H, HALF_WITHIN_24H, NO_REFUND_AFTER_START, NO_PAYMENT",
+    )
+    refund_policy_reason: Optional[str] = Field(
+        default=None,
+        description="Human‑readable explanation of how the refund rule was applied",
+    )
     
     # Timestamps
     created_at: datetime
@@ -1968,6 +2092,167 @@ class WithdrawalUpdateRequest(BaseModel):
     admin_notes: Optional[str] = Field(None, max_length=2000)
 
 
+class RefundStatusEnum(str, Enum):
+    """Refund lifecycle for admin/finance UI."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RefundCreateRequest(BaseModel):
+    """
+    Admin request to create a refund record for a booking/payment.
+
+    Normally used after a cancellation when the policy says a refund is due.
+    """
+    booking_id: int = Field(..., description="Internal numeric booking ID (not BK-… string)")
+    payment_id: Optional[int] = Field(
+        None,
+        description="Optional payment ID when refunding a specific payment attempt",
+    )
+    amount_refund: float = Field(..., gt=0, description="Refund amount in KES to send back to client")
+    percentage: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Refund percentage (0.0‑1.0) of the original amount for reporting",
+    )
+    reason: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="Short reason visible to client (e.g. 'Cancelled >24h – full refund').",
+    )
+    internal_note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Internal note for finance/admin (PSP reference, manual override, etc.)",
+    )
+
+
+class RefundUpdateRequest(BaseModel):
+    """
+    Admin request to update a refund record status and internal details.
+    """
+    status: RefundStatusEnum = Field(..., description="New refund status")
+    internal_note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Optional updated internal note for this refund",
+    )
+    external_reference: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional PSP/bank reference for this refund",
+    )
+
+
+class RefundResponse(BaseModel):
+    """Single refund record for admin UI."""
+    id: int
+    booking_id: int
+    payment_id: Optional[int] = None
+    client_id: int
+    amount_original: float
+    amount_refund: float
+    percentage: Optional[float] = None
+    status: RefundStatusEnum
+    reason: Optional[str] = None
+    internal_note: Optional[str] = None
+    created_by_admin_id: Optional[int] = None
+    processed_by_admin_id: Optional[int] = None
+    external_reference: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None
+
+    # Useful denormalized info for the admin web:
+    booking_code: Optional[str] = Field(
+        None,
+        description="Human‑readable booking code (BK‑…)",
+    )
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RefundListResponse(BaseModel):
+    """Paginated list of refunds for admin UI."""
+    refunds: List[RefundResponse]
+    total: int
+    page: int
+    limit: int
+
+
+class ClientRefundResponse(BaseModel):
+    """Refund record as visible to a client."""
+    id: int
+    booking_id: int
+    amount_refund: float
+    status: RefundStatusEnum
+    reason: Optional[str] = None
+    created_at: datetime
+    processed_at: Optional[datetime] = None
+
+    # Helpful extras for the app
+    booking_code: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ClientRefundListResponse(BaseModel):
+    """Paginated list of refunds for a client."""
+    refunds: List[ClientRefundResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class ClientEmergencyRequest(BaseModel):
+    """Client emergency message with location."""
+    message: str = Field(..., min_length=1, max_length=2000, description="Emergency message describing the situation")
+    latitude: Optional[float] = Field(
+        None,
+        ge=-90,
+        le=90,
+        description="Client's last known latitude",
+    )
+    longitude: Optional[float] = Field(
+        None,
+        ge=-180,
+        le=180,
+        description="Client's last known longitude",
+    )
+    location_accuracy_m: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Optional accuracy radius in meters as reported by the device",
+    )
+    booking_id: Optional[int] = Field(
+        None,
+        description="Optional numeric booking id this emergency relates to (if known)",
+    )
+
+
+class ClientEmergencyResponse(BaseModel):
+    """Emergency report created for a client."""
+    id: int
+    client_id: int
+    booking_id: Optional[int] = None
+    message: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_accuracy_m: Optional[float] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
     reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
@@ -2052,6 +2337,59 @@ class PaymentResponse(BaseModel):
     message: str
     paid_at: datetime
     booking: BookingResponse
+    # For card (Pesapal): redirect user to this URL to complete payment
+    redirect_url: Optional[str] = None
+
+
+class ArdenaPayPaymentRequest(BaseModel):
+    """Request to pay for a booking with Ardena Pay. Use payWithXlm=true to pay with XLM (default: USDC)."""
+    booking_id: Union[str, int] = Field(..., description="Booking ID (e.g. 'BK-ABC12345') or numeric id", alias="bookingId")
+    pay_with_xlm: bool = Field(False, description="If true, deduct XLM (converted from KSH); if false, deduct USDC", alias="payWithXlm")
+    model_config = {"populate_by_name": True}
+
+
+class ArdenaPayPaymentResponse(BaseModel):
+    """Response after successful Ardena Pay (USDC or XLM) payment."""
+    success: bool
+    booking_id: str
+    amount_ksh: float
+    amount_usdc: str
+    amount_xlm: Optional[str] = None
+    stellar_tx_hash: str
+    message: str
+    paid_at: datetime
+    booking: BookingResponse
+
+
+class StellarTransactionResponse(BaseModel):
+    """Single Ardena Pay (USDC or XLM) transaction record for listing. amount_usd is always set for UI display."""
+    id: int
+    booking_id: int
+    amount_ksh: float
+    amount_usd: float = 0.0
+    amount_usdc: Optional[str] = None
+    amount_xlm: Optional[str] = None
+    stellar_tx_hash: str
+    from_address: str
+    to_address: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class IncomingWalletPaymentResponse(BaseModel):
+    """Incoming Ardena Pay (USDC or XLM) payment to the client's wallet – for in-app 'You received X' messages."""
+    id: int
+    amount_asset: str  # "USDC" or "XLM"
+    amount: str
+    from_address: str
+    stellar_tx_hash: str
+    created_at: datetime
+    notification_id: Optional[int] = None  # In-app notification created for this receipt
+
+    class Config:
+        from_attributes = True
 
 
 class PaymentStatusEnum(str, Enum):
@@ -2063,14 +2401,15 @@ class PaymentStatusEnum(str, Enum):
 
 
 class PaymentStatusResponse(BaseModel):
-    """Response for GET payment status – UI polls this after STK push."""
-    checkout_request_id: str
+    """Response for GET payment status – UI polls this after STK push or Pesapal redirect."""
+    checkout_request_id: str  # M-Pesa CheckoutRequestID or Pesapal order_tracking_id when applicable
     booking_id: str
     status: PaymentStatusEnum
     message: Optional[str] = None  # e.g. "Insufficient funds", "User cancelled"
     amount: float
     paid_at: Optional[datetime] = None  # Set when status is completed
     mpesa_receipt_number: Optional[str] = None
+    order_tracking_id: Optional[str] = None  # Pesapal order_tracking_id for card payments
 
     class Config:
         from_attributes = True
@@ -2097,4 +2436,99 @@ class MpesaStkPushResponse(BaseModel):
     ResponseCode: str
     ResponseDescription: str
     CustomerMessage: str
+
+
+# --- Host subscription (M-Pesa Payhero) ---
+
+class HostSubscriptionPlanCode(str, Enum):
+    """Sellable subscription tiers (free is default on host, not purchased via checkout)."""
+    starter = "starter"
+    premium = "premium"
+
+
+class HostSubscriptionPlanPublic(BaseModel):
+    """One plan row for catalog / pricing UI."""
+    code: str  # free | starter | premium
+    name: str
+    description: str
+    price_kes: int  # 0 for free
+    duration_days: int  # 0 for free (not billed)
+    features: List[str] = Field(default_factory=list)
+
+
+class HostSubscriptionPlansResponse(BaseModel):
+    plans: List[HostSubscriptionPlanPublic]
+
+
+class HostSubscriptionCheckoutRequest(BaseModel):
+    """Start M-Pesa STK for host subscription."""
+    plan: HostSubscriptionPlanCode = Field(..., description="starter or premium")
+    phone_number: str = Field(
+        ...,
+        min_length=9,
+        max_length=20,
+        description="M-Pesa phone (e.g. 254712345678 or 0712345678)",
+    )
+
+
+class HostSubscriptionCheckoutResponse(BaseModel):
+    success: bool = True
+    message: str
+    plan: str
+    amount_kes: int
+    checkout_request_id: Optional[str] = None
+    external_reference: str = Field(
+        ...,
+        description="Reference sent to M-Pesa; poll payment-status with checkout_request_id.",
+    )
+    stk_pending_window_seconds: int = Field(
+        ...,
+        description="Match your UI countdown: pending auto-expires server-side after this if no PIN.",
+    )
+
+
+class HostSubscriptionMeResponse(BaseModel):
+    """Current subscription for the authenticated host."""
+    plan: str  # free | starter | premium
+    expires_at: Optional[datetime] = None
+    is_paid_active: bool = Field(
+        ...,
+        description="True if plan is starter or premium and expires_at is in the future",
+    )
+    days_remaining: Optional[int] = None
+    has_pending_checkout: bool = Field(
+        False,
+        description="True if an STK push is in progress (within server timeout window).",
+    )
+    pending_plan: Optional[str] = Field(None, description="Plan for in-progress checkout, if any.")
+    pending_checkout_request_id: Optional[str] = Field(
+        None,
+        description="Poll payment-status with this id while pending.",
+    )
+    pending_seconds_remaining: Optional[int] = Field(
+        None,
+        description="Seconds left before server clears pending (no PIN); null if no pending.",
+    )
+    stk_pending_window_seconds: int = Field(
+        90,
+        description="Configured STK pending window (seconds); same as checkout response field.",
+    )
+
+
+class HostSubscriptionPaymentStatusEnum(str, Enum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+    expired = "expired"
+
+
+class HostSubscriptionPaymentStatusResponse(BaseModel):
+    checkout_request_id: Optional[str] = None
+    external_reference: str
+    plan: str
+    amount_kes: float
+    status: HostSubscriptionPaymentStatusEnum
+    message: Optional[str] = None
+    mpesa_receipt_number: Optional[str] = None
 

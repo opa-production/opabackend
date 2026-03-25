@@ -9,6 +9,7 @@ from app.models import Host, Client, PaymentMethod, PaymentMethodType
 from app.schemas import (
     MpesaPaymentMethodAddRequest,
     CardPaymentMethodAddRequest,
+    ClientCardAddPesapalRequest,
     PaymentMethodResponse,
     PaymentMethodListResponse
 )
@@ -368,6 +369,43 @@ async def add_client_card_payment_method(
     await db.commit()
     await db.refresh(db_payment_method)
     
+    return db_payment_method
+
+
+@router.post("/client/payment-methods/card-pesapal", response_model=PaymentMethodResponse, status_code=status.HTTP_201_CREATED)
+async def add_client_card_pesapal(
+    request: ClientCardAddPesapalRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db)
+):
+    """
+    Add a card payment method for paying via Pesapal (Visa/Mastercard) without storing card number or CVC.
+    When the user pays, they are redirected to Pesapal to enter card details there (PCI-friendly).
+    Use this instead of POST /client/payment-methods/card when using Pesapal for card payments.
+    """
+    if request.is_default:
+        existing_defaults = db.query(PaymentMethod).filter(
+            PaymentMethod.client_id == current_client.id,
+            PaymentMethod.is_default == True
+        ).all()
+        for pm in existing_defaults:
+            pm.is_default = False
+    method_type_map = {
+        "visa": PaymentMethodType.VISA,
+        "mastercard": PaymentMethodType.MASTERCARD
+    }
+    db_payment_method = PaymentMethod(
+        host_id=None,
+        client_id=current_client.id,
+        name=request.name,
+        method_type=method_type_map[request.card_type],
+        card_type=request.card_type,
+        card_last_four=None,
+        is_default=request.is_default or False
+    )
+    db.add(db_payment_method)
+    db.commit()
+    db.refresh(db_payment_method)
     return db_payment_method
 
 

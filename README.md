@@ -6,10 +6,12 @@ FastAPI backend for a car rental platform with server-side validation and multi-
 
 1. Make sure you have [UV](https://docs.astral.sh/) on your system:
 
-2.Setup the uv application:
+2. Setup the uv application:
 ```bash
   uv sync
 ```
+
+**Adding new dependencies:** When you add a dependency to `pyproject.toml`, run `uv lock` and commit the updated `uv.lock`. Deploy uses `uv sync --locked`, so the lockfile must include every dependency or deploy will fail (and the app would fail at runtime with `ModuleNotFoundError`).
 
 3. Run the application:
 ```bash
@@ -54,6 +56,12 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `GET /api/v1/client/me` - Get current authenticated client profile
 - `PUT /api/v1/client/profile` - Update client profile (bio, fun_fact, mobile_number, id_number)
 - `PUT /api/v1/client/change-password` - Change client password (requires current password verification)
+
+### Ardena Pay (Stellar wallet – client, requires authentication)
+- `GET /api/v1/client/wallet` - Get current client's Stellar wallet (public key, XLM/USDC balances). On testnet, includes `secret_key` for importing into Freighter/Lobstr.
+- `POST /api/v1/client/wallet` - Create a Stellar wallet (funded on testnet, USDC trust line added). Fails if wallet already exists.
+
+A wallet is created automatically when a client registers. Optional **.env**: `STELLAR_HORIZON_URL` (default testnet), `STELLAR_USDC_ISSUER_TESTNET`, `STELLAR_SHOW_SECRET_TESTNET=1` to include secret in response.
 
 ### Car Management (Host only, requires authentication)
 - `POST /api/v1/cars/basics` - Step 1: Create car with basic information
@@ -192,6 +200,32 @@ Use one ngrok tunnel on port 8001 for both Payhero and Veriff callbacks.
 6. **Restart the backend** so it loads the new `.env`. Your app can keep using `http://192.168.88.x:8001` for API calls; Payhero will use the ngrok URL for the webhook.
 
 7. **Verify:** After a test payment, check server logs for `[PAYHERO CALLBACK] Received payload:` — if it appears, the callback is working and status will update to completed.
+
+#### Host subscription (same callback)
+
+Hosts can pay for **starter** or **premium** plans via M-Pesa STK. The same Payhero webhook (`POST /api/v1/mpesa/callback`) updates subscription status and sets `hosts.subscription_plan` / `subscription_expires_at`. While status is **pending**, `GET /host/subscription/payment-status` can also sync from Payhero’s transaction-status API if the webhook was missed (`HOST_SUB_SYNC_PAYHERO_STATUS`, default on).
+
+- **Catalog (no auth):** `GET /api/v1/host/subscription/plans`
+- **Current plan (host JWT):** `GET /api/v1/host/subscription/me`
+- **Start STK (host JWT):** `POST /api/v1/host/subscription/checkout` — body `{ "plan": "starter" | "premium", "phone_number": "2547..." }`
+- **Poll after STK:** `GET /api/v1/host/subscription/payment-status?checkout_request_id=...`
+
+Pricing defaults are overridden with env: `HOST_SUB_STARTER_PRICE_KES`, `HOST_SUB_PREMIUM_PRICE_KES`, `HOST_SUB_STARTER_DURATION_DAYS`, `HOST_SUB_PREMIUM_DURATION_DAYS` (see `.env.example`).
+
+### Pending booking expiry
+
+Unpaid **pending** bookings are automatically cancelled after a set time so the car becomes available again.
+
+- **`PENDING_BOOKING_EXPIRE_MINUTES`** (default: `30`) – Cancel PENDING bookings that have no completed payment and were created more than this many minutes ago.
+- **`PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES`** (default: `1`) – How often the background task runs to check for expired bookings.
+
+Optional in `.env`:
+```env
+PENDING_BOOKING_EXPIRE_MINUTES=30
+PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES=1
+```
+
+On startup you’ll see a log like: `[EXPIRE] Pending booking expiry: expire after 30 min, check every 1 min`. When bookings are expired: `[EXPIRE] Expired N unpaid pending booking(s)`.
 
 ## Troubleshooting: Backend not reachable
 

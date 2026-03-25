@@ -85,6 +85,14 @@ class Payment(Base):
     mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Pesapal: Card payment tracking (Visa/Mastercard)
+    pesapal_order_tracking_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    pesapal_merchant_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    pesapal_confirmation_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pesapal_payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g., "Visa", "Mastercard"
+    pesapal_payment_account: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Last 4 digits
+    # Ardena Pay: Stellar transaction hash when payment was made via USDC
+    stellar_tx_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
@@ -93,6 +101,126 @@ class Payment(Base):
     booking: Mapped["Booking"] = relationship(back_populates="payments")
     client: Mapped["Client"] = relationship(back_populates="payments")
     extension_request: Mapped["BookingExtensionRequest"] = relationship(foreign_keys=[extension_request_id])
+
+
+class RefundStatus(str, enum.Enum):
+    """Lifecycle of a refund record."""
+    PENDING = "pending"      # Created, awaiting finance processing
+    PROCESSING = "processing"  # Being processed at PSP/bank/M-Pesa
+    COMPLETED = "completed"  # Money has been sent back to client
+    FAILED = "failed"        # Attempted but failed at PSP/bank
+    CANCELLED = "cancelled"  # Admin cancelled / closed without paying out
+
+
+class Refund(Base):
+    """
+    Admin‑visible refund record so finance can track refunds for bookings.
+
+    This does not itself move money; it records the decision, amounts, and processing
+    status so finance can reconcile with payment providers.
+    """
+    __tablename__ = "refunds"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
+    payment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("payments.id"),
+        nullable=True,
+        index=True,
+        doc="Optional link to a specific payment row when refunding a particular attempt.",
+    )
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+
+    # Financials (in KES)
+    amount_original: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        doc="Total amount originally paid for this booking (or payment) in KES at refund creation time.",
+    )
+    amount_refund: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        doc="Amount to be refunded to the client in KES, according to policy/decision.",
+    )
+    percentage: Mapped[float] = mapped_column(
+        Float,
+        nullable=True,
+        doc="Refund percentage of the original amount (0.0‑1.0) for reporting.",
+    )
+
+    status: Mapped[RefundStatus] = mapped_column(
+        SQLEnum(RefundStatus),
+        default=RefundStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+
+    # Who/why
+    reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Short reason visible to client (e.g. 'Cancelled within 24h – 50% refund').",
+    )
+    internal_note: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Internal note for finance/admin (e.g. PSP reference, manual overrides).",
+    )
+    created_by_admin_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("admins.id"),
+        nullable=True,
+        index=True,
+        doc="Admin who created this refund record.",
+    )
+    processed_by_admin_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("admins.id"),
+        nullable=True,
+        index=True,
+        doc="Admin who marked this refund as completed/failed/cancelled.",
+    )
+
+    # PSP / external references (optional)
+    external_reference: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+        doc="Optional reference from payment provider (reversal ID, transaction ID, etc.).",
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        onupdate=func.now(),
+        nullable=True,
+    )
+    processed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the refund was actually processed (money sent).",
+    )
+    client_deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the client chose to hide/delete this refund from their view.",
+    )
+
+    # Relationships
+    booking: Mapped["Booking"] = relationship("Booking", foreign_keys=[booking_id])
+    payment: Mapped[Optional["Payment"]] = relationship("Payment", foreign_keys=[payment_id])
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    created_by_admin: Mapped[Optional["Admin"]] = relationship(
+        "Admin",
+        foreign_keys=[created_by_admin_id],
+    )
+    processed_by_admin: Mapped[Optional["Admin"]] = relationship(
+        "Admin",
+        foreign_keys=[processed_by_admin_id],
+    )
 
 
 class Host(Base):
@@ -123,6 +251,12 @@ class Host(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
+    # Paid subscription (M-Pesa). Default free; starter/premium set after successful payment.
+    subscription_plan: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
+    subscription_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Relationship to cars
     cars: Mapped[list["Car"]] = relationship(back_populates="host")
     # Relationship to payment methods
@@ -142,6 +276,39 @@ class Host(Base):
         back_populates="host",
         cascade="all, delete-orphan"
     )
+    subscription_payments: Mapped[list["HostSubscriptionPayment"]] = relationship(
+        "HostSubscriptionPayment",
+        back_populates="host",
+        cascade="all, delete-orphan",
+    )
+
+
+class HostSubscriptionPayment(Base):
+    """M-Pesa STK checkout for host subscription (starter / premium)."""
+
+    __tablename__ = "host_subscription_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id"), nullable=False, index=True)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False)  # starter | premium
+    amount_ksh: Mapped[float] = mapped_column(Float, nullable=False)
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    checkout_request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    external_reference: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mpesa_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    )
+
+    host: Mapped["Host"] = relationship("Host", back_populates="subscription_payments")
 
 
 class HostKyc(Base):
@@ -262,6 +429,62 @@ class ClientKyc(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
 
     client: Mapped["Client"] = relationship(back_populates="client_kycs")
+
+
+class ClientWallet(Base):
+    """Ardena Pay: Stellar wallet for a client (one per client). Testnet/mainnet."""
+    __tablename__ = "client_wallets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, unique=True, index=True)
+    network: Mapped[str] = mapped_column(String(20), nullable=False, default="testnet")  # testnet | mainnet
+    stellar_public_key: Mapped[str] = mapped_column(String(56), nullable=False, unique=True, index=True)
+    stellar_secret_encrypted: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # optional: encrypted or plain for testnet
+    # Cached balances (updated on each GET /client/wallet from Horizon)
+    balance_xlm: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="0")
+    balance_usdc: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="0")
+    balance_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+    client: Mapped["Client"] = relationship(back_populates="wallet")
+
+
+class StellarPaymentTransaction(Base):
+    """Ardena Pay: Record of a USDC or XLM payment from client wallet to platform (booking payment)."""
+    __tablename__ = "stellar_payment_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    amount_ksh: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_usdc: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # USD equivalent for display
+    amount_xlm: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Set when paid in XLM
+    stellar_tx_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    from_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="stellar_payments")
+    client: Mapped["Client"] = relationship("Client", backref="stellar_payment_transactions")
+
+
+class IncomingStellarPayment(Base):
+    """Ardena Pay: Incoming payment to a client's wallet (USDC or XLM). Used for in-app messages/notifications."""
+    __tablename__ = "incoming_stellar_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    stellar_tx_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    amount_asset: Mapped[str] = mapped_column(String(10), nullable=False)  # "USDC" or "XLM"
+    amount: Mapped[str] = mapped_column(String(50), nullable=False)
+    from_address: Mapped[str] = mapped_column(String(56), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(56), nullable=False)  # client's wallet
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Link to the in-app notification we created for this receipt (optional)
+    notification_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+
+    client: Mapped["Client"] = relationship("Client", backref="incoming_stellar_payments")
 
 
 class ClientBiometricToken(Base):
@@ -448,11 +671,24 @@ class Booking(Base):
     # Timestamps
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    pickup_reminder_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the client chose to hide/delete this booking from their view.",
+    )
 
     # Relationships
     client: Mapped["Client"] = relationship(back_populates="bookings")
     car: Mapped["Car"] = relationship(back_populates="bookings")
     payments: Mapped[list["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    # Must cascade-delete: booking_id is NOT NULL; otherwise deleting car -> bookings tries to NULL FK and fails
+    stellar_payments: Mapped[list["StellarPaymentTransaction"]] = relationship(
+        "StellarPaymentTransaction",
+        back_populates="booking",
+        cascade="all, delete-orphan",
+    )
+
 
 
 class BookingExtensionRequest(Base):
@@ -516,6 +752,7 @@ class BookingIssue(Base):
 # Update Client model to include bookings relationship
 Client.bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
 Client.payments = relationship("Payment", back_populates="client", cascade="all, delete-orphan")
+Client.wallet = relationship("ClientWallet", back_populates="client", uselist=False, cascade="all, delete-orphan")
 # Update Client model to include host ratings relationship
 Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include ratings received from hosts
@@ -788,3 +1025,55 @@ class Subscriber(Base):
     is_subscribed = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     unsubscribed_at = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EmergencyReport(Base):
+    """Emergency message sent by a client, including their last known location."""
+    __tablename__ = "emergency_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    booking_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=True,
+        index=True,
+        doc="Optional link to the booking the emergency relates to (if any).",
+    )
+
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    # Last known location (as sent from the device)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    location_accuracy_m: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        doc="Optional accuracy radius in meters as reported by the device.",
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    booking: Mapped[Optional["Booking"]] = relationship("Booking", foreign_keys=[booking_id])
+
+
+class WishlistItem(Base):
+    """Client wishlist – a car the client has liked."""
+    __tablename__ = "wishlist_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    car_id: Mapped[int] = mapped_column(ForeignKey("cars.id"), nullable=False, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+    car: Mapped["Car"] = relationship("Car", foreign_keys=[car_id])

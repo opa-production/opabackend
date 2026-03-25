@@ -8,14 +8,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select
 from typing import Optional, List
 from datetime import datetime, timezone
+import logging
 import json
 import uuid
 
 from app.database import get_db
-from app.models import Car, Client, Booking, BookingStatus, Host, VerificationStatus, CarBlockedDate, BookingExtensionRequest, BookingIssue
+from app.models import (
+    Car,
+    Client,
+    Booking,
+    BookingStatus,
+    Host,
+    VerificationStatus,
+    CarBlockedDate,
+    BookingExtensionRequest,
+    BookingIssue,
+    Payment,
+    PaymentStatus,
+    Refund,
+    RefundStatus,
+    StellarPaymentTransaction,
+)
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
     BookingCreateRequest,
+    BookingUpdateRequest,
     BookingResponse,
     BookingListResponse,
     BookingCancelRequest,
@@ -32,6 +49,7 @@ from app.schemas import (
 from app.services.receipt import build_receipt_pdf
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Damage waiver price per day (KES)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
@@ -64,12 +82,98 @@ def generate_booking_id() -> str:
     return f"BK-{unique_part}"
 
 
+def _compute_refund_preview_for_cancellation(booking: Booking):
+    """
+    Compute refund preview (base trip only, excludes extension payments) for a booking
+    that is currently in a cancellable state (pending or confirmed).
+    Returns (refund_eligible, refund_amount, refund_percentage, refund_policy_code, refund_policy_reason).
+    """
+    refund_eligible = None
+    refund_amount = None
+    refund_percentage = None
+    refund_policy_code = None
+    refund_policy_reason = None
+
+    try:
+        # Only attempt refund preview for bookings that are not already cancelled or completed
+        if booking.status in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
+            completed_base_payments = [
+                p
+                for p in getattr(booking, "payments", []) or []
+                if p.status == PaymentStatus.COMPLETED and p.extension_request_id is None
+            ]
+            total_paid = float(sum(p.amount for p in completed_base_payments))
+
+            if total_paid <= 0:
+                refund_eligible = False
+                refund_amount = 0.0
+                refund_percentage = 0.0
+                refund_policy_code = "NO_PAYMENT"
+                refund_policy_reason = "No completed payment found for this booking – nothing to refund."
+            else:
+                now = datetime.now(timezone.utc)
+                start = booking.start_date
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                hours_to_pickup = (start - now).total_seconds() / 3600.0
+
+                if hours_to_pickup > 24:
+                    refund_percentage = 1.0
+                    refund_policy_code = "FULL_BEFORE_24H"
+                    refund_policy_reason = "Cancelled more than 24 hours before pickup – full refund of amounts paid."
+                elif 0 <= hours_to_pickup <= 24:
+                    refund_percentage = 0.5
+                    refund_policy_code = "HALF_WITHIN_24H"
+                    refund_policy_reason = "Cancelled within 24 hours before pickup – 50% refund of amounts paid."
+                else:
+                    refund_percentage = 0.0
+                    refund_policy_code = "NO_REFUND_AFTER_START"
+                    refund_policy_reason = "Pickup time has passed – no automatic refund, contact support for review."
+
+                refund_amount = round(total_paid * refund_percentage, 2)
+                refund_eligible = refund_percentage > 0
+
+    except Exception:
+        # Refund preview is best‑effort; never break booking serialization because of it.
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = None
+        refund_policy_reason = None
+
+    return refund_eligible, refund_amount, refund_percentage, refund_policy_code, refund_policy_reason
+
+
 def booking_to_response(booking: Booking) -> dict:
     """Convert Booking model to BookingResponse dict"""
     car = booking.car
     host = car.host if car else None
     
     client = getattr(booking, "client", None)
+
+    # ----- Refund preview (base trip only, excludes extension payments) -----
+    if booking.status in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
+        (
+            refund_eligible,
+            refund_amount,
+            refund_percentage,
+            refund_policy_code,
+            refund_policy_reason,
+        ) = _compute_refund_preview_for_cancellation(booking)
+    elif booking.status == BookingStatus.CANCELLED:
+        # For already cancelled bookings in generic responses, point to refunds history.
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = "ALREADY_CANCELLED"
+        refund_policy_reason = "Booking is already cancelled – see finance/refunds history for actual refund details."
+    else:
+        refund_eligible = None
+        refund_amount = None
+        refund_percentage = None
+        refund_policy_code = None
+        refund_policy_reason = None
+
     return {
         "id": booking.id,
         "booking_id": booking.booking_id,
@@ -114,6 +218,11 @@ def booking_to_response(booking: Booking) -> dict:
         "status": booking.status.value,
         "status_updated_at": booking.status_updated_at,
         "cancellation_reason": booking.cancellation_reason,
+        "refund_eligible": refund_eligible,
+        "refund_amount": refund_amount,
+        "refund_percentage": refund_percentage,
+        "refund_policy_code": refund_policy_code,
+        "refund_policy_reason": refund_policy_reason,
         
         # Timestamps
         "created_at": booking.created_at,
@@ -318,6 +427,7 @@ async def get_my_bookings(
     
     Requires client authentication.
     """
+    
     stmt = select(Booking).options(
         joinedload(Booking.car).joinedload(Car.host)
     ).filter(Booking.client_id == current_client.id)
@@ -435,6 +545,133 @@ async def get_booking_details(
     return booking_to_response(booking)
 
 
+@router.put("/client/bookings/{booking_id}", response_model=BookingResponse)
+async def update_booking(
+    booking_id: str,
+    request: BookingUpdateRequest,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a PENDING booking (e.g. change dates or details before paying).
+
+    - Only **pending** bookings can be updated. After payment, cancel and rebook to change dates.
+    - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id.
+    - Send only the fields you want to change; omitted fields keep their current values.
+    - If you change dates, availability is re-checked (other bookings and host-blocked dates).
+    - Pricing is recalculated from the car's current daily rate when dates or damage waiver change.
+
+    Requires client authentication.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
+        )
+    if booking.status != BookingStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only pending bookings can be updated. Current status: {booking.status.value}. Cancel and create a new booking to change after payment."
+        )
+
+    car = booking.car
+    if not car:
+        car = db.query(Car).options(joinedload(Car.host)).filter(Car.id == booking.car_id).first()
+    if not car:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Car not found")
+
+    # Resolve new dates: use request if provided, else keep existing
+    new_start = request.start_date if request.start_date is not None else booking.start_date
+    new_end = request.end_date if request.end_date is not None else booking.end_date
+    new_start = _to_utc(new_start)
+    new_end = _to_utc(new_end)
+    if new_start >= new_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after start date"
+        )
+
+    # If dates changed, run full availability and pricing validation
+    dates_changed = new_start != _to_utc(booking.start_date) or new_end != _to_utc(booking.end_date)
+    new_damage_waiver = request.damage_waiver_enabled if request.damage_waiver_enabled is not None else booking.damage_waiver_enabled
+
+    if dates_changed:
+        rental_days = (new_end - new_start).days
+        if rental_days < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rental period must be at least 1 day"
+            )
+        if car.min_rental_days and rental_days < car.min_rental_days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Minimum rental period for this car is {car.min_rental_days} days"
+            )
+        if car.max_rental_days and rental_days > car.max_rental_days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Maximum rental period for this car is {car.max_rental_days} days"
+            )
+        if check_booking_overlap(db, car.id, new_start, new_end, exclude_booking_id=booking.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Car is not available for the selected dates. Please choose different dates."
+            )
+        if check_blocked_date_overlap(db, car.id, new_start, new_end):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The host has blocked some of the selected dates. Please choose different dates."
+            )
+        booking.start_date = new_start
+        booking.end_date = new_end
+        booking.rental_days = rental_days
+        base_price = car.daily_rate * rental_days
+        damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if new_damage_waiver else 0
+        booking.base_price = base_price
+        booking.damage_waiver_fee = damage_waiver_fee
+        booking.damage_waiver_enabled = new_damage_waiver
+        booking.total_price = base_price + damage_waiver_fee
+    else:
+        if request.damage_waiver_enabled is not None and request.damage_waiver_enabled != booking.damage_waiver_enabled:
+            booking.damage_waiver_enabled = request.damage_waiver_enabled
+            booking.damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * booking.rental_days if booking.damage_waiver_enabled else 0
+            booking.total_price = booking.base_price + booking.damage_waiver_fee
+
+    # Drive type: validate if changed
+    new_drive = request.drive_type if request.drive_type is not None else booking.drive_type
+    if new_drive is not None:
+        drive_setting = getattr(car, "drive_setting", None) or "self_only"
+        allowed = DRIVE_SETTING_TO_ALLOWED.get(drive_setting, ["self"])
+        if new_drive.strip().lower() not in [a.lower() for a in allowed]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"This car only allows: {', '.join(allowed)}. You selected '{new_drive}'."
+            )
+        booking.drive_type = new_drive.strip()
+
+    # Optional fields: apply if provided
+    if request.pickup_time is not None:
+        booking.pickup_time = request.pickup_time
+    if request.return_time is not None:
+        booking.return_time = request.return_time
+    if request.pickup_location is not None:
+        booking.pickup_location = request.pickup_location
+    if request.return_location is not None:
+        booking.return_location = request.return_location
+    if request.check_in_preference is not None:
+        booking.check_in_preference = request.check_in_preference
+    if request.special_requirements is not None:
+        booking.special_requirements = request.special_requirements
+
+    db.commit()
+    db.refresh(booking)
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.id == booking.id).first()
+    return booking_to_response(booking)
+
+
 @router.get("/client/bookings/{booking_id}/receipt")
 async def get_client_booking_receipt(
     booking_id: str,
@@ -469,12 +706,21 @@ async def cancel_booking(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Cancel an existing booking.
-
+    Cancel an existing booking and apply the platform refund policy.
+    
+    Policy (base trip payments only, extensions are handled separately):
+    - If there is **no completed payment** for this booking yet, the booking is simply cancelled (no refund needed).
+    - If cancelled **more than 24 hours before pickup**, the client is eligible for a **full refund** of amounts paid.
+    - If cancelled **within 24 hours before pickup but before pickup time**, the client is eligible for a **50% refund**.
+    - If pickup time has **already passed**, there is **no automatic refund**; support can review edge cases manually.
+    
+    The response includes `refund_eligible`, `refund_amount`, `refund_percentage`, and `refund_policy_code` so
+    the app can show clear messaging to the client and route any manual refund handling to support/finance.
+    
     - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id
     - Only pending or confirmed bookings can be cancelled
     - Only the booking owner can cancel
-
+    
     Requires client authentication.
     """
     booking = await _client_booking_query(db, booking_id, current_client.id)
@@ -491,6 +737,15 @@ async def cancel_booking(
             detail=f"Cannot cancel booking with status '{booking.status.value}'. Only pending or confirmed bookings can be cancelled."
         )
     
+    # Compute refund preview BEFORE changing status so we know what policy applies right now
+    (
+        refund_eligible,
+        refund_amount,
+        refund_percentage,
+        refund_policy_code,
+        refund_policy_reason,
+    ) = _compute_refund_preview_for_cancellation(booking)
+
     # Update booking status
     booking.status = BookingStatus.CANCELLED
     booking.status_updated_at = datetime.now(timezone.utc)
@@ -500,6 +755,33 @@ async def cancel_booking(
     await db.commit()
     await db.refresh(booking)
     
+    return response_dict
+
+
+@router.get("/client/bookings/{booking_id}/cancellation-preview", response_model=BookingResponse)
+async def get_booking_cancellation_preview(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Get a live preview of what will happen if the client cancels this booking **right now**.
+
+    The returned `BookingResponse` includes these fields populated:
+    - **refund_eligible**: whether an automatic refund applies under the current policy.
+    - **refund_amount**: estimated refund amount in KES (base trip only, excludes extensions).
+    - **refund_percentage**: fraction between 0.0 and 1.0.
+    - **refund_policy_code** and **refund_policy_reason**: explain which rule was applied.
+
+    This endpoint **does not cancel** the booking; it is safe to call from the UI before showing the
+    final "Confirm cancellation" dialog.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
     return booking_to_response(booking)
 
 
@@ -1191,6 +1473,43 @@ async def delete_booking(
     
     await db.commit()
     
+    return None
+
+
+@router.delete("/client/bookings/{booking_id}/completed", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_completed_booking(
+    booking_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Hide/delete a **completed or cancelled** booking from the client's view.
+
+    - Does **not** delete the booking from the database; it sets `client_deleted_at`
+      so the client no longer sees it in their bookings list.
+    - Only bookings owned by the current client and with status `completed` or
+      `cancelled` are allowed.
+    """
+    booking = _client_booking_query(db, booking_id, current_client.id)
+    if not booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found",
+        )
+
+    if booking.status not in [BookingStatus.COMPLETED, BookingStatus.CANCELLED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only completed or cancelled bookings can be deleted from your history.",
+        )
+
+    if booking.client_deleted_at is not None:
+        # Already hidden; treat as success
+        return None
+
+    booking.client_deleted_at = datetime.utcnow()
+    db.commit()
+
     return None
 
 

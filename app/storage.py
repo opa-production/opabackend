@@ -28,8 +28,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # Validate configuration and initialize client
 supabase: Optional[SupabaseClient] = None
+# Set when create_client fails so admin/debug can explain missing storage listing
+SUPABASE_CLIENT_INIT_ERROR: Optional[str] = None
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    SUPABASE_CLIENT_INIT_ERROR = "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set"
     logger.warning(
         "Supabase configuration missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
         "environment variables. Media uploads will fail until configured."
@@ -42,14 +45,16 @@ elif create_client is not None:
         supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
         logger.info("Supabase client initialized successfully")
     except TypeError as e:
+        SUPABASE_CLIENT_INIT_ERROR = str(e)
         if "proxy" in str(e):
             logger.warning(
                 "Supabase client rejected 'proxy' (often gotrue/httpx version mismatch). "
                 "Pin supabase-py, gotrue, and httpx to compatible versions. Media uploads disabled."
             )
         else:
-            raise
+            logger.error("Supabase create_client TypeError: %s", e)
     except Exception as e:
+        SUPABASE_CLIENT_INIT_ERROR = str(e)
         logger.error(f"Failed to initialize Supabase client: {e}")
 
 
@@ -275,3 +280,132 @@ async def list_user_files(bucket_name: str, user_id: int, category: Optional[str
     except Exception as e:
         logger.error(f"Error listing files: {e}")
         return []
+
+
+# ==================== HTTP FALLBACK (when supabase-py client fails to init) ====================
+# Admin media listing uses the Storage REST API so listing still works if create_client() failed
+# (e.g. gotrue/httpx "proxy" mismatch). Upload helpers still require the SDK client.
+
+
+def build_public_storage_object_url(bucket_name: str, object_path: str) -> str:
+    """Build public object URL for a path inside a public bucket."""
+    if not SUPABASE_URL:
+        return ""
+    base = SUPABASE_URL.rstrip("/")
+    path = (object_path or "").lstrip("/")
+    return f"{base}/storage/v1/object/public/{bucket_name}/{path}"
+
+
+def storage_list_prefix_http(bucket_name: str, prefix: str) -> list:
+    """
+    List objects under a prefix using Storage REST API (no supabase-py client required).
+
+    POST {SUPABASE_URL}/storage/v1/object/list/{bucket}
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return []
+
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("httpx not available; cannot use storage HTTP fallback")
+        return []
+
+    url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/list/{bucket_name}"
+    # API accepts prefix without trailing slash; empty string = bucket root
+    bodies = [
+        {
+            "prefix": prefix or "",
+            "limit": 200,
+            "offset": 0,
+            "sortBy": {"column": "created_at", "order": "asc"},
+        },
+        {"prefix": prefix or "", "limit": 200, "offset": 0},
+    ]
+    last_err: Optional[Exception] = None
+    try:
+        with httpx.Client(timeout=45.0) as client:
+            for body in bodies:
+                try:
+                    response = client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                            "Content-Type": "application/json",
+                        },
+                        json=body,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    return data if isinstance(data, list) else []
+                except Exception as inner:
+                    last_err = inner
+                    continue
+            if last_err:
+                raise last_err
+    except Exception as e:
+        logger.warning(
+            "storage_list_prefix_http failed bucket=%r prefix=%r: %s",
+            bucket_name,
+            prefix,
+            e,
+        )
+        return []
+
+
+def collect_storage_file_paths_http(bucket_name: str, base_folder: str, max_depth: int = 8) -> list:
+    """
+    Recursively collect file paths under base_folder using HTTP list API.
+    Paths returned are relative to bucket (e.g. car_20/image_123_0.jpg).
+    """
+    results: list = []
+    visited: set = set()
+
+    known_exts = (
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".svg",
+        ".mp4",
+        ".mov",
+        ".webm",
+        ".avi",
+        ".mkv",
+        ".m4v",
+    )
+
+    def _looks_like_file(entry: dict) -> bool:
+        name = (entry.get("name") or "").lower()
+        if not name:
+            return False
+        if "." in name and any(name.endswith(ext) for ext in known_exts):
+            return True
+        if entry.get("metadata") is not None:
+            return True
+        if entry.get("id") is not None:
+            return True
+        return False
+
+    def walk(prefix: str, depth: int) -> None:
+        if depth > max_depth or prefix in visited:
+            return
+        visited.add(prefix)
+
+        entries = storage_list_prefix_http(bucket_name, prefix)
+        for entry in entries:
+            name = entry.get("name")
+            if not name:
+                continue
+            child_key = f"{prefix}/{name}" if prefix else name
+            if _looks_like_file(entry):
+                results.append(child_key)
+            else:
+                walk(child_key, depth + 1)
+
+    root = (base_folder or "").strip().strip("/")
+    walk(root, 0)
+    return results

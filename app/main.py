@@ -6,11 +6,12 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
-# from starlette.middleware.security import SecurityMiddleware
-# from starlette.responses import PlainTextResponse
+from starlette.requests import Request
+import asyncio
 import os
 import time
 import logging
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from app.config import settings
 
@@ -93,7 +94,30 @@ load_dotenv()
 from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
-from app.routers import host_auth, client_auth, cars, payment_methods, feedback, support, media, bookings, messages, payments, host_ratings, client_ratings, host_earnings, subscribers as subscribers_router, host_kyc as host_kyc_router, client_kyc as client_kyc_router, veriff_webhook as veriff_webhook_router
+from app.routers import (
+    host_auth,
+    client_auth,
+    cars,
+    payment_methods,
+    feedback,
+    support,
+    media,
+    bookings,
+    messages,
+    payments,
+    host_ratings,
+    client_ratings,
+    host_earnings,
+    host_subscription,
+    wallet as wallet_router,
+    subscribers as subscribers_router,
+    host_kyc as host_kyc_router,
+    client_kyc as client_kyc_router,
+    veriff_webhook as veriff_webhook_router,
+    client_refunds as client_refunds_router,
+    client_emergency as client_emergency_router,
+    wishlist as wishlist_router,
+)
 from app.admin import (
     auth as admin_auth,
     users as admin_users,
@@ -107,6 +131,7 @@ from app.admin import (
     bookings as admin_bookings,
     withdrawals as admin_withdrawals,
     subscribers as admin_subscribers,
+    refunds as admin_refunds,
 )
 from app.models import Admin
 from app.auth import get_password_hash, get_admin_by_email
@@ -133,6 +158,10 @@ app = FastAPI(
         {"name": "Host Ratings", "description": "Client ratings for hosts"},
         {"name": "Client Ratings", "description": "Host ratings for clients (renters)"},
         {"name": "Host Earnings", "description": "Host earnings summary, transactions, and withdrawal requests"},
+        {"name": "Host Subscription", "description": "Host paid plans (M-Pesa) and subscription status"},
+        {"name": "Client Refunds", "description": "Client‑visible refund records for bookings"},
+        {"name": "Client Emergency", "description": "Emergency messages from clients with location"},
+        {"name": "Client Wishlist", "description": "Client car wishlist (liked cars)"},
         {"name": "Admin Auth", "description": "Admin authentication"},
         {"name": "Admin User Management", "description": "User management"},
         {"name": "Admin Car Management", "description": "Car verification"},
@@ -144,6 +173,7 @@ app = FastAPI(
         {"name": "Admin Support", "description": "Support conversation management"},
         {"name": "Admin Bookings", "description": "Booking management and oversight"},
         {"name": "Admin Withdrawals", "description": "View and process host withdrawal requests"},
+        {"name": "Admin Refunds", "description": "Track and manage booking refunds for finance"},
         {"name": "Newsletter", "description": "Public subscribe / unsubscribe"},
         {"name": "Admin Subscribers", "description": "Newsletter subscriber list and send email to all"},
         {"name": "Host KYC", "description": "Host KYC verification (Veriff)"},
@@ -667,6 +697,86 @@ async def startup_event():
     
     print("✅ Startup complete!")
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Run DB migrations in a background thread so the server accepts connections immediately (Swagger/docs work right away)."""
+    print("🚀 Starting up...")
+    # Run blocking startup in thread without awaiting – server becomes ready and Swagger loads immediately
+    asyncio.create_task(asyncio.to_thread(_run_sync_startup))
+    # Server is ready now; test with GET /health or GET /docs (if loading forever, check Windows Firewall for port 8001)
+    print("✅ Server ready to accept connections (migrations run in background). Try http://127.0.0.1:8001/health or http://127.0.0.1:8001/docs")
+    # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
+    asyncio.create_task(_run_expire_pending_bookings_loop())
+    # Send pickup reminders when pickup is in ~24 hours
+    asyncio.create_task(_run_pickup_reminder_loop())
+
+
+async def _run_expire_pending_bookings_loop():
+    """Every N minutes, cancel PENDING bookings older than PENDING_BOOKING_EXPIRE_MINUTES with no completed payment."""
+    from app.services.expire_pending_bookings import expire_pending_bookings, get_expire_minutes
+    _log = logging.getLogger(__name__)
+    interval_minutes = max(1, int(os.getenv("PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES", "1")))
+    interval_seconds = interval_minutes * 60
+    expire_mins = get_expire_minutes()
+    _log.info(
+        "[EXPIRE] Pending booking expiry: expire after %s min, check every %s min",
+        expire_mins,
+        interval_minutes,
+    )
+    while True:
+        await asyncio.sleep(interval_seconds)
+        db = SessionLocal()
+        try:
+            n = await asyncio.to_thread(expire_pending_bookings, db)
+            if n:
+                _log.info("[EXPIRE] Expired %s unpaid pending booking(s)", n)
+        except Exception as e:
+            _log.exception("[EXPIRE] Error expiring pending bookings: %s", e)
+        finally:
+            db.close()
+
+
+async def _run_pickup_reminder_loop():
+    """Every 30–60 min, send pickup reminder emails for bookings whose start_date is in ~24 hours."""
+    from app.models import Booking, BookingStatus
+    from app.services.booking_emails import send_pickup_reminder_email
+
+    _log = logging.getLogger(__name__)
+    interval_minutes = max(15, int(os.getenv("PICKUP_REMINDER_CHECK_INTERVAL_MINUTES", "30")))
+    interval_seconds = interval_minutes * 60
+    _log.info("[PICKUP_REMINDER] Loop started, check every %s min", interval_minutes)
+    while True:
+        await asyncio.sleep(interval_seconds)
+        db = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            window_start = now + timedelta(hours=23)
+            window_end = now + timedelta(hours=25)
+            bookings = (
+                db.query(Booking)
+                .filter(
+                    Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+                    Booking.start_date >= window_start,
+                    Booking.start_date <= window_end,
+                    Booking.pickup_reminder_sent_at.is_(None),
+                )
+                .all()
+            )
+            for b in bookings:
+                try:
+                    ok = await asyncio.to_thread(send_pickup_reminder_email, b.id)
+                    if ok:
+                        b.pickup_reminder_sent_at = now
+                        db.commit()
+                except Exception as e:
+                    _log.exception("[PICKUP_REMINDER] Failed for booking_id=%s: %s", b.id, e)
+        except Exception as e:
+            _log.exception("[PICKUP_REMINDER] Loop error: %s", e)
+        finally:
+            db.close()
+
+
 # Ensure all error responses are valid JSON (avoids "JSON parse error" in production)
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -721,12 +831,6 @@ async def root():
         "docs": "/docs",
         "api_base": "/api/v1"
     }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "Car Rental API"}
 
 
 @app.get("/api/v1/ping")

@@ -4,6 +4,7 @@ Mirrors host_kyc.py but authenticates via get_current_client and stores rows in 
 """
 import html
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote, urlparse
@@ -25,6 +26,24 @@ router = APIRouter(tags=["Client KYC"])
 logger = logging.getLogger(__name__)
 
 VERIFF_SESSIONS_PATH = "/v1/sessions"
+
+# Never send upstream messages that may contain API keys or secrets to the client.
+SAFE_KYC_ERROR = "KYC verification is temporarily unavailable. Please try again later or contact support."
+
+
+def _safe_veriff_error_detail(response_message: Optional[str], status_code: Optional[int]) -> str:
+    """Return a user-safe error message. Never expose API keys or raw Veriff messages."""
+    if not response_message:
+        return SAFE_KYC_ERROR
+    msg_lower = response_message.lower()
+    # Auth/config errors or messages that might contain keys
+    if status_code in (401, 403, 404):
+        return SAFE_KYC_ERROR
+    if "api key" in msg_lower or ("integration" in msg_lower and "not active" in msg_lower):
+        return SAFE_KYC_ERROR
+    if re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", response_message, re.I):
+        return SAFE_KYC_ERROR
+    return SAFE_KYC_ERROR
 
 
 def _allowed_return_to(return_to: str) -> bool:
@@ -79,7 +98,7 @@ async def create_client_kyc_session(
     if not settings.VERIFF_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="KYC is not configured. Set VERIFF_API_KEY.",
+            detail=SAFE_KYC_ERROR,
         )
     base = (settings.VERIFF_BASE_URL or "https://stationapi.veriff.com").rstrip("/")
     url = base + VERIFF_SESSIONS_PATH
@@ -123,13 +142,16 @@ async def create_client_kyc_session(
         r.raise_for_status()
         data = r.json()
     except requests.RequestException as e:
-        err_detail = "Could not create verification session. Try again later."
+        err_detail = SAFE_KYC_ERROR
+        status_from_upstream = None
         if hasattr(e, "response") and e.response is not None:
+            status_from_upstream = getattr(e.response, "status_code", None)
             try:
                 err_json = e.response.json()
-                err_detail = err_json.get("message") or err_json.get("detail") or err_detail
+                raw = err_json.get("message") or err_json.get("detail") or ""
+                err_detail = _safe_veriff_error_detail(raw, status_from_upstream)
             except Exception:
-                pass
+                err_detail = _safe_veriff_error_detail(None, status_from_upstream)
         logger.exception("Veriff client session create failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

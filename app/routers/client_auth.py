@@ -129,6 +129,26 @@ async def register_client(
     # Send welcome email (non-blocking; registration succeeds even if email fails)
     background_tasks.add_task(send_welcome_email_client, db_client.email, db_client.full_name)
 
+    # Create Ardena Pay (Stellar) wallet for new client (testnet-funded). If it fails, client can POST /client/wallet later.
+    try:
+        from app.models import ClientWallet
+        from app.services.stellar_wallet import create_and_fund_wallet, _is_testnet
+        result = create_and_fund_wallet()
+        if result:
+            public_key, secret_key = result
+            network = "testnet" if _is_testnet() else "mainnet"
+            wallet = ClientWallet(
+                client_id=db_client.id,
+                network=network,
+                stellar_public_key=public_key,
+                stellar_secret_encrypted=secret_key,
+            )
+            db.add(wallet)
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Ardena Pay wallet creation failed for new client: %s", e)
+
     return db_client
 
 
