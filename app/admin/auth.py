@@ -1,6 +1,6 @@
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Admin
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.post("/admin/auth/login", response_model=AdminLoginResponse)
 async def login_admin(
     request: AdminLoginRequest,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Login for administrators
@@ -35,7 +35,7 @@ async def login_admin(
     Returns JWT access token for admin endpoints.
     """
     # Get admin by email
-    admin = get_admin_by_email(db, request.email)
+    admin = await get_admin_by_email(db, request.email)
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

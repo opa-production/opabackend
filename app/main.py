@@ -77,13 +77,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Strict-Transport-Security"] = f"max-age={hsts_max_age}; includeSubDomains"
         
         # Content Security Policy
+        # Swagger (/docs) and ReDoc (/redoc) load assets from cdn.jsdelivr.net; without this,
+        # browsers block those scripts/styles and the UI spins forever.
         csp_policy = os.getenv(
             "CSP_POLICY",
             "default-src 'self'; "
             "img-src 'self' data: https:; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "font-src 'self' data:; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' data: https://cdn.jsdelivr.net; "
             "connect-src 'self' https:; "
             "frame-ancestors 'none'"
         )
@@ -218,6 +220,14 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    # "Forever" CORS:
+    # - Local dev may use different hostnames and ports (e.g. 127.0.0.1:5500 vs localhost:5500)
+    # - Frontend/admin are on ardena subdomains.
+    # If ALLOWED_ORIGINS doesn't include a specific origin, this regex can still allow it.
+    allow_origin_regex=os.getenv(
+        "CORS_ALLOW_ORIGIN_REGEX",
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-z0-9-]+\.)?ardena\.(xyz|co\.ke)(:\d+)?$",
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
