@@ -73,6 +73,7 @@ limiter = Limiter(key_func=get_remote_address)
 @router.post("/client/auth/register", response_model=ClientRegisterResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register_client(
+    request: Request,
     body: ClientRegisterRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
@@ -155,6 +156,7 @@ async def register_client(
 @router.post("/client/auth/login", response_model=ClientLoginResponseWithRefresh)
 @limiter.limit("10/minute")
 async def login_client(
+    request: Request,
     body: ClientLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -222,6 +224,7 @@ async def login_client(
 @router.post("/client/auth/forgot-password")
 @limiter.limit("3/minute")
 async def forgot_password(
+    request: Request,
     body: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)

@@ -8,10 +8,19 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 import asyncio
-import os
-import time
 import logging
+import os
+import sys
+import time
 from datetime import datetime, timezone, timedelta
+
+# Windows consoles often use cp1252; emoji/symbols in print() then raise UnicodeEncodeError on startup.
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
 from dotenv import load_dotenv
 from app.config import settings
 
@@ -135,7 +144,7 @@ from app.admin import (
 )
 from app.models import Admin
 from app.auth import get_password_hash, get_admin_by_email
-from sqlalchemy import text, inspect
+from sqlalchemy import inspect, select, text
 
 app = FastAPI(
     title="Car Rental API",
@@ -203,7 +212,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 3. Gzip compression for faster responses
-app.add_middleware(GzipMiddleware, minimum_size=1000)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # 4. CORS middleware
 app.add_middleware(
@@ -225,7 +234,7 @@ app.add_middleware(RequestLoggingMiddleware)
 # Initialize cache with Redis backend
 # Note: Cache will only work if Redis is available; graceful fallback if not
 @app.on_event("startup")
-async def startup_event():
+async def startup_init_cache():
     try:
         import redis.asyncio as redis
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -277,18 +286,43 @@ app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin With
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
 
 
+async def _async_insp_table_names(conn) -> set:
+    """Table names via sync inspector inside greenlet (required for aiosqlite)."""
+
+    def _f(sync_conn):
+        return set(inspect(sync_conn).get_table_names())
+
+    return await conn.run_sync(_f)
+
+
+async def _async_insp_column_names(conn, table: str) -> list:
+    def _f(sync_conn):
+        insp = inspect(sync_conn)
+        if table not in insp.get_table_names():
+            return []
+        return [c["name"] for c in insp.get_columns(table)]
+
+    return await conn.run_sync(_f)
+
+
+async def _async_insp_column_info(conn, table: str) -> dict:
+    def _f(sync_conn):
+        insp = inspect(sync_conn)
+        if table not in insp.get_table_names():
+            return {}
+        return {c["name"]: c for c in insp.get_columns(table)}
+
+    return await conn.run_sync(_f)
+
+
 async def migrate_database():
     """Add missing columns to existing tables"""
     async with engine.connect() as conn:
-        def get_inspector(sync_conn):
-            return inspect(sync_conn)
-        
-        inspector = await conn.run_sync(get_inspector)
-        table_names = inspector.get_table_names()  # Cache table names
-        
+        table_names = await _async_insp_table_names(conn)
+
         # Check and add missing columns to hosts table
-        if 'hosts' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('hosts')]
+        if "hosts" in table_names:
+            columns = await _async_insp_column_names(conn, "hosts")
             if 'is_active' not in columns:
                 await conn.execute(text("ALTER TABLE hosts ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
                 await conn.commit()
@@ -319,8 +353,8 @@ async def migrate_database():
                 print("✓ Added terms_accepted_at column to hosts table")
         
         # Check and add missing columns to clients table
-        if 'clients' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('clients')]
+        if "clients" in table_names:
+            columns = await _async_insp_column_names(conn, "clients")
             if 'is_active' not in columns:
                 await conn.execute(text("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1 NOT NULL"))
                 await conn.commit()
@@ -367,8 +401,8 @@ async def migrate_database():
                 print("✓ Added in_app_notifications_enabled column to clients table")
         
         # Check and add missing columns to cars table
-        if 'cars' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('cars')]
+        if "cars" in table_names:
+            columns = await _async_insp_column_names(conn, "cars")
             if 'rejection_reason' not in columns:
                 await conn.execute(text("ALTER TABLE cars ADD COLUMN rejection_reason TEXT"))
                 await conn.commit()
@@ -403,25 +437,25 @@ async def migrate_database():
                 print("✓ Added drive_setting column to cars table")
         
         # Check and add is_flagged to feedbacks table
-        if 'feedbacks' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('feedbacks')]
+        if "feedbacks" in table_names:
+            columns = await _async_insp_column_names(conn, "feedbacks")
             if 'is_flagged' not in columns:
                 await conn.execute(text("ALTER TABLE feedbacks ADD COLUMN is_flagged INTEGER DEFAULT 0 NOT NULL"))
                 await conn.commit()
                 print("✓ Added is_flagged column to feedbacks table")
 
         # Check and add extension_request_id to payments table (for booking extensions)
-        if 'payments' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('payments')]
+        if "payments" in table_names:
+            columns = await _async_insp_column_names(conn, "payments")
             if 'extension_request_id' not in columns:
                 await conn.execute(text("ALTER TABLE payments ADD COLUMN extension_request_id INTEGER"))
                 await conn.commit()
                 print("✓ Added extension_request_id column to payments table")
         
         # Check and add client_id to payment_methods table, and make host_id nullable
-        if 'payment_methods' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('payment_methods')]
-            column_info = {col['name']: col for col in inspector.get_columns('payment_methods')}
+        if "payment_methods" in table_names:
+            columns = await _async_insp_column_names(conn, "payment_methods")
+            column_info = await _async_insp_column_info(conn, "payment_methods")
             
             # Add client_id if missing
             if 'client_id' not in columns:
@@ -469,7 +503,7 @@ async def migrate_database():
                         """))
                         
                         # Copy existing data - preserve ALL existing payment methods (both host and client)
-                        old_columns = [col['name'] for col in inspector.get_columns('payment_methods')]
+                        old_columns = await _async_insp_column_names(conn, "payment_methods")
                         select_parts = []
                         select_parts.append('id')
                         select_parts.append('host_id')
@@ -507,8 +541,8 @@ async def migrate_database():
             print("✓ Notifications table will be created")
         
         # Migrate support_messages table to new conversation-based schema
-        if 'support_messages' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('support_messages')]
+        if "support_messages" in table_names:
+            columns = await _async_insp_column_names(conn, "support_messages")
             if 'conversation_id' not in columns and 'host_id' in columns:
                 print("⚠️  Migrating support_messages table to new conversation-based schema...")
                 await conn.execute(text("DROP TABLE support_messages"))
@@ -521,7 +555,7 @@ async def migrate_database():
 
 
 @app.on_event("startup")
-async def startup_event():
+async def startup_database():
     """Create database tables on startup and create default super admin"""
     print("🚀 Starting up...")
     
@@ -532,13 +566,9 @@ async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    # Cache inspector and table names
     async with engine.connect() as conn:
-        def get_inspector(sync_conn):
-            return inspect(sync_conn)
-        inspector = await conn.run_sync(get_inspector)
-        table_names = inspector.get_table_names()
-    
+        table_names = await _async_insp_table_names(conn)
+
         # Double-check that support_messages table exists, create if missing
         if 'support_messages' not in table_names:
             print("⚠️  support_messages table missing, creating...")
@@ -574,7 +604,7 @@ async def startup_event():
             await conn.run_sync(create_table)
             print("✓ Created car_blocked_dates table")
         else:
-            columns = [col['name'] for col in inspector.get_columns('car_blocked_dates')]
+            columns = await _async_insp_column_names(conn, "car_blocked_dates")
             if 'start_date' in columns and 'blocked_date' not in columns:
                 await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN blocked_date DATE"))
                 await conn.execute(text("UPDATE car_blocked_dates SET blocked_date = DATE(start_date) WHERE blocked_date IS NULL"))
@@ -613,8 +643,8 @@ async def startup_event():
             print("✓ Created host_booking_issues table")
 
         # Check and add missing columns to bookings table
-        if 'bookings' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('bookings')]
+        if "bookings" in table_names:
+            columns = await _async_insp_column_names(conn, "bookings")
             if 'dropoff_same_as_pickup' not in columns:
                 await conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_same_as_pickup INTEGER DEFAULT 1 NOT NULL"))
                 await conn.commit()
@@ -629,8 +659,8 @@ async def startup_event():
                 print("✓ Added dropoff_confirmed_at column to bookings table")
 
         # Check and add missing columns to withdrawals table
-        if 'withdrawals' in table_names:
-            columns = [col['name'] for col in inspector.get_columns('withdrawals')]
+        if "withdrawals" in table_names:
+            columns = await _async_insp_column_names(conn, "withdrawals")
             if 'checkout_request_id' not in columns:
                 await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN checkout_request_id VARCHAR(255)"))
                 await conn.commit()
@@ -696,19 +726,7 @@ async def startup_event():
             await db.rollback()
     
     print("✅ Startup complete!")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Run DB migrations in a background thread so the server accepts connections immediately (Swagger/docs work right away)."""
-    print("🚀 Starting up...")
-    # Run blocking startup in thread without awaiting – server becomes ready and Swagger loads immediately
-    asyncio.create_task(asyncio.to_thread(_run_sync_startup))
-    # Server is ready now; test with GET /health or GET /docs (if loading forever, check Windows Firewall for port 8001)
-    print("✅ Server ready to accept connections (migrations run in background). Try http://127.0.0.1:8001/health or http://127.0.0.1:8001/docs")
-    # Start background task to expire unpaid PENDING bookings (free car after e.g. 30 min)
     asyncio.create_task(_run_expire_pending_bookings_loop())
-    # Send pickup reminders when pickup is in ~24 hours
     asyncio.create_task(_run_pickup_reminder_loop())
 
 
@@ -726,15 +744,13 @@ async def _run_expire_pending_bookings_loop():
     )
     while True:
         await asyncio.sleep(interval_seconds)
-        db = SessionLocal()
         try:
-            n = await asyncio.to_thread(expire_pending_bookings, db)
+            async with SessionLocal() as db:
+                n = await expire_pending_bookings(db)
             if n:
                 _log.info("[EXPIRE] Expired %s unpaid pending booking(s)", n)
         except Exception as e:
             _log.exception("[EXPIRE] Error expiring pending bookings: %s", e)
-        finally:
-            db.close()
 
 
 async def _run_pickup_reminder_loop():
@@ -748,33 +764,30 @@ async def _run_pickup_reminder_loop():
     _log.info("[PICKUP_REMINDER] Loop started, check every %s min", interval_minutes)
     while True:
         await asyncio.sleep(interval_seconds)
-        db = SessionLocal()
         try:
-            now = datetime.now(timezone.utc)
-            window_start = now + timedelta(hours=23)
-            window_end = now + timedelta(hours=25)
-            bookings = (
-                db.query(Booking)
-                .filter(
-                    Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
-                    Booking.start_date >= window_start,
-                    Booking.start_date <= window_end,
-                    Booking.pickup_reminder_sent_at.is_(None),
+            async with SessionLocal() as db:
+                now = datetime.now(timezone.utc)
+                window_start = now + timedelta(hours=23)
+                window_end = now + timedelta(hours=25)
+                result = await db.execute(
+                    select(Booking).where(
+                        Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
+                        Booking.start_date >= window_start,
+                        Booking.start_date <= window_end,
+                        Booking.pickup_reminder_sent_at.is_(None),
+                    )
                 )
-                .all()
-            )
-            for b in bookings:
-                try:
-                    ok = await asyncio.to_thread(send_pickup_reminder_email, b.id)
-                    if ok:
-                        b.pickup_reminder_sent_at = now
-                        db.commit()
-                except Exception as e:
-                    _log.exception("[PICKUP_REMINDER] Failed for booking_id=%s: %s", b.id, e)
+                bookings = result.scalars().all()
+                for b in bookings:
+                    try:
+                        ok = await asyncio.to_thread(send_pickup_reminder_email, b.id)
+                        if ok:
+                            b.pickup_reminder_sent_at = now
+                            await db.commit()
+                    except Exception as e:
+                        _log.exception("[PICKUP_REMINDER] Failed for booking_id=%s: %s", b.id, e)
         except Exception as e:
             _log.exception("[PICKUP_REMINDER] Loop error: %s", e)
-        finally:
-            db.close()
 
 
 # Ensure all error responses are valid JSON (avoids "JSON parse error" in production)
