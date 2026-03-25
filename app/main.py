@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GzipMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
