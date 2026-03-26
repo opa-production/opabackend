@@ -1,5 +1,7 @@
-from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import timedelta, datetime, timezone
+from jose import jwt
+from fastapi import APIRouter, Depends, HTTPException, status, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -15,7 +17,11 @@ from app.auth import (
     create_access_token,
     get_admin_by_email,
     get_current_admin,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    blacklist_token,
+    is_token_blacklisted,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    SECRET_KEY,
+    ALGORITHM
 )
 
 router = APIRouter()
@@ -74,12 +80,29 @@ async def login_admin(
 
 
 @router.post("/admin/auth/logout")
-async def logout_admin(current_admin: Admin = Depends(get_current_admin)):
+async def logout_admin(
+    credentials: HTTPAuthorizationCredentials = Security(HTTPBearer()),
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin)
+):
     """
     Logout endpoint for admins
     
-    Note: JWT tokens are stateless. The client should discard the token.
+    Blacklists the JWT access token to prevent further use.
     """
+    # Check if access token is already blacklisted
+    if await is_token_blacklisted(db, credentials.credentials):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has already been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Blacklist access token
+    payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+    expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+    await blacklist_token(db, credentials.credentials, expires_at)
+    
     return {"message": "Successfully logged out"}
 
 

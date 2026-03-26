@@ -1536,6 +1536,11 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., description="Valid refresh token")
 
 
+class LogoutRequest(BaseModel):
+    """Request to logout and revoke tokens"""
+    refresh_token: str = Field(..., description="Refresh token to revoke")
+
+
 class TokenPairResponse(BaseModel):
     """Response containing both access and refresh tokens"""
     access_token: str

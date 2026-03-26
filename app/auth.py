@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import Host, Client, Admin
+from app.models import Host, Client, Admin, BlacklistedToken
 from app.schemas import TokenData
 from app.config import settings
 
@@ -201,6 +201,31 @@ async def get_admin_by_email(db: AsyncSession, email: str) -> Optional[Admin]:
     return result.scalar_one_or_none()
 
 
+async def is_token_blacklisted(db: AsyncSession, token: str) -> bool:
+    """Check if a token is blacklisted"""
+    result = await db.execute(
+        select(BlacklistedToken).filter(
+            BlacklistedToken.token == token,
+            BlacklistedToken.expires_at > datetime.utcnow()
+        )
+    )
+    blacklisted = result.scalar_one_or_none()
+    return blacklisted is not None
+
+
+async def blacklist_token(db: AsyncSession, token: str, expires_at: datetime) -> None:
+    """Add a token to the blacklist"""
+    # Check if already blacklisted
+    result = await db.execute(select(BlacklistedToken).filter(BlacklistedToken.token == token))
+    existing = result.scalar_one_or_none()
+    if existing:
+        return  # Already blacklisted
+    
+    blacklisted_token = BlacklistedToken(token=token, expires_at=expires_at)
+    db.add(blacklisted_token)
+    await db.commit()
+
+
 async def get_current_host(
     credentials: HTTPAuthorizationCredentials = Security(security),
     db: AsyncSession = Depends(get_db)
@@ -215,6 +240,14 @@ async def get_current_host(
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Check if token is blacklisted
+        if await is_token_blacklisted(db, token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
         # Verify token role is "host"
         role = payload.get("role")
@@ -296,6 +329,14 @@ async def get_current_client(
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         
+        # Check if token is blacklisted
+        if await is_token_blacklisted(db, token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
         # Verify token role is "client"
         role = payload.get("role")
         if role != "client":
@@ -375,6 +416,14 @@ async def get_current_admin(
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Check if token is blacklisted
+        if await is_token_blacklisted(db, token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
         # Verify token role is "admin"
         role = payload.get("role")

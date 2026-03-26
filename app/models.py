@@ -1077,3 +1077,13 @@ class WishlistItem(Base):
 
     client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
     car: Mapped["Car"] = relationship("Car", foreign_keys=[car_id])
+
+
+class BlacklistedToken(Base):
+    """Blacklisted JWT tokens for logout functionality."""
+    __tablename__ = "blacklisted_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    token: Mapped[str] = mapped_column(String(500), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

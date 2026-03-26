@@ -1,7 +1,9 @@
 import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
+from jose import jwt
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from slowapi import Limiter
@@ -44,6 +46,7 @@ from app.schemas import (
     BiometricLoginRequest,
     BiometricRevokeRequest,
     NotificationToggleRequest,
+    LogoutRequest,
 )
 from app.auth import (
     get_password_hash,
@@ -56,7 +59,11 @@ from app.auth import (
     verify_password_reset_token,
     get_client_by_email,
     get_current_client,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    blacklist_token,
+    is_token_blacklisted,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    SECRET_KEY,
+    ALGORITHM
 )
 from app.services.email_welcome import (
     send_welcome_email_client,
@@ -300,14 +307,45 @@ async def reset_password(
 
 
 @router.post("/client/auth/logout")
-async def logout_client(current_client: Client = Depends(get_current_client)):
+async def logout_client(
+    request_body: LogoutRequest,
+    credentials: HTTPAuthorizationCredentials = Security(HTTPBearer()),
+    db: AsyncSession = Depends(get_db),
+    current_client: Client = Depends(get_current_client)
+):
     """
     Logout endpoint for clients
     
-    Note: JWT tokens are stateless. In a production environment, you might want to
-    implement token blacklisting. For now, this endpoint is provided for API
-    consistency. The client should discard the token.
+    Blacklists both access and refresh tokens to prevent further use.
+    
+    - **refresh_token**: The refresh token to revoke
     """
+    # Check if access token is already blacklisted
+    if await is_token_blacklisted(db, credentials.credentials):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has already been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check if refresh token is already blacklisted
+    if await is_token_blacklisted(db, request_body.refresh_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has already been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Blacklist access token
+    access_payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+    access_expires_at = datetime.fromtimestamp(access_payload["exp"], tz=timezone.utc)
+    await blacklist_token(db, credentials.credentials, access_expires_at)
+    
+    # Blacklist refresh token
+    refresh_payload = jwt.decode(request_body.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+    refresh_expires_at = datetime.fromtimestamp(refresh_payload["exp"], tz=timezone.utc)
+    await blacklist_token(db, request_body.refresh_token, refresh_expires_at)
+    
     return {"message": "Successfully logged out"}
 
 
