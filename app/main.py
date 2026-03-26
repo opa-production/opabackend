@@ -213,7 +213,7 @@ app.state.limiter = limiter
 # Add rate limit exceeded handler
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# 3. Gzip compression for faster responses
+# 3. Gzip compression for faster responses 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # 4. CORS middleware
