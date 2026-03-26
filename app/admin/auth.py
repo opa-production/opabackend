@@ -33,6 +33,7 @@ async def login_admin(
     - **password**: Admin password
     
     Returns JWT access token for admin endpoints.
+
     """
     # Get admin by email
     admin = await get_admin_by_email(db, request.email)
