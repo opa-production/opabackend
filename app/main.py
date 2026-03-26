@@ -219,15 +219,15 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # 4. CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], #settings.ALLOWED_ORIGINS,
+    allow_origins=[],  # settings.ALLOWED_ORIGINS,
     # "Forever" CORS:
     # - Local dev may use different hostnames and ports (e.g. 127.0.0.1:5500 vs localhost:5500)
     # - Frontend/admin are on ardena subdomains.
     # If ALLOWED_ORIGINS doesn't include a specific origin, this regex can still allow it.
-    # allow_origin_regex=os.getenv(
-    #     "CORS_ALLOW_ORIGIN_REGEX",
-    #     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-z0-9-]+\.)?ardena\.(xyz|co\.ke)(:\d+)?$",
-    # ),
+    allow_origin_regex=os.getenv(
+        "CORS_ALLOW_ORIGIN_REGEX",
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-z0-9-]+\.)?ardena\.(xyz|co\.ke)(:\d+)?$",
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
