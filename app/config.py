@@ -17,10 +17,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
-    # Database configuration
+    # Database configuration (PostgreSQL only)
     DATABASE_URL: Optional[str] = None
     
-    # Supabase configuration
+    # Test database configuration
+    TEST_MODE: bool = False
+    TEST_DATABASE_URL: Optional[str] = None
+    
+    # Supabase Storage configuration (for media uploads only)
     SUPABASE_URL: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     

@@ -3,40 +3,31 @@ from sqlalchemy.orm import declarative_base
 from app.config import settings
 import os
 
-# Default to SQLite if DATABASE_URL is not provided
-# But ensure we use the async driver for PostgreSQL if provided
-if settings.DATABASE_URL:
+# PostgreSQL database URL configuration
+# Priority: TEST_DATABASE_URL (if TEST_MODE) > DATABASE_URL
+if settings.TEST_MODE and settings.TEST_DATABASE_URL:
+    SQLALCHEMY_DATABASE_URL = settings.TEST_DATABASE_URL
+    print(f"Using TEST_DATABASE_URL (PostgreSQL)")
+elif settings.DATABASE_URL:
     SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
-elif settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
-    # Construct DATABASE_URL from Supabase
-    from urllib.parse import urlparse
-    parsed = urlparse(settings.SUPABASE_URL)
-    project_id = parsed.netloc.split('.')[0]  # e.g., project-id from https://project-id.supabase.co
-    SQLALCHEMY_DATABASE_URL = f"postgresql+asyncpg://postgres:{settings.SUPABASE_SERVICE_ROLE_KEY}@db.{project_id}.supabase.co:5432/postgres"
+    print(f"Using DATABASE_URL (PostgreSQL)")
 else:
-    SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./car_rental.db"
+    raise ValueError(
+        "No database configuration found. Please set DATABASE_URL for PostgreSQL database."
+    )
 
-# asyncpg requires postgresql+asyncpg:// instead of postgresql://
+# Ensure PostgreSQL URL uses asyncpg driver
 if SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 elif SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-# Sync sqlite:// uses pysqlite; create_async_engine needs sqlite+aiosqlite://
-elif SQLALCHEMY_DATABASE_URL.split("://", 1)[0] == "sqlite":
-    rest = SQLALCHEMY_DATABASE_URL.split("://", 1)[1]
-    SQLALCHEMY_DATABASE_URL = f"sqlite+aiosqlite://{rest}"
-
-# For SQLite, we need to ensure check_same_thread is handled if it was a sync connection,
-# but aiosqlite handles it differently. 
-connect_args = {}
-if "sqlite" in SQLALCHEMY_DATABASE_URL:
-    connect_args = {"check_same_thread": False}
 
 engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL, 
     echo=False,
-    connect_args=connect_args,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    pool_size=20,
+    max_overflow=10
 )
 
 # Create a configured "Session" class

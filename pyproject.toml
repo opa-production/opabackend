@@ -5,7 +5,6 @@ description = "The backend system for opabackend"
 readme = "README.md"
 requires-python = ">=3.12.8"
 dependencies = [
-    "aiosqlite>=0.20.0",
     "asyncpg>=0.31.0",
     "bcrypt==4.1.2",
     "fastapi==0.104.1",

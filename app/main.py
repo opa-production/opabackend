@@ -297,7 +297,7 @@ app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subs
 
 
 async def _async_insp_table_names(conn) -> set:
-    """Table names via sync inspector inside greenlet (required for aiosqlite)."""
+    """Table names via sync inspector inside greenlet (required for async SQLAlchemy)."""
 
     def _f(sync_conn):
         return set(inspect(sync_conn).get_table_names())
@@ -517,75 +517,17 @@ async def migrate_database():
                 except Exception as e:
                     print(f"⚠️  Error adding client_id to payment_methods: {e}")
             
-            # SQLite doesn't support ALTER COLUMN to change nullability directly
-            # We need to recreate the table. Check if host_id is NOT NULL
+            # PostgreSQL can handle ALTER COLUMN directly
             if 'host_id' in column_info:
                 host_id_nullable = column_info['host_id'].get('nullable', False)
                 if not host_id_nullable:
-                    print("⚠️  payment_methods.host_id is NOT NULL, recreating table to make it nullable...")
+                    print("⚠️  payment_methods.host_id is NOT NULL, altering to nullable...")
                     try:
-                        # Drop temp table if it exists from previous failed migration
-                        try:
-                            await conn.execute(text("DROP TABLE IF EXISTS payment_methods_new"))
-                        except Exception:
-                            pass
-                        
-                        # Create new table with correct schema
-                        await conn.execute(text("""
-                            CREATE TABLE payment_methods_new (
-                                id INTEGER PRIMARY KEY,
-                                host_id INTEGER,
-                                client_id INTEGER,
-                                name VARCHAR(255) NOT NULL,
-                                method_type VARCHAR(20) NOT NULL,
-                                mpesa_number VARCHAR(20),
-                                card_number_hash VARCHAR(255),
-                                card_last_four VARCHAR(4),
-                                card_type VARCHAR(20),
-                                expiry_month INTEGER,
-                                expiry_year INTEGER,
-                                cvc_hash VARCHAR(255),
-                                is_default INTEGER DEFAULT 0,
-                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                                updated_at DATETIME,
-                                FOREIGN KEY(host_id) REFERENCES hosts(id),
-                                FOREIGN KEY(client_id) REFERENCES clients(id)
-                            )
-                        """))
-                        
-                        # Copy existing data - preserve ALL existing payment methods (both host and client)
-                        old_columns = await _async_insp_column_names(conn, "payment_methods")
-                        select_parts = []
-                        select_parts.append('id')
-                        select_parts.append('host_id')
-                        select_parts.append('NULL as client_id')
-                        
-                        for col in ['name', 'method_type', 'mpesa_number', 'card_number_hash', 
-                                   'card_last_four', 'card_type', 'expiry_month', 'expiry_year', 
-                                   'cvc_hash', 'is_default', 'created_at', 'updated_at']:
-                            if col in old_columns:
-                                select_parts.append(col)
-                            else:
-                                select_parts.append(f'NULL as {col}')
-                        
-                        select_sql = f"SELECT {', '.join(select_parts)} FROM payment_methods"
-                        insert_sql = f"""
-                            INSERT INTO payment_methods_new 
-                            (id, host_id, client_id, name, method_type, mpesa_number, 
-                             card_number_hash, card_last_four, card_type, expiry_month, 
-                             expiry_year, cvc_hash, is_default, created_at, updated_at)
-                            {select_sql}
-                        """
-                        await conn.execute(text(insert_sql))
-                        
-                        # Drop old table
-                        await conn.execute(text("DROP TABLE payment_methods"))
-                        # Rename new table
-                        await conn.execute(text("ALTER TABLE payment_methods_new RENAME TO payment_methods"))
+                        await conn.execute(text("ALTER TABLE payment_methods ALTER COLUMN host_id DROP NOT NULL"))
                         await conn.commit()
-                        print("✓ Recreated payment_methods table with nullable host_id and client_id")
+                        print("✓ Made payment_methods.host_id nullable")
                     except Exception as e:
-                        print(f"⚠️  Error recreating payment_methods table: {e}")
+                        print(f"⚠️  Error altering payment_methods table: {e}")
         
         # Create notifications table if it doesn't exist
         if 'notifications' not in table_names:
