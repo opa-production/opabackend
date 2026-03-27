@@ -443,8 +443,10 @@ async def get_car_media(
         "storage_images": 0,
         "storage_videos": 0,
         "db_image_urls": 0,
+        "db_car_images": 0,
         "db_cover_image": 0,
         "db_video_url": 0,
+        "db_car_video": 0,
     }
     image_exts = (".jpg", ".jpeg", ".png", ".webp")
     video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
@@ -512,12 +514,30 @@ async def get_car_media(
     legacy_images = _extract_legacy_image_urls(car.image_urls)
     image_urls.extend(legacy_images)
     source_counts["db_image_urls"] = len(legacy_images)
+    
+    # Check new car_images field
+    if car.car_images:
+        try:
+            car_images_parsed = json.loads(car.car_images)
+            if isinstance(car_images_parsed, list):
+                image_urls.extend(car_images_parsed)
+                source_counts["db_car_images"] = len(car_images_parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
     if car.cover_image:
         image_urls.append(car.cover_image)
         source_counts["db_cover_image"] = 1
+        
+    # Check legacy video_url
     if car.video_url:
         video_urls.append(car.video_url)
         source_counts["db_video_url"] = 1
+        
+    # Check new car_video field
+    if car.car_video:
+        video_urls.append(car.car_video)
+        source_counts["db_car_video"] = 1
 
     # Preserve order while removing duplicates.
     image_urls_before_dedupe = len(image_urls)

@@ -413,8 +413,10 @@ async def upload_vehicle_images(
         
         uploaded_urls.append(result["url"])
     
-    # Update car image URLs in database
-    car.image_urls = json.dumps(uploaded_urls)
+    # Update car image URLs in database (both legacy and new fields)
+    car.image_urls = json.dumps(uploaded_urls)  # Legacy field for backward compatibility
+    car.car_images = json.dumps(uploaded_urls)  # New field for frontend
+    car.cover_image = uploaded_urls[0] if uploaded_urls else None  # Set cover to first image
     await db.commit()
     await db.refresh(car)
     
@@ -484,8 +486,9 @@ async def upload_vehicle_video(
         content_type=file.content_type
     )
     
-    # Update database
-    car.video_url = result["url"]
+    # Update database (both legacy and new fields)
+    car.video_url = result["url"]  # Legacy field for backward compatibility
+    car.car_video = result["url"]  # New field for frontend
     await db.commit()
     await db.refresh(car)
     

@@ -564,6 +564,65 @@ async def migrate_database():
             print("✓ Support conversations table will be created")
 
 
+async def migrate_car_media_data(conn):
+    """Migrate existing car media data from legacy fields to new fields"""
+    import json
+    
+    # Check if cars table exists
+    table_names = await _async_insp_table_names(conn)
+    if 'cars' not in table_names:
+        return
+    
+    # Get all cars with legacy media data
+    result = await conn.execute(text("SELECT id, image_urls, video_url, car_images, cover_image, car_video FROM cars"))
+    cars = result.fetchall()
+    
+    migrated_count = 0
+    for car in cars:
+        car_id, image_urls, video_url, car_images, cover_image, car_video = car
+        
+        updates = {}
+        
+        # Migrate image_urls to car_images if car_images is empty
+        if image_urls and not car_images:
+            try:
+                # image_urls should already be JSON, but let's ensure it's valid
+                parsed_urls = json.loads(image_urls) if isinstance(image_urls, str) else image_urls
+                if isinstance(parsed_urls, list) and parsed_urls:
+                    updates['car_images'] = json.dumps(parsed_urls)
+                    # Set cover_image to first image if not set
+                    if not cover_image and parsed_urls:
+                        updates['cover_image'] = parsed_urls[0]
+            except (json.JSONDecodeError, TypeError):
+                # If image_urls is not valid JSON, try to treat it as a single URL
+                if image_urls and isinstance(image_urls, str):
+                    updates['car_images'] = json.dumps([image_urls])
+                    if not cover_image:
+                        updates['cover_image'] = image_urls
+        
+        # Migrate video_url to car_video if car_video is empty
+        if video_url and not car_video:
+            updates['car_video'] = video_url
+        
+        # Apply updates if any
+        if updates:
+            set_parts = []
+            params = {'car_id': car_id}
+            
+            for field, value in updates.items():
+                set_parts.append(f"{field} = :{field}")
+                params[field] = value
+            
+            if set_parts:
+                query = f"UPDATE cars SET {', '.join(set_parts)} WHERE id = :car_id"
+                await conn.execute(text(query), params)
+                migrated_count += 1
+    
+    if migrated_count > 0:
+        await conn.commit()
+        print(f"✓ Migrated media data for {migrated_count} cars from legacy to new fields")
+
+
 @app.on_event("startup")
 async def startup_database():
     """Create database tables on startup and create default super admin"""
@@ -571,6 +630,10 @@ async def startup_database():
     
     # Run migrations first
     await migrate_database()
+    
+    # Run car media data migration
+    async with engine.connect() as conn:
+        await migrate_car_media_data(conn)
     
     # Then create all tables
     async with engine.begin() as conn:
@@ -719,6 +782,9 @@ async def startup_database():
                 await conn.execute(text("ALTER TABLE withdrawals ADD COLUMN mpesa_transaction_date VARCHAR(50)"))
                 await conn.commit()
                 print("✓ Added mpesa_transaction_date column to withdrawals table")
+    
+    # Migrate existing car media data from legacy to new fields
+    await migrate_car_media_data(conn)
     
     # Create default super admin if it doesn't exist
     async with SessionLocal() as db:
