@@ -26,7 +26,8 @@ if "sqlite" in SQLALCHEMY_DATABASE_URL:
 engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL, 
     echo=False,
-    connect_args=connect_args
+    connect_args=connect_args,
+    pool_pre_ping=True
 )
 
 # Create a configured "Session" class

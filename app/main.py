@@ -302,7 +302,14 @@ async def _async_insp_table_names(conn) -> set:
     def _f(sync_conn):
         return set(inspect(sync_conn).get_table_names())
 
-    return await conn.run_sync(_f)
+    for attempt in range(3):
+        try:
+            return await conn.run_sync(_f)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"Attempt {attempt + 1} failed: {e}, retrying...")
+            await asyncio.sleep(0.1)
 
 
 async def _async_insp_column_names(conn, table: str) -> list:
@@ -312,7 +319,14 @@ async def _async_insp_column_names(conn, table: str) -> list:
             return []
         return [c["name"] for c in insp.get_columns(table)]
 
-    return await conn.run_sync(_f)
+    for attempt in range(3):
+        try:
+            return await conn.run_sync(_f)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"Attempt {attempt + 1} failed: {e}, retrying...")
+            await asyncio.sleep(0.1)
 
 
 async def _async_insp_column_info(conn, table: str) -> dict:
@@ -323,6 +337,33 @@ async def _async_insp_column_info(conn, table: str) -> dict:
         return {c["name"]: c for c in insp.get_columns(table)}
 
     return await conn.run_sync(_f)
+
+
+migration_lock_file = os.path.join(os.getcwd(), 'migration.lock')
+
+async def run_migrations():
+    try:
+        import fcntl
+        lock_file = '/tmp/fastapi_migration.lock'
+        with open(lock_file, 'w') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                if not os.path.exists(migration_lock_file):
+                    with open(migration_lock_file, 'w') as f2:
+                        f2.write('1')
+                    await migrate_database()
+                    async with engine.connect() as conn:
+                        await migrate_car_media_data(conn)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except ImportError:
+        # On systems without fcntl (like Windows), just run without lock
+        if not os.path.exists(migration_lock_file):
+            with open(migration_lock_file, 'w') as f2:
+                f2.write('1')
+            await migrate_database()
+            async with engine.connect() as conn:
+                await migrate_car_media_data(conn)
 
 
 async def migrate_database():
@@ -629,11 +670,7 @@ async def startup_database():
     print("🚀 Starting up...")
     
     # Run migrations first
-    await migrate_database()
-    
-    # Run car media data migration
-    async with engine.connect() as conn:
-        await migrate_car_media_data(conn)
+    await run_migrations()
     
     # Then create all tables
     async with engine.begin() as conn:
