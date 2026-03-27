@@ -643,6 +643,30 @@ async def startup_database():
             await conn.run_sync(create_table)
             print("✓ Created client_kycs table")
 
+        # Ensure client_wallets table exists (Ardena Pay / Stellar)
+        if 'client_wallets' not in table_names:
+            print("⚠️  client_wallets table missing, creating...")
+            from app.models import ClientWallet
+            await conn.run_sync(lambda sync_conn: ClientWallet.__table__.create(sync_conn, checkfirst=True))
+            print("✓ Created client_wallets table")
+        else:
+            # Add balance cache columns if missing (stored in DB for easier retrieval)
+            cw_columns = await conn.run_sync(
+                lambda sync_conn: [col['name'] for col in inspect(sync_conn).get_columns('client_wallets')]
+            )
+            if 'balance_xlm' not in cw_columns:
+                await conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_xlm VARCHAR(50) DEFAULT '0'"))
+                await conn.commit()
+                print("✓ Added balance_xlm column to client_wallets table")
+            if 'balance_usdc' not in cw_columns:
+                await conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_usdc VARCHAR(50) DEFAULT '0'"))
+                await conn.commit()
+                print("✓ Added balance_usdc column to client_wallets table")
+            if 'balance_updated_at' not in cw_columns:
+                await conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_updated_at DATETIME"))
+                await conn.commit()
+                print("✓ Added balance_updated_at column to client_wallets table")
+
         # Ensure host_booking_issues table exists
         if 'host_booking_issues' not in table_names:
             print("⚠️  host_booking_issues table missing, creating...")
