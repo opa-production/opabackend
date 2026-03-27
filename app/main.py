@@ -762,8 +762,8 @@ async def startup_database():
                 await conn.commit()
                 print("✓ Added mpesa_transaction_date column to withdrawals table")
     
-    # Migrate existing car media data from legacy to new fields
-    await migrate_car_media_data(conn)
+        # Migrate existing car media data from legacy to new fields
+        await migrate_car_media_data(conn)
     
     # Create default super admin if it doesn't exist
     async with SessionLocal() as db:
