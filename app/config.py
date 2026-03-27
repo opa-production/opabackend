@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Database configuration
     DATABASE_URL: Optional[str] = None
     
+    # Supabase configuration
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    
     # SendGrid API configuration
     SENDGRID_API_KEY: Optional[str] = None
     

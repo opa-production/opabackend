@@ -5,7 +5,16 @@ import os
 
 # Default to SQLite if DATABASE_URL is not provided
 # But ensure we use the async driver for PostgreSQL if provided
-SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL or "sqlite+aiosqlite:///./car_rental.db"
+if settings.DATABASE_URL:
+    SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
+elif settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
+    # Construct DATABASE_URL from Supabase
+    from urllib.parse import urlparse
+    parsed = urlparse(settings.SUPABASE_URL)
+    project_id = parsed.netloc.split('.')[0]  # e.g., project-id from https://project-id.supabase.co
+    SQLALCHEMY_DATABASE_URL = f"postgresql+asyncpg://postgres:{settings.SUPABASE_SERVICE_ROLE_KEY}@db.{project_id}.supabase.co:5432/postgres"
+else:
+    SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./car_rental.db"
 
 # asyncpg requires postgresql+asyncpg:// instead of postgresql://
 if SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
