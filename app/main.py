@@ -399,7 +399,7 @@ async def migrate_database():
                 await conn.commit()
                 print("✓ Added google_id column to hosts table")
             if 'terms_accepted_at' not in columns:
-                await conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at DATETIME"))
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added terms_accepted_at column to hosts table")
         
@@ -435,7 +435,7 @@ async def migrate_database():
                 await conn.commit()
                 print("✓ Added google_id column to clients table")
             if 'terms_accepted_at' not in columns:
-                await conn.execute(text("ALTER TABLE clients ADD COLUMN terms_accepted_at DATETIME"))
+                await conn.execute(text("ALTER TABLE clients ADD COLUMN terms_accepted_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added terms_accepted_at column to clients table")
             if 'email_notifications_enabled' not in columns:
@@ -672,7 +672,7 @@ async def startup_database():
                 await conn.commit()
                 print("✓ Added reason column to car_blocked_dates table")
             if 'created_at' not in columns:
-                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at DATETIME"))
+                await conn.execute(text("ALTER TABLE car_blocked_dates ADD COLUMN created_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added created_at column to car_blocked_dates table")
         
@@ -705,7 +705,7 @@ async def startup_database():
                 await conn.commit()
                 print("✓ Added balance_usdc column to client_wallets table")
             if 'balance_updated_at' not in cw_columns:
-                await conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_updated_at DATETIME"))
+                await conn.execute(text("ALTER TABLE client_wallets ADD COLUMN balance_updated_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added balance_updated_at column to client_wallets table")
 
@@ -726,11 +726,11 @@ async def startup_database():
                 await conn.commit()
                 print("✓ Added dropoff_same_as_pickup column to bookings table")
             if 'pickup_confirmed_at' not in columns:
-                await conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_confirmed_at DATETIME"))
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN pickup_confirmed_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added pickup_confirmed_at column to bookings table")
             if 'dropoff_confirmed_at' not in columns:
-                await conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at DATETIME"))
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN dropoff_confirmed_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added dropoff_confirmed_at column to bookings table")
 
