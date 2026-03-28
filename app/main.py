@@ -173,6 +173,7 @@ app = FastAPI(
         {"name": "Client Refunds", "description": "Client‑visible refund records for bookings"},
         {"name": "Client Emergency", "description": "Emergency messages from clients with location"},
         {"name": "Client Wishlist", "description": "Client car wishlist (liked cars)"},
+        {"name": "Ardena Pay", "description": "Client Stellar wallet: create, balances, incoming payments"},
         {"name": "Admin Auth", "description": "Admin authentication"},
         {"name": "Admin User Management", "description": "User management"},
         {"name": "Admin Car Management", "description": "Car verification"},
@@ -274,6 +275,7 @@ app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
 app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
+app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
