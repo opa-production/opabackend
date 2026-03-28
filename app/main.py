@@ -349,31 +349,28 @@ async def _async_insp_column_info(conn, table: str) -> dict:
             await asyncio.sleep(0.1)
 
 
-migration_lock_file = os.path.join(os.getcwd(), 'migration.lock')
-
 async def run_migrations():
+    """Run idempotent schema/data patches on every startup.
+
+    Previously migrations ran only once (guarded by cwd/migration.lock), so new
+    ALTERs (e.g. cars draft columns DROP NOT NULL) never ran after the first boot.
+    """
     try:
         import fcntl
         lock_file = '/tmp/fastapi_migration.lock'
         with open(lock_file, 'w') as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                if not os.path.exists(migration_lock_file):
-                    with open(migration_lock_file, 'w') as f2:
-                        f2.write('1')
-                    await migrate_database()
-                    async with engine.connect() as conn:
-                        await migrate_car_media_data(conn)
+                await migrate_database()
+                async with engine.connect() as conn:
+                    await migrate_car_media_data(conn)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except ImportError:
-        # On systems without fcntl (like Windows), just run without lock
-        if not os.path.exists(migration_lock_file):
-            with open(migration_lock_file, 'w') as f2:
-                f2.write('1')
-            await migrate_database()
-            async with engine.connect() as conn:
-                await migrate_car_media_data(conn)
+        # Windows / no fcntl: no cross-process lock (avoid multiple uvicorn workers racing locally)
+        await migrate_database()
+        async with engine.connect() as conn:
+            await migrate_car_media_data(conn)
 
 
 async def migrate_database():
