@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.auth import get_current_host
@@ -61,10 +62,11 @@ async def list_host_subscription_plans():
 @router.get("/host/subscription/me", response_model=HostSubscriptionMeResponse)
 async def get_my_subscription(
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Current host's subscription tier and expiry (free if never paid or expired)."""
-    host = db.query(Host).filter(Host.id == current_host.id).first()
+    result = await db.execute(select(Host).where(Host.id == current_host.id))
+    host = result.scalar_one_or_none()
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
 
@@ -80,7 +82,7 @@ async def get_my_subscription(
         days_remaining = max(0, (exp - now).days)
 
     window_sec = stk_pending_window_seconds()
-    pending = get_active_pending_subscription_payment(db, host.id)
+    pending = await get_active_pending_subscription_payment(db, host.id)
     pending_secs = pending_subscription_seconds_remaining(pending) if pending else None
 
     return HostSubscriptionMeResponse(
@@ -104,7 +106,7 @@ async def get_my_subscription(
 async def host_subscription_checkout(
     body: HostSubscriptionCheckoutRequest,
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Start M-Pesa STK Push for **starter** or **premium** subscription (Payhero, same as bookings).
@@ -125,7 +127,7 @@ async def host_subscription_checkout(
         )
 
     # One in-window pending STK per host (server auto-expires after HOST_SUB_STK_PENDING_WINDOW_SECONDS)
-    existing = get_active_pending_subscription_payment(db, current_host.id)
+    existing = await get_active_pending_subscription_payment(db, current_host.id)
     if existing:
         sec = pending_subscription_seconds_remaining(existing)
         raise HTTPException(
@@ -146,10 +148,10 @@ async def host_subscription_checkout(
         status="pending",
     )
     db.add(rec)
-    db.flush()
+    await db.flush()
     rec.external_reference = f"H-SUB-{rec.id}"
-    db.commit()
-    db.refresh(rec)
+    await db.commit()
+    await db.refresh(rec)
 
     phone = _normalize_mpesa_phone(body.phone_number)
     amount_str = str(int(amount))
@@ -176,13 +178,13 @@ async def host_subscription_checkout(
             if mpesa_response
             else "No response from M-Pesa"
         )
-        db.commit()
+        await db.commit()
         err = rec.result_desc or "M-Pesa STK failed"
         raise HTTPException(status_code=400, detail=err)
 
     checkout_id = mpesa_response.get("CheckoutRequestID")
     rec.checkout_request_id = checkout_id
-    db.commit()
+    await db.commit()
 
     return HostSubscriptionCheckoutResponse(
         message="M-Pesa STK Push sent. Approve on your phone to activate your subscription.",
@@ -198,27 +200,27 @@ async def host_subscription_checkout(
 async def host_subscription_payment_status(
     checkout_request_id: str = Query(..., description="CheckoutRequestID from checkout response"),
     current_host: Host = Depends(get_current_host),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Poll subscription payment status after STK (same idea as client booking payment status)."""
-    expire_stale_host_subscription_payments(db, current_host.id)
+    await expire_stale_host_subscription_payments(db, current_host.id)
     lookup_id = (checkout_request_id or "").strip()
-    rec = (
-        db.query(HostSubscriptionPayment)
-        .filter(
+    result = await db.execute(
+        select(HostSubscriptionPayment)
+        .where(
             HostSubscriptionPayment.host_id == current_host.id,
             HostSubscriptionPayment.checkout_request_id == lookup_id,
         )
         .order_by(HostSubscriptionPayment.id.desc())
-        .first()
     )
+    rec = result.scalars().first()
     if not rec:
         raise HTTPException(status_code=404, detail="No subscription payment found for this checkout id")
 
     # If webhook never reached us, refresh from Payhero (GET transaction-status) — same backup idea as Pesapal on client status.
     if rec.status == "pending":
-        sync_pending_host_subscription_from_payhero(db, rec)
-        db.refresh(rec)
+        await sync_pending_host_subscription_from_payhero(db, rec)
+        await db.refresh(rec)
 
     try:
         st = HostSubscriptionPaymentStatusEnum(rec.status)

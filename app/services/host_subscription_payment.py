@@ -10,7 +10,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Host, HostSubscriptionPayment
 from app.services.mpesa_callback_utils import infer_insufficient_funds, normalize_stk_result_code
@@ -84,7 +85,9 @@ def get_subscription_plan_catalog() -> list[dict[str, Any]]:
     ]
 
 
-def expire_stale_host_subscription_payments(db: Session, host_id: Optional[int] = None) -> int:
+async def expire_stale_host_subscription_payments(
+    db: AsyncSession, host_id: Optional[int] = None
+) -> int:
     """
     Mark subscription STK rows stuck in `pending` longer than stk_pending_window_seconds() as `expired`.
     Host can start a new checkout after that (no more "wait 15 minutes" lockout).
@@ -93,12 +96,15 @@ def expire_stale_host_subscription_payments(db: Session, host_id: Optional[int] 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=window_sec)
 
-    q = db.query(HostSubscriptionPayment).filter(HostSubscriptionPayment.status == "pending")
+    stmt = select(HostSubscriptionPayment).where(HostSubscriptionPayment.status == "pending")
     if host_id is not None:
-        q = q.filter(HostSubscriptionPayment.host_id == host_id)
+        stmt = stmt.where(HostSubscriptionPayment.host_id == host_id)
+
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
 
     updated = 0
-    for row in q.all():
+    for row in rows:
         ca = _ensure_aware_utc(row.created_at)
         if ca is None or ca >= cutoff:
             continue
@@ -109,28 +115,28 @@ def expire_stale_host_subscription_payments(db: Session, host_id: Optional[int] 
         updated += 1
 
     if updated:
-        db.commit()
+        await db.commit()
     return updated
 
 
-def get_active_pending_subscription_payment(
-    db: Session, host_id: int
+async def get_active_pending_subscription_payment(
+    db: AsyncSession, host_id: int
 ) -> Optional[HostSubscriptionPayment]:
     """After expiring stale rows, return the host's current in-window pending STK, if any."""
-    expire_stale_host_subscription_payments(db, host_id)
+    await expire_stale_host_subscription_payments(db, host_id)
     window_sec = stk_pending_window_seconds()
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=window_sec)
 
-    pendings = (
-        db.query(HostSubscriptionPayment)
-        .filter(
+    result = await db.execute(
+        select(HostSubscriptionPayment)
+        .where(
             HostSubscriptionPayment.host_id == host_id,
             HostSubscriptionPayment.status == "pending",
         )
         .order_by(HostSubscriptionPayment.id.desc())
-        .all()
     )
+    pendings = list(result.scalars().all())
     for p in pendings:
         ca = _ensure_aware_utc(p.created_at)
         if ca is not None and ca >= cutoff:
@@ -193,8 +199,8 @@ def _payhero_subscription_sync_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
-def _host_subscription_mark_success(
-    db: Session,
+async def _host_subscription_mark_success(
+    db: AsyncSession,
     sub: HostSubscriptionPayment,
     *,
     result_code_str: str,
@@ -210,7 +216,8 @@ def _host_subscription_mark_success(
     sub.mpesa_phone = str(phone) if phone else None
     sub.mpesa_transaction_date = str(transaction_date) if transaction_date else None
 
-    host = db.query(Host).filter(Host.id == sub.host_id).first()
+    h_result = await db.execute(select(Host).where(Host.id == sub.host_id))
+    host = h_result.scalar_one_or_none()
     if host:
         now = datetime.now(timezone.utc)
         duration = timedelta(days=int(sub.duration_days))
@@ -233,7 +240,6 @@ def _host_subscription_mark_success(
 
 
 def _host_subscription_mark_failure(
-    db: Session,
     sub: HostSubscriptionPayment,
     *,
     result_code_str: str,
@@ -256,7 +262,9 @@ def _host_subscription_mark_failure(
     sub.result_code = rc or (str(result_code_str) if result_code_str else "")
 
 
-def process_host_subscription_mpesa_callback(db: Session, payload: Dict[str, Any]) -> bool:
+async def process_host_subscription_mpesa_callback(
+    db: AsyncSession, payload: Dict[str, Any]
+) -> bool:
     """
     If this callback belongs to a host subscription payment, update row and host plan.
     Returns True if handled (subscription), False if not a subscription payment.
@@ -269,34 +277,31 @@ def process_host_subscription_mpesa_callback(db: Session, payload: Dict[str, Any
 
     sub: Optional[HostSubscriptionPayment] = None
     if checkout_request_id:
-        sub = (
-            db.query(HostSubscriptionPayment)
-            .filter(
+        r1 = await db.execute(
+            select(HostSubscriptionPayment).where(
                 HostSubscriptionPayment.checkout_request_id == str(checkout_request_id),
                 HostSubscriptionPayment.status == "pending",
             )
-            .first()
         )
+        sub = r1.scalar_one_or_none()
     if not sub and external_reference:
         pid = _parse_h_sub_ref(external_reference)
         if pid is not None:
-            sub = (
-                db.query(HostSubscriptionPayment)
-                .filter(
+            r2 = await db.execute(
+                select(HostSubscriptionPayment).where(
                     HostSubscriptionPayment.id == pid,
                     HostSubscriptionPayment.status == "pending",
                 )
-                .first()
             )
+            sub = r2.scalar_one_or_none()
         if not sub:
-            sub = (
-                db.query(HostSubscriptionPayment)
-                .filter(
+            r3 = await db.execute(
+                select(HostSubscriptionPayment).where(
                     HostSubscriptionPayment.external_reference == str(external_reference),
                     HostSubscriptionPayment.status == "pending",
                 )
-                .first()
             )
+            sub = r3.scalar_one_or_none()
 
     if not sub:
         return False
@@ -312,7 +317,7 @@ def process_host_subscription_mpesa_callback(db: Session, payload: Dict[str, Any
     transaction_date = payload.get("TransactionDate")
 
     if is_success:
-        _host_subscription_mark_success(
+        await _host_subscription_mark_success(
             db,
             sub,
             result_code_str=result_code_str,
@@ -323,24 +328,25 @@ def process_host_subscription_mpesa_callback(db: Session, payload: Dict[str, Any
         )
     else:
         _host_subscription_mark_failure(
-            db,
             sub,
             result_code_str=result_code_str,
             result_desc=str(result_desc) if result_desc else "",
         )
 
-    db.commit()
+    await db.commit()
     return True
 
 
-def sync_pending_host_subscription_from_payhero(db: Session, rec: HostSubscriptionPayment) -> None:
+async def sync_pending_host_subscription_from_payhero(
+    db: AsyncSession, rec: HostSubscriptionPayment
+) -> None:
     """
     If still pending, ask Payhero for final status (SUCCESS/FAILED). Same idea as Pesapal sync on
     GET /client/payments/status — fixes cases where PAYHERO_CALLBACK_URL is wrong or webhook drops.
     """
     if not _payhero_subscription_sync_enabled():
         return
-    db.refresh(rec)
+    await db.refresh(rec)
     if rec.status != "pending":
         return
 
@@ -365,7 +371,7 @@ def sync_pending_host_subscription_from_payhero(db: Session, rec: HostSubscripti
         success_flag = data.get("success")
 
         if success_flag is True or st == "SUCCESS":
-            db.refresh(rec)
+            await db.refresh(rec)
             if rec.status != "pending":
                 return
             rc = normalize_stk_result_code(data.get("ResultCode", data.get("result_code", 0)))
@@ -383,7 +389,7 @@ def sync_pending_host_subscription_from_payhero(db: Session, rec: HostSubscripti
             )
             phone = data.get("PhoneNumber") or data.get("phone_number") or data.get("Phone")
             td = data.get("TransactionDate") or data.get("transaction_date")
-            _host_subscription_mark_success(
+            await _host_subscription_mark_success(
                 db,
                 rec,
                 result_code_str=rc or "0",
@@ -392,12 +398,12 @@ def sync_pending_host_subscription_from_payhero(db: Session, rec: HostSubscripti
                 phone=phone,
                 transaction_date=td,
             )
-            db.commit()
+            await db.commit()
             logger.info("[HOST SUB] Payhero status API → completed (ref tail=%s)", ref[-20:])
             return
 
         if st == "FAILED" or (success_flag is False and st not in ("QUEUED", "PENDING", "")):
-            db.refresh(rec)
+            await db.refresh(rec)
             if rec.status != "pending":
                 return
             rd = (
@@ -409,8 +415,8 @@ def sync_pending_host_subscription_from_payhero(db: Session, rec: HostSubscripti
             )
             rc_raw = data.get("ResultCode", data.get("result_code", ""))
             rc_str = str(rc_raw) if rc_raw is not None and str(rc_raw).strip() != "" else ""
-            _host_subscription_mark_failure(db, rec, result_code_str=rc_str, result_desc=str(rd))
-            db.commit()
+            _host_subscription_mark_failure(rec, result_code_str=rc_str, result_desc=str(rd))
+            await db.commit()
             logger.info("[HOST SUB] Payhero status API → %s (ref tail=%s)", rec.status, ref[-20:])
             return
 
