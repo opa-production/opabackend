@@ -773,6 +773,16 @@ async def startup_database():
         await migrate_car_media_data(conn)
     
     # Create default super admin if it doesn't exist
+    await _ensure_default_super_admin()
+    
+    print("✅ Startup complete!")
+    asyncio.create_task(_run_expire_pending_bookings_loop())
+    asyncio.create_task(_run_pickup_reminder_loop())
+
+
+async def _ensure_default_super_admin():
+    """Ensure the default super admin exists, handling race conditions from multiple workers."""
+    from sqlalchemy.exc import IntegrityError
     async with SessionLocal() as db:
         try:
             default_admin_email = "admin@carrental.com"
@@ -794,26 +804,27 @@ async def startup_database():
                 )
                 
                 db.add(super_admin)
-                await db.commit()
-                await db.refresh(super_admin)
-                
-                print("=" * 60)
-                print("DEFAULT SUPER ADMIN CREATED")
-                print("=" * 60)
-                print(f"Email: {default_admin_email}")
-                print(f"Password: {default_password}")
-                print("=" * 60)
-                print("⚠️  IMPORTANT: Change this password after first login!")
-                print("=" * 60)
+                try:
+                    await db.commit()
+                    await db.refresh(super_admin)
+                    
+                    print("=" * 60)
+                    print("DEFAULT SUPER ADMIN CREATED")
+                    print("=" * 60)
+                    print(f"Email: {default_admin_email}")
+                    print(f"Password: {default_password}")
+                    print("=" * 60)
+                    print("⚠️  IMPORTANT: Change this password after first login!")
+                    print("=" * 60)
+                except IntegrityError:
+                    await db.rollback()
+                    # Someone else created it in the meantime
+                    print(f"Super admin already exists (created by another worker): {default_admin_email}")
             else:
                 print(f"Super admin already exists: {default_admin_email}")
         except Exception as e:
             print(f"Error creating default super admin: {e}")
             await db.rollback()
-    
-    print("✅ Startup complete!")
-    asyncio.create_task(_run_expire_pending_bookings_loop())
-    asyncio.create_task(_run_pickup_reminder_loop())
 
 
 async def _run_expire_pending_bookings_loop():
