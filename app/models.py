@@ -573,22 +573,22 @@ class Car(Base):
     year: Mapped[int] = mapped_column(Integer)
     description: Mapped[str] = mapped_column(Text)
 
-    # Endpoint 2: Technical Specs
-    seats: Mapped[int] = mapped_column(Integer)
-    fuel_type: Mapped[str] = mapped_column(String(50))
-    transmission: Mapped[str] = mapped_column(String(50))
-    color: Mapped[str] = mapped_column(String(50))
-    mileage: Mapped[int] = mapped_column(Integer)
-    features: Mapped[str] = mapped_column(Text)  # JSON string for up to 12 features
+    # Endpoint 2: Technical Specs (nullable until PUT /cars/{id}/specs — draft row after basics)
+    seats: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fuel_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    transmission: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    color: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    mileage: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    features: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string for up to 12 features
 
-    # Endpoint 3: Pricing & Rules
-    daily_rate: Mapped[float] = mapped_column(Float)
-    weekly_rate: Mapped[float] = mapped_column(Float)
-    monthly_rate: Mapped[float] = mapped_column(Float)
-    min_rental_days: Mapped[int] = mapped_column(Integer)
-    max_rental_days: Mapped[int] = mapped_column(Integer, nullable=True)
-    min_age_requirement: Mapped[int] = mapped_column(Integer)
-    rules: Mapped[str] = mapped_column(Text)
+    # Endpoint 3: Pricing & Rules (nullable until PUT /cars/{id}/pricing)
+    daily_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    weekly_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    monthly_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    min_rental_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_rental_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    min_age_requirement: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    rules: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Endpoint 4: Location
     location_name: Mapped[str] = mapped_column(String(255), nullable=True)

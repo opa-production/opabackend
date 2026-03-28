@@ -496,6 +496,34 @@ async def migrate_database():
                 await conn.execute(text("ALTER TABLE cars ADD COLUMN drive_setting VARCHAR(30) DEFAULT 'self_only' NOT NULL"))
                 await conn.commit()
                 print("✓ Added drive_setting column to cars table")
+
+            # Multi-step listing: POST /cars/basics creates a row before specs/pricing — DB must allow NULL on later steps
+            car_col_info = await _async_insp_column_info(conn, "cars")
+            _draft_car_nullable = [
+                "seats",
+                "fuel_type",
+                "transmission",
+                "color",
+                "mileage",
+                "features",
+                "daily_rate",
+                "weekly_rate",
+                "monthly_rate",
+                "min_rental_days",
+                "min_age_requirement",
+                "rules",
+            ]
+            for col in _draft_car_nullable:
+                if col not in car_col_info:
+                    continue
+                if car_col_info[col].get("nullable", True):
+                    continue
+                try:
+                    await conn.execute(text(f"ALTER TABLE cars ALTER COLUMN {col} DROP NOT NULL"))
+                    await conn.commit()
+                    print(f"✓ Made cars.{col} nullable (draft listing after basics)")
+                except Exception as e:
+                    print(f"⚠️  Could not make cars.{col} nullable: {e}")
         
         # Check and add is_flagged to feedbacks table
         if "feedbacks" in table_names:
