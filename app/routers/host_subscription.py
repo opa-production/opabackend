@@ -165,7 +165,7 @@ async def host_subscription_checkout(
         phone[:5] + "***",
     )
 
-    mpesa_response = sendStkPush(
+    mpesa_response = await sendStkPush(
         amount=amount_str,
         PhoneNumber=phone,
         AccountReference=rec.external_reference,
