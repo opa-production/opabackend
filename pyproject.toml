@@ -27,6 +27,7 @@ dependencies = [
     "stellar-sdk>=11.0.0",
     "ujson>=5.9.0",
     "uvicorn[standard]==0.24.0",
-    "supabase==2.3.4",
-    "httpx==0.25.1",
+    "supabase==2.13.0",
+    "httpx==0.28.1",
+    "gotrue>=2.11.0",
 ]
