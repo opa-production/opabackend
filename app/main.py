@@ -497,8 +497,11 @@ async def migrate_database():
                 await conn.commit()
                 print("✓ Added drive_setting column to cars table")
 
-            # Multi-step listing: POST /cars/basics creates a row before specs/pricing — DB must allow NULL on later steps
-            car_col_info = await _async_insp_column_info(conn, "cars")
+            # Multi-step listing: POST /cars/basics inserts before specs/pricing — these columns must allow NULL.
+            # PostgreSQL: always run DROP NOT NULL (idempotent if already nullable). Inspector .get("nullable")
+            # was unreliable here and skipped migration, leaving NOT NULL and breaking basics.
+            # Any column the ORM inserts as NULL on POST /cars/basics must not be NOT NULL in DB.
+            # Includes step 2–4 + media + rejection_reason for older schemas.
             _draft_car_nullable = [
                 "seats",
                 "fuel_type",
@@ -510,20 +513,50 @@ async def migrate_database():
                 "weekly_rate",
                 "monthly_rate",
                 "min_rental_days",
+                "max_rental_days",
                 "min_age_requirement",
                 "rules",
+                "location_name",
+                "latitude",
+                "longitude",
+                "image_urls",
+                "video_url",
+                "cover_image",
+                "car_images",
+                "car_video",
+                "rejection_reason",
+                "updated_at",
             ]
-            for col in _draft_car_nullable:
-                if col not in car_col_info:
-                    continue
-                if car_col_info[col].get("nullable", True):
-                    continue
-                try:
-                    await conn.execute(text(f"ALTER TABLE cars ALTER COLUMN {col} DROP NOT NULL"))
-                    await conn.commit()
-                    print(f"✓ Made cars.{col} nullable (draft listing after basics)")
-                except Exception as e:
-                    print(f"⚠️  Could not make cars.{col} nullable: {e}")
+            if engine.dialect.name == "postgresql":
+                for col in _draft_car_nullable:
+                    try:
+                        await conn.execute(text(f"ALTER TABLE cars ALTER COLUMN {col} DROP NOT NULL"))
+                        await conn.commit()
+                        print(f"✓ cars.{col}: nullable for draft listing (PostgreSQL)")
+                    except Exception as e:
+                        try:
+                            await conn.rollback()
+                        except Exception:
+                            pass
+                        print(f"⚠️  cars.{col} DROP NOT NULL: {e}")
+            else:
+                car_col_info = await _async_insp_column_info(conn, "cars")
+                for col in _draft_car_nullable:
+                    if col not in car_col_info:
+                        continue
+                    # Only skip when reflection explicitly says nullable
+                    if car_col_info[col].get("nullable") is True:
+                        continue
+                    try:
+                        await conn.execute(text(f"ALTER TABLE cars ALTER COLUMN {col} DROP NOT NULL"))
+                        await conn.commit()
+                        print(f"✓ Made cars.{col} nullable (draft listing after basics)")
+                    except Exception as e:
+                        try:
+                            await conn.rollback()
+                        except Exception:
+                            pass
+                        print(f"⚠️  Could not make cars.{col} nullable: {e}")
         
         # Check and add is_flagged to feedbacks table
         if "feedbacks" in table_names:
