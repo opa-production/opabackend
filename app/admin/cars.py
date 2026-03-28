@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any, Set
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, func, select
 
@@ -420,14 +420,15 @@ async def get_car_details(
 async def get_car_media(
     car_id: int,
     current_admin=Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return car media URLs for admin review.
 
     Tries Supabase folder structures first, then falls back to legacy DB URLs.
     """
-    car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    car = result.scalar_one_or_none()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
