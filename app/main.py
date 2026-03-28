@@ -336,7 +336,14 @@ async def _async_insp_column_info(conn, table: str) -> dict:
             return {}
         return {c["name"]: c for c in insp.get_columns(table)}
 
-    return await conn.run_sync(_f)
+    for attempt in range(3):
+        try:
+            return await conn.run_sync(_f)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"Attempt {attempt + 1} failed: {e}, retrying...")
+            await asyncio.sleep(0.1)
 
 
 migration_lock_file = os.path.join(os.getcwd(), 'migration.lock')
