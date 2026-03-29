@@ -40,8 +40,10 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"  # Default for dev only
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # ~30 days; JWT exp uses this value (override via ACCESS_TOKEN_EXPIRE_MINUTES in .env)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30 * 24 * 60  # 43200 ≈ one month
+    # Must be longer than access token so /auth/refresh stays usable when access expires
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 90
     
     # CORS — must list every browser origin (scheme + host + port). localhost ≠ 127.0.0.1 to the browser.
     # VS Code Live Server often uses http://127.0.0.1:5500

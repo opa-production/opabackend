@@ -896,6 +896,7 @@ class AdminLoginRequest(BaseModel):
 class AdminLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    expires_in: int = Field(..., description="Access token lifetime in seconds (matches JWT exp)")
     admin: AdminProfileResponse
 
 

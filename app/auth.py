@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import jwt, JWTError
 import bcrypt
@@ -17,8 +18,7 @@ from app.config import settings
 # JWT settings
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
-ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
-REFRESH_TOKEN_EXPIRE_DAYS = settings.REFRESH_TOKEN_EXPIRE_DAYS 
+REFRESH_TOKEN_EXPIRE_DAYS = settings.REFRESH_TOKEN_EXPIRE_DAYS
 
 # HTTPBearer for Swagger UI token input
 security = HTTPBearer()
@@ -74,17 +74,27 @@ def get_password_hash(password: str) -> str:
     return hashed.decode('utf-8')
 
 
+def access_token_expires_in_seconds(token: str) -> int:
+    """Seconds until JWT exp; matches the issued token (avoids API/client TTL drift)."""
+    claims = jwt.get_unverified_claims(token)
+    exp = claims.get("exp")
+    if exp is None:
+        return 0
+    return max(0, int(exp) - int(time.time()))
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({
         "exp": expire,
         "type": "access",  # Token type identifier
-        "iat": datetime.utcnow()  # Issued at timestamp
+        "iat": now  # Issued at timestamp
     })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -101,12 +111,13 @@ def create_refresh_token(data: dict) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
     to_encode.update({
         "exp": expire,
         "type": "refresh",  # Token type identifier
-        "iat": datetime.utcnow()  # Issued at timestamp
+        "iat": now  # Issued at timestamp
     })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -114,11 +125,12 @@ def create_refresh_token(data: dict) -> str:
 
 def create_password_reset_token(client_id: int) -> str:
     """Create JWT for password reset (1 hour expiry)"""
+    now = datetime.now(timezone.utc)
     to_encode = {
         "sub": str(client_id),
         "type": "password_reset",
-        "exp": datetime.utcnow() + timedelta(hours=1),
-        "iat": datetime.utcnow(),
+        "exp": now + timedelta(hours=1),
+        "iat": now,
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 

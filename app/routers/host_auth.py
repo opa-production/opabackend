@@ -40,7 +40,7 @@ from app.auth import (
     verify_password_reset_token,
     get_host_by_email,
     get_current_host,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    access_token_expires_in_seconds,
 )
 from app.config import settings
 from app.services.email_welcome import send_welcome_email_host, send_email
@@ -129,7 +129,7 @@ async def login_host(
     
     # Create access token with role
     token_data = {"sub": str(host.id), "role": "host"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
     
     # Create refresh token
@@ -153,7 +153,7 @@ async def login_host(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
+        "expires_in": access_token_expires_in_seconds(access_token),
         "host": host,
         "device_token": device_token_raw,
     }
@@ -206,7 +206,7 @@ async def host_biometric_login(
     await db.commit()
 
     token_data = {"sub": str(host.id), "role": "host"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(data=token_data)
 
@@ -214,7 +214,7 @@ async def host_biometric_login(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "host": host,
         "device_token": None,  # Never issue a new device token here
     }
@@ -316,7 +316,7 @@ async def refresh_host_token(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": access_token_expires_in_seconds(access_token),
     }
 
 
@@ -679,7 +679,7 @@ async def host_google_auth(
 
     # Create tokens
     token_data = {"sub": str(host.id), "role": "host"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(data=token_data)
     
@@ -687,7 +687,7 @@ async def host_google_auth(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "host": host
     }
 

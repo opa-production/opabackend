@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Admin
+from app.config import settings
 from app.schemas import (
     AdminLoginRequest,
     AdminLoginResponse,
@@ -15,7 +16,7 @@ from app.auth import (
     create_access_token,
     get_admin_by_email,
     get_current_admin,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    access_token_expires_in_seconds,
 )
 
 router = APIRouter()
@@ -61,15 +62,16 @@ async def login_admin(
         )
     
     # Create access token with role
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(admin.id), "role": "admin"}, expires_delta=access_token_expires
     )
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "admin": admin
+        "expires_in": access_token_expires_in_seconds(access_token),
+        "admin": admin,
     }
 
 
