@@ -1,9 +1,8 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, text
 
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
