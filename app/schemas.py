@@ -37,6 +37,7 @@ class HostProfileUpdateRequest(BaseModel):
     bio: Optional[str] = Field(None, max_length=2000)
     mobile_number: Optional[str] = Field(None, max_length=50)
     id_number: Optional[str] = Field(None, max_length=100, description="ID number, passport number, or driver's license number")
+    city: Optional[str] = Field(None, max_length=100, description="City where the host operates")
 
 
 class HostProfileResponse(BaseModel):
@@ -47,6 +48,7 @@ class HostProfileResponse(BaseModel):
     bio: Optional[str] = None
     mobile_number: Optional[str] = None
     id_number: Optional[str] = None
+    city: Optional[str] = None
     avatar_url: Optional[str] = None
     cover_image_url: Optional[str] = None
     id_document_url: Optional[str] = None
@@ -924,6 +926,7 @@ class HostDetailResponse(BaseModel):
     bio: Optional[str] = None
     mobile_number: Optional[str] = None
     id_number: Optional[str] = None
+    city: Optional[str] = None
     is_active: bool
     cars_count: int = 0
     payment_methods_count: int = 0
@@ -942,6 +945,7 @@ class HostUpdateRequest(BaseModel):
     bio: Optional[str] = Field(None, max_length=2000)
     mobile_number: Optional[str] = Field(None, max_length=50)
     id_number: Optional[str] = Field(None, max_length=100)
+    city: Optional[str] = Field(None, max_length=100)
 
 
 class PaginatedHostListResponse(BaseModel):

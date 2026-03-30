@@ -237,6 +237,7 @@ class Host(Base):
     bio: Mapped[str] = mapped_column(Text, nullable=True)
     mobile_number: Mapped[str] = mapped_column(String(50), nullable=True)
     id_number: Mapped[str] = mapped_column(String(100), nullable=True)  # ID number, passport number, or DL number
+    city: Mapped[str] = mapped_column(String(100), nullable=True)  # City where the host operates
     
     # Media URLs (stored in Supabase Storage)
     avatar_url: Mapped[str] = mapped_column(String(500), nullable=True)

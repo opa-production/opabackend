@@ -462,6 +462,13 @@ async def create_car_basics(
     
     Creates a new car listing in incomplete state, linked to the authenticated host.
     """
+    # Verify host has selected a city
+    if not current_host.city:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please select your operating city in your profile before uploading a car."
+        )
+    
     # Create new car record
     db_car = Car(
         host_id=current_host.id,
