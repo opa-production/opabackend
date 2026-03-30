@@ -71,7 +71,7 @@ The database will be created automatically on first run with all required tables
 - `POST /api/v1/host/auth/login` - Login for hosts
 - `POST /api/v1/host/auth/logout` - Logout for hosts
 - `GET /api/v1/host/me` - Get current authenticated host information
-- `PUT /api/v1/host/profile` - Update host profile (bio, mobile_number, id_number)
+- `PUT /api/v1/host/profile` - Update host profile (bio, mobile_number, id_number, city)
 - `PUT /api/v1/host/change-password` - Change host password (requires current password verification)
 
 ### Client Authentication

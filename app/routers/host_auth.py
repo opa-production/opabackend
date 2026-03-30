@@ -342,6 +342,7 @@ async def update_host_profile(
     - **bio**: Host bio/description (optional, max 2000 characters)
     - **mobile_number**: Mobile phone number (optional, max 50 characters)
     - **id_number**: ID number, passport number, or driver's license number (optional, max 100 characters)
+    - **city**: City where the host operates (optional, max 100 characters)
     
     Updates the authenticated host's profile. All fields are optional.
     Only provided fields will be updated.
@@ -353,6 +354,8 @@ async def update_host_profile(
         current_host.mobile_number = request.mobile_number
     if request.id_number is not None:
         current_host.id_number = request.id_number
+    if request.city is not None:
+        current_host.city = request.city
     
     await db.commit()
     await db.refresh(current_host)

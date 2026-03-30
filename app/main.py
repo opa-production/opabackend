@@ -409,6 +409,10 @@ async def migrate_database():
                 await conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added terms_accepted_at column to hosts table")
+            if 'city' not in columns:
+                await conn.execute(text("ALTER TABLE hosts ADD COLUMN city VARCHAR(100)"))
+                await conn.commit()
+                print("✓ Added city column to hosts table")
         
         # Check and add missing columns to clients table
         if "clients" in table_names:
