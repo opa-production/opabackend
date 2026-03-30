@@ -309,6 +309,12 @@ class CarBasicsRequest(BaseModel):
     body_type: str = Field(..., min_length=1, max_length=50)
     year: int = Field(..., ge=1900, le=2100)
     description: str = Field(..., min_length=1)
+    city: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=100,
+        description="Host operating city selected in upload flow (e.g. Nairobi).",
+    )
 
 
 class CarTechnicalSpecsRequest(BaseModel):

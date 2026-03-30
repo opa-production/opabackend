@@ -459,15 +459,20 @@ async def create_car_basics(
     - **body_type**: Body type (e.g., Sedan, SUV, Hatchback)
     - **year**: Manufacturing year
     - **description**: Long-form description of the car
+    - **city**: Optional operating city from upload flow; required only if host profile city is empty
     
     Creates a new car listing in incomplete state, linked to the authenticated host.
     """
-    # Verify host has selected a city
+    # Allow city selection inside the car-upload flow.
+    # If host profile has no city yet, accept request.city and persist it.
+    selected_city = (request.city or "").strip() if request.city is not None else ""
     if not current_host.city:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please select your operating city in your profile before uploading a car."
-        )
+        if not selected_city:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Please select your operating city before uploading a car.",
+            )
+        current_host.city = selected_city
     
     # Create new car record
     db_car = Car(
