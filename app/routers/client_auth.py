@@ -145,7 +145,7 @@ async def register_client(
                 stellar_secret_encrypted=secret_key,
             )
             db.add(wallet)
-            db.commit()
+            await db.commit()
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("Ardena Pay wallet creation failed for new client: %s", e)
