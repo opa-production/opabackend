@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.database import get_db
 from app.models import Host, Client, Admin
@@ -353,7 +354,9 @@ async def get_current_client(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    result = await db.execute(select(Client).filter(Client.id == client_id))
+    result = await db.execute(
+        select(Client).options(joinedload(Client.driving_license)).filter(Client.id == client_id)
+    )
     client = result.scalar_one_or_none()
     if client is None:
         raise HTTPException(

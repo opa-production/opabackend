@@ -309,6 +309,29 @@ async def create_booking(
             detail="Car listing not found or not verified"
         )
     
+    # ==================== PROFILE COMPLETION CHECKS ====================
+    # Verify client has updated their profile
+    if not (current_client.mobile_number and current_client.id_number and 
+            current_client.date_of_birth and current_client.gender):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please complete your profile before making a booking. Required fields: mobile number, ID number, date of birth, and gender."
+        )
+    
+    # Verify client has added driving license
+    if not current_client.driving_license:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please add your driving license information before making a booking."
+        )
+    
+    # Verify client has accepted terms and conditions
+    if not current_client.terms_accepted_at:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please accept the terms and conditions before making a booking."
+        )
+    
     # Calculate rental days
     rental_days = (request.end_date - request.start_date).days
     if rental_days < 1:
