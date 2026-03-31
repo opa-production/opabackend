@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi_cache.decorator import cache
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,7 @@ from app.services.host_subscription_payment import (
     sync_pending_host_subscription_from_payhero,
 )
 from app.services.mpesa_stk_push import sendStkPush
+from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ async def list_host_subscription_plans():
 
 
 @router.get("/host/subscription/me", response_model=HostSubscriptionMeResponse)
+@cache(expire=120, namespace="host-subscription-me", key_builder=host_scoped_cache_key)
 async def get_my_subscription(
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
@@ -185,6 +188,7 @@ async def host_subscription_checkout(
     checkout_id = mpesa_response.get("CheckoutRequestID")
     rec.checkout_request_id = checkout_id
     await db.commit()
+    await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
 
     return HostSubscriptionCheckoutResponse(
         message="M-Pesa STK Push sent. Approve on your phone to activate your subscription.",
@@ -233,7 +237,7 @@ async def host_subscription_payment_status(
     elif st == HostSubscriptionPaymentStatusEnum.expired:
         msg = msg or "Checkout timed out — you can start again."
 
-    return HostSubscriptionPaymentStatusResponse(
+    response = HostSubscriptionPaymentStatusResponse(
         checkout_request_id=rec.checkout_request_id,
         external_reference=rec.external_reference,
         plan=rec.plan,
@@ -242,3 +246,6 @@ async def host_subscription_payment_status(
         message=msg,
         mpesa_receipt_number=rec.mpesa_receipt_number,
     )
+    if st != HostSubscriptionPaymentStatusEnum.pending:
+        await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
+    return response

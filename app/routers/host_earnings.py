@@ -6,11 +6,10 @@ transactions list, and withdrawal requests.
 """
 import json
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
-import hashlib
 from fastapi_cache.decorator import cache
 
 from app.database import get_db
@@ -25,30 +24,14 @@ from app.schemas import (
     WithdrawalResponse,
     WithdrawalListResponse,
 )
+from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 router = APIRouter()
 
 COMMISSION_RATE = 0.15  # 15% platform commission (same as admin dashboard)
 
 
-def _host_earnings_cache_key(
-    func,
-    namespace: str = "",
-    request: Request = None,
-    response=None,
-    *args,
-    **kwargs,
-) -> str:
-    """Stable host-scoped cache key for earnings endpoints."""
-    host = kwargs.get("current_host")
-    host_id = getattr(host, "id", "anon")
-    query = ""
-    path = "/host/earnings"
-    if request is not None:
-        query = str(request.query_params)
-        path = request.url.path
-    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
-    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+_host_earnings_cache_key = host_scoped_cache_key
 
 
 async def _withdrawable_for_host(db: AsyncSession, host_id: int) -> float:
@@ -293,6 +276,10 @@ async def host_create_withdrawal(
     db.add(withdrawal)
     await db.commit()
     await db.refresh(withdrawal)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-withdrawals", "host-earnings-summary"],
+    )
     
     # Reload with host for response
     stmt = select(Withdrawal).options(joinedload(Withdrawal.host)).filter(Withdrawal.id == withdrawal.id)
@@ -303,6 +290,7 @@ async def host_create_withdrawal(
 
 
 @router.get("/host/withdrawals", response_model=WithdrawalListResponse)
+@cache(expire=90, namespace="host-withdrawals", key_builder=_host_earnings_cache_key)
 async def host_list_my_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),

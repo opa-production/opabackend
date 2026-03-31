@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from fastapi_cache.decorator import cache
 
 from app.database import get_db
 from app.models import Host, Notification, HostBiometricToken
@@ -44,6 +45,7 @@ from app.auth import (
 )
 from app.config import settings
 from app.services.email_welcome import send_welcome_email_host, send_email
+from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -540,6 +542,7 @@ async def change_password(
 
 
 @router.get("/host/notifications", response_model=HostNotificationListResponse)
+@cache(expire=30, namespace="host-notifications", key_builder=host_scoped_cache_key)
 async def get_host_notifications(
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db)
@@ -616,6 +619,7 @@ async def mark_host_notification_as_read(
     # Mark as read
     notification.is_read = True
     await db.commit()
+    await invalidate_host_cache_namespaces(current_host.id, ["host-notifications"])
     
     return {"message": "Notification marked as read"}
 

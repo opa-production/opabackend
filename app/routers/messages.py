@@ -355,13 +355,15 @@ async def send_message_to_client(
 @router.get("/host/messages/client/{client_id}", response_model=ClientHostConversationResponse)
 async def get_conversation_with_client(
     client_id: int,
+    skip: int = Query(0, ge=0, description="Number of messages to skip (oldest-first pagination)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum messages to return"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get the conversation with a specific client
     
-    Returns the conversation with all messages in chronological order.
+    Returns the conversation messages in chronological order.
     If no conversation exists, returns an empty conversation.
     """
     # Verify client exists
@@ -405,10 +407,10 @@ async def get_conversation_with_client(
             last_message_at=None
         )
     
-    # Get all messages in the conversation
+    # Get paginated messages in the conversation
     msg_stmt = select(ClientHostMessage).filter(
         ClientHostMessage.conversation_id == conversation.id
-    ).order_by(ClientHostMessage.created_at.asc())
+    ).order_by(ClientHostMessage.created_at.asc()).offset(skip).limit(limit)
     msg_result = await db.execute(msg_stmt)
     messages = msg_result.scalars().all()
     

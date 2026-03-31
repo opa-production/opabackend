@@ -1,7 +1,7 @@
 """
 Booking endpoints for clients (and hosts)
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 import logging
 import json
 import uuid
-import hashlib
 from fastapi_cache.decorator import cache
 
 from app.database import get_db
@@ -49,6 +48,7 @@ from app.schemas import (
     BookingIssueListResponse,
 )
 from app.services.receipt import build_receipt_pdf
+from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,24 +57,7 @@ logger = logging.getLogger(__name__)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
 
 
-def _host_bookings_cache_key(
-    func,
-    namespace: str = "",
-    request: Request = None,
-    response=None,
-    *args,
-    **kwargs,
-) -> str:
-    """Stable host-scoped cache key for host booking list endpoints."""
-    host = kwargs.get("current_host")
-    host_id = getattr(host, "id", "anon")
-    query = ""
-    path = "/host/bookings"
-    if request is not None:
-        query = str(request.query_params)
-        path = request.url.path
-    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
-    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+_host_bookings_cache_key = host_scoped_cache_key
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -1203,6 +1186,10 @@ async def delete_host_booking(
 
     await db.delete(booking)
     await db.commit()
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1267,6 +1254,10 @@ async def confirm_pickup_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+    )
 
     return booking_to_response(booking)
 
@@ -1320,6 +1311,10 @@ async def confirm_dropoff_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+    )
 
     return booking_to_response(booking)
 
@@ -1482,6 +1477,10 @@ async def complete_booking_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+    )
 
     return booking_to_response(booking)
 
