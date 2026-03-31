@@ -1,7 +1,7 @@
 """
 Booking endpoints for clients (and hosts)
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 import logging
 import json
 import uuid
+import hashlib
+from fastapi_cache.decorator import cache
 
 from app.database import get_db
 from app.models import (
@@ -53,6 +55,26 @@ logger = logging.getLogger(__name__)
 
 # Damage waiver price per day (KES)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
+
+
+def _host_bookings_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response=None,
+    *args,
+    **kwargs,
+) -> str:
+    """Stable host-scoped cache key for host booking list endpoints."""
+    host = kwargs.get("current_host")
+    host_id = getattr(host, "id", "anon")
+    query = ""
+    path = "/host/bookings"
+    if request is not None:
+        query = str(request.query_params)
+        path = request.url.path
+    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
+    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -983,6 +1005,7 @@ async def get_my_completed_bookings(
 # ==================== HOST BOOKINGS ====================
 
 @router.get("/host/bookings", response_model=BookingListResponse)
+@cache(expire=60, namespace="host-bookings-list", key_builder=_host_bookings_cache_key)
 async def get_host_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -1035,6 +1058,7 @@ async def get_host_bookings(
 
 
 @router.get("/host/bookings/completed", response_model=BookingListResponse)
+@cache(expire=120, namespace="host-bookings-completed", key_builder=_host_bookings_cache_key)
 async def get_host_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
