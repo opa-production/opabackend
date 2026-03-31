@@ -2,51 +2,76 @@
 Car listing endpoints for clients (read-only browsing)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, func, select
-from typing import Optional, List
-from datetime import datetime, date, timedelta
+import hashlib
 import json
 import logging
+from datetime import date, datetime, timedelta
+from typing import List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi_cache import FastAPICache
 from fastapi_cache.decorator import cache
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session, joinedload
 
 logger = logging.getLogger(__name__)
 
+from app.api.deps import get_current_client, get_current_host
 from app.db.session import get_db
 from app.models import (
-    Car,
-    Host,
     Booking,
     BookingStatus,
-    VerificationStatus,
+    Car,
     CarBlockedDate,
+    Host,
+    VerificationStatus,
 )
-from app.api.deps import get_current_client, get_current_host
 from app.schemas import (
+    DRIVE_SETTING_TO_ALLOWED,
+    CarAvailabilityResponse,
+    CarBasicsRequest,
+    CarBlockedDateRequest,
+    CarExploreItemResponse,
+    CarExploreListResponse,
     CarListingResponse,
     CarListResponse,
-    CarAvailabilityResponse,
-    CarResponse,
-    CarStatusResponse,
-    CarBasicsRequest,
-    CarTechnicalSpecsRequest,
-    CarPricingRulesRequest,
     CarLocationRequest,
     CarMediaRequest,
     CarMediaUrlsRequest,
-    CarExploreItemResponse,
-    CarExploreListResponse,
-    CarBlockedDateRequest,
+    CarPricingRulesRequest,
+    CarResponse,
+    CarStatusResponse,
+    CarTechnicalSpecsRequest,
     DriveSettingsRequest,
     DriveSettingsResponse,
-    DRIVE_SETTING_TO_ALLOWED,
 )
 
 router = APIRouter()
+
+
+def _host_cars_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response=None,
+    *args,
+    **kwargs,
+) -> str:
+    """
+    Stable cache key for host cars list.
+    Ignores volatile dependency objects (e.g., DB session) that would prevent cache hits.
+    """
+    host = kwargs.get("current_host")
+    host_id = getattr(host, "id", "anon")
+    query = ""
+    path = "/host/cars"
+    if request is not None:
+        query = str(request.query_params)
+        path = request.url.path
+
+    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
+    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
 
 def parse_image_urls(image_urls_str: Optional[str]) -> List[str]:
@@ -519,9 +544,21 @@ async def create_car_basics(
     - **body_type**: Body type (e.g., Sedan, SUV, Hatchback)
     - **year**: Manufacturing year
     - **description**: Long-form description of the car
+    - **city**: Optional operating city from upload flow; required only if host profile city is empty
 
     Creates a new car listing in incomplete state, linked to the authenticated host.
     """
+    # Allow city selection inside the car-upload flow.
+    # If host profile has no city yet, accept request.city and persist it.
+    selected_city = (request.city or "").strip() if request.city is not None else ""
+    if not current_host.city:
+        if not selected_city:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Please select your operating city before uploading a car.",
+            )
+        current_host.city = selected_city
+
     # Create new car record
     db_car = Car(
         host_id=current_host.id,
@@ -1272,6 +1309,7 @@ async def get_car_status(car_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/host/cars", response_model=List[CarResponse])
+@cache(expire=600, namespace="host-cars", key_builder=_host_cars_cache_key)
 async def list_my_cars(
     current_host: Host = Depends(get_current_host), db: AsyncSession = Depends(get_db)
 ):
@@ -1650,13 +1688,6 @@ async def remove_car_blocked_date(
     if not blocked_date_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Blocked date not found"
-    )
-    blocked_date_obj = result.scalar_one_or_none()
-
-    if not blocked_date_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Blocked date not found"
         )
 
     await db.delete(blocked_date_obj)

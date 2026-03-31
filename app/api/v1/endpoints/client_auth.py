@@ -150,7 +150,7 @@ async def register_client(
                 stellar_secret_encrypted=secret_key,
             )
             db.add(wallet)
-            db.commit()
+            await db.commit()
     except Exception as e:
         import logging
 
@@ -223,7 +223,7 @@ async def login_client(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
+        "expires_in": access_token_expires_in_seconds(access_token),
         "client": client,
         "device_token": device_token_raw,
     }
@@ -378,7 +378,7 @@ async def refresh_client_token(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
     }
 
 
@@ -1015,7 +1015,7 @@ async def client_google_auth(
 
     # Create tokens
     token_data = {"sub": str(client.id), "role": "client"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
@@ -1039,7 +1039,7 @@ async def client_google_auth(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "client": client,
         "device_token": device_token_raw,
     }
@@ -1094,7 +1094,7 @@ async def biometric_login(
     await db.commit()
 
     token_data = {"sub": str(client.id), "role": "client"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
@@ -1104,7 +1104,7 @@ async def biometric_login(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "client": client,
         "device_token": None,  # Never issue a new device token here
     }
