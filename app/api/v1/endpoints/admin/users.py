@@ -3,7 +3,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
 from app.api.v1.endpoints.cars import _car_to_response
@@ -160,6 +159,7 @@ async def get_host_details(
         bio=host.bio,
         mobile_number=host.mobile_number,
         id_number=host.id_number,
+        city=host.city,
         is_active=host.is_active,
         cars_count=cars_count,
         payment_methods_count=payment_methods_count,
@@ -212,6 +212,8 @@ async def update_host(
         host.mobile_number = request.mobile_number
     if request.id_number is not None:
         host.id_number = request.id_number
+    if request.city is not None:
+        host.city = request.city
 
     await db.commit()
     await db.refresh(host)
@@ -238,6 +240,7 @@ async def update_host(
         bio=host.bio,
         mobile_number=host.mobile_number,
         id_number=host.id_number,
+        city=host.city,
         is_active=host.is_active,
         cars_count=cars_count,
         payment_methods_count=payment_methods_count,

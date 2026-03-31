@@ -4,18 +4,16 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_current_admin
-from app.api.v1.endpoints.cars import _car_to_response
 from app.db.session import get_db
-from app.models import Car, Host, VerificationStatus
+from app.models import Car, VerificationStatus
 from app.schemas import (
     AdminCarListResponse,
     BulkCarStatusUpdateRequest,
     CarDetailResponse,
     CarRejectRequest,
-    CarResponse,
     CarStatusUpdateRequest,
     CarUpdateRequest,
     PaginatedCarListResponse,
@@ -442,14 +440,17 @@ async def get_car_details(
 
 @router.get("/admin/cars/{car_id}/media")
 async def get_car_media(
-    car_id: int, current_admin=Depends(get_current_admin), db: Session = Depends(get_db)
+    car_id: int,
+    current_admin=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Return car media URLs for admin review.
 
     Tries Supabase folder structures first, then falls back to legacy DB URLs.
     """
-    car = db.query(Car).filter(Car.id == car_id).first()
+    result = await db.execute(select(Car).filter(Car.id == car_id))
+    car = result.scalar_one_or_none()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Car not found"

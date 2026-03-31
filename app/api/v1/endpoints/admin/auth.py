@@ -63,7 +63,12 @@ async def login_admin(
         data={"sub": str(admin.id), "role": "admin"}, expires_delta=access_token_expires
     )
 
-    return {"access_token": access_token, "token_type": "bearer", "admin": admin}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": access_token_expires,
+        "admin": admin,
+    }
 
 
 @router.post("/admin/auth/logout")
