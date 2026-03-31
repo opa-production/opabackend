@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"  # Default for dev only
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30 * 24 * 60  # 30 days
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 90
 
     # CORS — must list every browser origin (scheme + host + port). localhost ≠ 127.0.0.1 to the browser.
     # VS Code Live Server often uses http://127.0.0.1:5500

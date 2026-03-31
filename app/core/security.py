@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
@@ -71,14 +71,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
     to_encode.update(
         {
             "exp": expire,
             "type": "access",  # Token type identifier
-            "iat": datetime.utcnow(),  # Issued at timestamp
+            "iat": datetime.now(timezone.utc),  # Issued at timestamp
         }
     )
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -96,13 +98,13 @@ def create_refresh_token(data: dict) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
 
     to_encode.update(
         {
             "exp": expire,
             "type": "refresh",  # Token type identifier
-            "iat": datetime.utcnow(),  # Issued at timestamp
+            "iat": datetime.now(timezone.utc),  # Issued at timestamp
         }
     )
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -114,8 +116,8 @@ def create_password_reset_token(client_id: int) -> str:
     to_encode = {
         "sub": str(client_id),
         "type": "password_reset",
-        "exp": datetime.utcnow() + timedelta(hours=1),
-        "iat": datetime.utcnow(),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
