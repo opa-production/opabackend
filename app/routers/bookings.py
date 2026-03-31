@@ -1102,6 +1102,7 @@ async def get_host_completed_bookings(
 
 
 @router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
+@cache(expire=45, namespace="host-booking-details", key_builder=_host_bookings_cache_key)
 async def get_host_booking_details(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
