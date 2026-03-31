@@ -32,6 +32,7 @@ from slowapi import _rate_limit_exceeded_handler
 
 # Caching
 from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
 
@@ -250,6 +251,8 @@ async def startup_init_cache():
         import redis.asyncio as redis
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         redis_client = redis.from_url(redis_url, decode_responses=True)
+        # Force a real connection test at startup; from_url alone does not verify availability.
+        await redis_client.ping()
         FastAPICache.init(
             RedisBackend(redis_client),
             prefix="opa-cache:",
@@ -257,10 +260,10 @@ async def startup_init_cache():
         )
         logging.info("[CACHE] Redis cache initialized successfully")
     except Exception as e:
-        logging.warning(f"[CACHE] Redis not available, caching disabled: {e}")
-        # Initialize with dummy cache for graceful degradation
+        logging.warning(f"[CACHE] Redis not available, using in-memory cache: {e}")
+        # In-memory fallback avoids Redis connection errors on every request.
         FastAPICache.init(
-            backend=None,
+            InMemoryBackend(),
             prefix="opa-cache:",
             expire=300
         )
@@ -355,22 +358,26 @@ async def run_migrations():
     Previously migrations ran only once (guarded by cwd/migration.lock), so new
     ALTERs (e.g. cars draft columns DROP NOT NULL) never ran after the first boot.
     """
-    try:
-        import fcntl
-        lock_file = '/tmp/fastapi_migration.lock'
-        with open(lock_file, 'w') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                await migrate_database()
-                async with engine.connect() as conn:
-                    await migrate_car_media_data(conn)
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    except ImportError:
-        # Windows / no fcntl: no cross-process lock (avoid multiple uvicorn workers racing locally)
+    import sys
+
+    if sys.platform == "win32":
+        # No fcntl; avoid import error noise in tracebacks on Windows dev.
         await migrate_database()
         async with engine.connect() as conn:
             await migrate_car_media_data(conn)
+        return
+
+    import fcntl
+
+    lock_file = "/tmp/fastapi_migration.lock"
+    with open(lock_file, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            await migrate_database()
+            async with engine.connect() as conn:
+                await migrate_car_media_data(conn)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 async def migrate_database():
@@ -409,10 +416,6 @@ async def migrate_database():
                 await conn.execute(text("ALTER TABLE hosts ADD COLUMN terms_accepted_at TIMESTAMP WITH TIME ZONE"))
                 await conn.commit()
                 print("✓ Added terms_accepted_at column to hosts table")
-            if 'city' not in columns:
-                await conn.execute(text("ALTER TABLE hosts ADD COLUMN city VARCHAR(100)"))
-                await conn.commit()
-                print("✓ Added city column to hosts table")
         
         # Check and add missing columns to clients table
         if "clients" in table_names:
