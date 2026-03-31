@@ -250,7 +250,9 @@ async def startup_init_cache():
     try:
         import redis.asyncio as redis
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-        redis_client = redis.from_url(redis_url, decode_responses=True)
+        # fastapi-cache coder expects bytes from backend; decode_responses=True returns str
+        # and causes: AttributeError: 'str' object has no attribute 'decode'
+        redis_client = redis.from_url(redis_url, decode_responses=False)
         # Force a real connection test at startup; from_url alone does not verify availability.
         await redis_client.ping()
         FastAPICache.init(
