@@ -1,7 +1,7 @@
 """
 Car listing endpoints for clients (read-only browsing)
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select
@@ -9,6 +9,7 @@ from typing import Optional, List
 from datetime import datetime, date, timedelta
 import json
 import logging
+import hashlib
 
 from fastapi_cache import FastAPICache
 from fastapi_cache.decorator import cache
@@ -39,6 +40,29 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+def _host_cars_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response=None,
+    *args,
+    **kwargs,
+) -> str:
+    """
+    Stable cache key for host cars list.
+    Ignores volatile dependency objects (e.g., DB session) that would prevent cache hits.
+    """
+    host = kwargs.get("current_host")
+    host_id = getattr(host, "id", "anon")
+    query = ""
+    path = "/host/cars"
+    if request is not None:
+        query = str(request.query_params)
+        path = request.url.path
+
+    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
+    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
 
 def parse_image_urls(image_urls_str: Optional[str]) -> List[str]:
@@ -1141,6 +1165,7 @@ async def get_car_status(
 # ==================== HOST CAR MANAGEMENT ENDPOINTS ====================
 
 @router.get("/host/cars", response_model=List[CarResponse])
+@cache(expire=600, namespace="host-cars", key_builder=_host_cars_cache_key)
 async def list_my_cars(
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db)
