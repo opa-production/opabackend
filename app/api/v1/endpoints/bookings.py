@@ -2,14 +2,16 @@
 Booking endpoints for clients (and hosts)
 """
 
+import hashlib
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
+from fastapi_cache.decorator import cache
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, joinedload
@@ -25,11 +27,7 @@ from app.models import (
     CarBlockedDate,
     Client,
     Host,
-    Payment,
     PaymentStatus,
-    Refund,
-    RefundStatus,
-    StellarPaymentTransaction,
     VerificationStatus,
 )
 from app.schemas import (
@@ -44,7 +42,6 @@ from app.schemas import (
     BookingIssueResponse,
     BookingListResponse,
     BookingResponse,
-    BookingStatusEnum,
     BookingUpdateRequest,
     ReportIssueRequest,
 )
@@ -55,6 +52,26 @@ logger = logging.getLogger(__name__)
 
 # Damage waiver price per day (KES)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
+
+
+def _host_bookings_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response=None,
+    *args,
+    **kwargs,
+) -> str:
+    """Stable host-scoped cache key for host booking list endpoints."""
+    host = kwargs.get("current_host")
+    host_id = getattr(host, "id", "anon")
+    query = ""
+    path = "/host/bookings"
+    if request is not None:
+        query = str(request.query_params)
+        path = request.url.path
+    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
+    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -329,6 +346,33 @@ async def create_booking(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Car listing not found or not verified",
+        )
+
+    # ==================== PROFILE COMPLETION CHECKS ====================
+    # Verify client has updated their profile
+    if not (
+        current_client.mobile_number
+        and current_client.id_number
+        and current_client.date_of_birth
+        and current_client.gender
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please complete your profile before making a booking. Required fields: mobile number, ID number, date of birth, and gender.",
+        )
+
+    # Verify client has added driving license
+    if not current_client.driving_license:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please add your driving license information before making a booking.",
+        )
+
+    # Verify client has accepted terms and conditions
+    if not current_client.terms_accepted_at:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please accept the terms and conditions before making a booking.",
         )
 
     # Calculate rental days
@@ -1040,6 +1084,7 @@ async def get_my_completed_bookings(
 
 
 @router.get("/host/bookings", response_model=BookingListResponse)
+@cache(expire=60, namespace="host-bookings-list", key_builder=_host_bookings_cache_key)
 async def get_host_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(
@@ -1094,6 +1139,11 @@ async def get_host_bookings(
 
 
 @router.get("/host/bookings/completed", response_model=BookingListResponse)
+@cache(
+    expire=120,
+    namespace="host-bookings-completed",
+    key_builder=_host_bookings_cache_key,
+)
 async def get_host_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(
