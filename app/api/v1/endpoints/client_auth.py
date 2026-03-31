@@ -223,7 +223,7 @@ async def login_client(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": access_token_expires_in_seconds(access_token),
+        "expires_in": access_token_expires,
         "client": client,
         "device_token": device_token_raw,
     }

@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_client
 from app.db.session import get_db
@@ -41,6 +42,7 @@ from app.services.stellar_wallet import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 # On testnet, set STELLAR_SHOW_SECRET_TESTNET=1 to include secret_key in response (for importing into Freighter/Lobstr)
 SHOW_SECRET_TESTNET = os.getenv("STELLAR_SHOW_SECRET_TESTNET", "1").strip().lower() in (
     "1",
@@ -49,7 +51,9 @@ SHOW_SECRET_TESTNET = os.getenv("STELLAR_SHOW_SECRET_TESTNET", "1").strip().lowe
 )
 
 
-def _fetch_and_save_balances(wallet: ClientWallet, db: Session) -> tuple[str, str]:
+async def _fetch_and_save_balances(
+    wallet: ClientWallet, db: AsyncSession
+) -> tuple[str, str]:
     """Fetch balances from Horizon, save to wallet in DB, return (balance_xlm, balance_usdc)."""
     balances_raw = get_balances(wallet.stellar_public_key)
     balances = parse_balances_for_response(balances_raw)
@@ -59,8 +63,8 @@ def _fetch_and_save_balances(wallet: ClientWallet, db: Session) -> tuple[str, st
     wallet.balance_xlm = balance_xlm
     wallet.balance_usdc = balance_usdc
     wallet.balance_updated_at = now
-    db.commit()
-    db.refresh(wallet)
+    await db.commit()
+    await db.refresh(wallet)
     return balance_xlm, balance_usdc
 
 
@@ -85,9 +89,9 @@ def _wallet_to_response(
 
 
 @router.get("/client/wallet", response_model=WalletResponse)
-def get_wallet(
+async def get_wallet(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get the current client's Ardena Pay (Stellar) wallet.
@@ -95,17 +99,16 @@ def get_wallet(
     Fetches balances from Stellar Horizon, saves them to the DB, then returns the wallet.
     Response fields for UI: public_key, network, balance_xlm, balance_usdc, balance_updated_at, secret_key (testnet), created_at.
     """
-    wallet = (
-        db.query(ClientWallet)
-        .filter(ClientWallet.client_id == current_client.id)
-        .first()
+    result = await db.execute(
+        select(ClientWallet).where(ClientWallet.client_id == current_client.id)
     )
+    wallet = result.scalar_one_or_none()
     if not wallet:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No wallet found. Create one with POST /client/wallet.",
         )
-    balance_xlm, balance_usdc = _fetch_and_save_balances(wallet, db)
+    balance_xlm, balance_usdc = await _fetch_and_save_balances(wallet, db)
     include_secret = wallet.network == "testnet" and SHOW_SECRET_TESTNET
     return _wallet_to_response(
         wallet,
@@ -118,9 +121,9 @@ def get_wallet(
 @router.post(
     "/client/wallet", response_model=WalletResponse, status_code=status.HTTP_201_CREATED
 )
-def create_wallet(
+async def create_wallet(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create an Ardena Pay (Stellar) wallet for the current client.
@@ -129,23 +132,22 @@ def create_wallet(
     - If the client already has a wallet, returns 400.
     - Use GET /client/wallet to fetch wallet and balances afterward.
     """
-    existing = (
-        db.query(ClientWallet)
-        .filter(ClientWallet.client_id == current_client.id)
-        .first()
+    result = await db.execute(
+        select(ClientWallet).where(ClientWallet.client_id == current_client.id)
     )
+    existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You already have a wallet. Use GET /client/wallet to view it.",
         )
-    result = create_and_fund_wallet()
-    if not result:
+    wallet_result = create_and_fund_wallet()
+    if not wallet_result:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not create or fund wallet on Stellar testnet. Please try again later.",
         )
-    public_key, secret_key = result
+    public_key, secret_key = wallet_result
     network = "testnet" if _is_testnet() else "mainnet"
     wallet = ClientWallet(
         client_id=current_client.id,
@@ -154,9 +156,9 @@ def create_wallet(
         stellar_secret_encrypted=secret_key,  # stored as-is for testnet; encrypt in production if needed
     )
     db.add(wallet)
-    db.commit()
-    db.refresh(wallet)
-    balance_xlm, balance_usdc = _fetch_and_save_balances(wallet, db)
+    await db.commit()
+    await db.refresh(wallet)
+    balance_xlm, balance_usdc = await _fetch_and_save_balances(wallet, db)
     include_secret = SHOW_SECRET_TESTNET and network == "testnet"
     return _wallet_to_response(
         wallet,
@@ -169,9 +171,9 @@ def create_wallet(
 @router.get(
     "/client/wallet/transactions", response_model=List[StellarTransactionResponse]
 )
-def list_wallet_transactions(
+async def list_wallet_transactions(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     booking_id: Optional[int] = Query(None, description="Filter by booking id"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
@@ -180,17 +182,18 @@ def list_wallet_transactions(
     List Ardena Pay (USDC/XLM) transactions for the current client's wallet.
     Same data as GET /api/v1/client/payments/transactions.
     """
-    q = db.query(StellarPaymentTransaction).filter(
+    stmt = select(StellarPaymentTransaction).where(
         StellarPaymentTransaction.client_id == current_client.id
     )
     if booking_id is not None:
-        q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
-    rows = (
-        q.order_by(StellarPaymentTransaction.created_at.desc())
+        stmt = stmt.where(StellarPaymentTransaction.booking_id == booking_id)
+    stmt = (
+        stmt.order_by(StellarPaymentTransaction.created_at.desc())
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
     return [
         StellarTransactionResponse(
             id=r.id,
@@ -211,9 +214,9 @@ def list_wallet_transactions(
 @router.get(
     "/client/wallet/incoming", response_model=List[IncomingWalletPaymentResponse]
 )
-def list_incoming_wallet_payments(
+async def list_incoming_wallet_payments(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
 ):
@@ -222,20 +225,19 @@ def list_incoming_wallet_payments(
     Fetches from Stellar Horizon, stores new receipts, and creates in-app notifications
     ("You received X USDC") for new incoming payments so users see them in GET /client/notifications.
     """
-    wallet = (
-        db.query(ClientWallet)
-        .filter(ClientWallet.client_id == current_client.id)
-        .first()
+    result = await db.execute(
+        select(ClientWallet).where(ClientWallet.client_id == current_client.id)
     )
+    wallet = result.scalar_one_or_none()
     if not wallet:
         return []
     incoming_raw = get_incoming_payments(wallet.stellar_public_key, limit=limit + 50)
-    existing_hashes = {
-        row.stellar_tx_hash
-        for row in db.query(IncomingStellarPayment.stellar_tx_hash)
-        .filter(IncomingStellarPayment.client_id == current_client.id)
-        .all()
-    }
+    hash_result = await db.execute(
+        select(IncomingStellarPayment.stellar_tx_hash).where(
+            IncomingStellarPayment.client_id == current_client.id
+        )
+    )
+    existing_hashes = {row[0] for row in hash_result.all()}
     in_app_enabled = getattr(current_client, "in_app_notifications_enabled", True)
     new_notif_count = 0
 
@@ -255,7 +257,7 @@ def list_incoming_wallet_payments(
             to_address=wallet.stellar_public_key,
         )
         db.add(rec)
-        db.flush()
+        await db.flush()
         if in_app_enabled:
             try:
                 title = f"You received {amount} {amount_asset}"
@@ -269,7 +271,7 @@ def list_incoming_wallet_payments(
                     sender_name="Ardena Pay",
                 )
                 db.add(notif)
-                db.flush()
+                await db.flush()
                 rec.notification_id = notif.id
                 new_notif_count += 1
             except Exception as e:
@@ -283,14 +285,13 @@ def list_incoming_wallet_payments(
     # Backfill notifications for existing incoming payments that never got one (e.g. synced before we created notifs)
     if in_app_enabled:
         try:
-            missing = (
-                db.query(IncomingStellarPayment)
-                .filter(
+            missing_result = await db.execute(
+                select(IncomingStellarPayment).where(
                     IncomingStellarPayment.client_id == current_client.id,
                     IncomingStellarPayment.notification_id.is_(None),
                 )
-                .all()
             )
+            missing = list(missing_result.scalars().all())
             for rec in missing:
                 try:
                     title = f"You received {rec.amount} {rec.amount_asset}"
@@ -304,7 +305,7 @@ def list_incoming_wallet_payments(
                         sender_name="Ardena Pay",
                     )
                     db.add(notif)
-                    db.flush()
+                    await db.flush()
                     rec.notification_id = notif.id
                     new_notif_count += 1
                 except Exception as e:
@@ -332,15 +333,15 @@ def list_incoming_wallet_payments(
             new_notif_count,
             current_client.id,
         )
-    db.commit()
-    rows = (
-        db.query(IncomingStellarPayment)
-        .filter(IncomingStellarPayment.client_id == current_client.id)
+    await db.commit()
+    rows_result = await db.execute(
+        select(IncomingStellarPayment)
+        .where(IncomingStellarPayment.client_id == current_client.id)
         .order_by(IncomingStellarPayment.created_at.desc())
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    rows = list(rows_result.scalars().all())
     return [
         IncomingWalletPaymentResponse(
             id=r.id,

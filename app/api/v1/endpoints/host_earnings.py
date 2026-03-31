@@ -5,13 +5,15 @@ Powers the host app home/dashboard: net earnings, commission, withdrawable amoun
 transactions list, and withdrawal requests.
 """
 
+import hashlib
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi_cache.decorator import cache
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_current_host
 from app.db.session import get_db
@@ -20,7 +22,6 @@ from app.models import (
     BookingStatus,
     Car,
     Host,
-    Payment,
     PaymentStatus,
     Withdrawal,
     WithdrawalStatus,
@@ -37,6 +38,26 @@ from app.schemas import (
 router = APIRouter()
 
 COMMISSION_RATE = 0.15  # 15% platform commission (same as admin dashboard)
+
+
+def _host_earnings_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response=None,
+    *args,
+    **kwargs,
+) -> str:
+    """Stable host-scoped cache key for earnings endpoints."""
+    host = kwargs.get("current_host")
+    host_id = getattr(host, "id", "anon")
+    query = ""
+    path = "/host/earnings"
+    if request is not None:
+        query = str(request.query_params)
+        path = request.url.path
+    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
+    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
 
 
 async def _withdrawable_for_host(db: AsyncSession, host_id: int) -> float:
@@ -86,6 +107,9 @@ def _withdrawal_to_response(w: Withdrawal) -> WithdrawalResponse:
 
 
 @router.get("/host/earnings/summary", response_model=HostEarningsSummaryResponse)
+@cache(
+    expire=120, namespace="host-earnings-summary", key_builder=_host_earnings_cache_key
+)
 async def get_host_earnings_summary(
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),

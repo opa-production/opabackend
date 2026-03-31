@@ -413,7 +413,7 @@ async def process_ardena_pay(
     background_tasks: BackgroundTasks,
     request: ArdenaPayPaymentRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Pay for a booking with Ardena Pay. Use payWithXlm=true to deduct XLM (converted from KSH);
@@ -426,25 +426,34 @@ async def process_ardena_pay(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Ardena Pay is not configured (missing STELLAR_PLATFORM_PUBLIC_KEY).",
         )
-    wallet = (
-        db.query(ClientWallet)
-        .filter(ClientWallet.client_id == current_client.id)
-        .first()
+    w_result = await db.execute(
+        select(ClientWallet).where(ClientWallet.client_id == current_client.id)
     )
+    wallet = w_result.scalar_one_or_none()
     if not wallet or not wallet.stellar_secret_encrypted:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No Ardena Pay wallet found. Create one with POST /api/v1/client/wallet.",
         )
-    booking_query = (
-        db.query(Booking)
-        .options(joinedload(Booking.car))
-        .filter(Booking.client_id == current_client.id)
-    )
     if isinstance(request.booking_id, int):
-        booking = booking_query.filter(Booking.id == request.booking_id).first()
+        b_stmt = (
+            select(Booking)
+            .options(joinedload(Booking.car))
+            .where(
+                Booking.client_id == current_client.id, Booking.id == request.booking_id
+            )
+        )
     else:
-        booking = booking_query.filter(Booking.booking_id == request.booking_id).first()
+        b_stmt = (
+            select(Booking)
+            .options(joinedload(Booking.car))
+            .where(
+                Booking.client_id == current_client.id,
+                Booking.booking_id == request.booking_id,
+            )
+        )
+    b_result = await db.execute(b_stmt)
+    booking = b_result.scalar_one_or_none()
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
@@ -525,10 +534,10 @@ async def process_ardena_pay(
         db.add(stellar_tx)
         booking.status = BookingStatus.CONFIRMED
         booking.status_updated_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(booking)
+        await db.commit()
+        await db.refresh(booking)
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.exception("Ardena Pay: failed to save payment/booking: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -538,12 +547,12 @@ async def process_ardena_pay(
     from app.models import Car
     from app.schemas import BookingResponse
 
-    final_booking = (
-        db.query(Booking)
+    fb_result = await db.execute(
+        select(Booking)
         .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(Booking.id == booking.id)
-        .first()
+        .where(Booking.id == booking.id)
     )
+    final_booking = fb_result.scalar_one_or_none()
     if not final_booking:
         raise HTTPException(status_code=404, detail="Booking not found after payment")
     from app.services.booking_emails import send_booking_ticket_email
@@ -565,9 +574,9 @@ async def process_ardena_pay(
 @router.get(
     "/client/payments/transactions", response_model=List[StellarTransactionResponse]
 )
-def list_ardena_pay_transactions(
+async def list_ardena_pay_transactions(
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     booking_id: Optional[int] = Query(None, description="Filter by booking id"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
@@ -576,17 +585,18 @@ def list_ardena_pay_transactions(
     List Ardena Pay (USDC/XLM) transactions for the current client. Optionally filter by booking_id.
     amount_usd is always set (from amount_ksh) for display.
     """
-    q = db.query(StellarPaymentTransaction).filter(
+    stmt = select(StellarPaymentTransaction).where(
         StellarPaymentTransaction.client_id == current_client.id
     )
     if booking_id is not None:
-        q = q.filter(StellarPaymentTransaction.booking_id == booking_id)
-    rows = (
-        q.order_by(StellarPaymentTransaction.created_at.desc())
+        stmt = stmt.where(StellarPaymentTransaction.booking_id == booking_id)
+    stmt = (
+        stmt.order_by(StellarPaymentTransaction.created_at.desc())
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
     return [
         StellarTransactionResponse(
             id=r.id,
@@ -916,7 +926,7 @@ def _apply_pesapal_result_to_payment(
                 .first()
             )
             if ext and ext.status == "host_approved":
-                from app.api.v1.endpoints.bookings import DAMAGE_WAIVER_PRICE_PER_DAY
+                from app.routers.bookings import DAMAGE_WAIVER_PRICE_PER_DAY
 
                 ext.status = "paid"
                 extra_days = ext.extra_days
@@ -1198,7 +1208,7 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
         # we never mis-route if Payhero payload is unusual.
         ext_for_sub = str(external_reference).strip() if external_reference else ""
         if ext_for_sub.upper().startswith("H-SUB"):
-            if process_host_subscription_mpesa_callback(db, payload):
+            if await process_host_subscription_mpesa_callback(db, payload):
                 logger.info(
                     "[PAYHERO CALLBACK] Handled host subscription (H-SUB first): CheckoutRequestID=%s, ExternalReference=%s",
                     checkout_request_id,
@@ -1246,7 +1256,7 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
         if not payment:
             # Host subscription STK (external_reference H-SUB-{id})
-            if process_host_subscription_mpesa_callback(db, payload):
+            if await process_host_subscription_mpesa_callback(db, payload):
                 logger.info(
                     "[PAYHERO CALLBACK] Handled host subscription: CheckoutRequestID=%s, ExternalReference=%s",
                     checkout_request_id,

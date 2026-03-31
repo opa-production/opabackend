@@ -163,7 +163,7 @@ async def login_host(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
+        "expires_in": access_token_expires,
         "host": host,
         "device_token": device_token_raw,
     }
@@ -216,7 +216,7 @@ async def host_biometric_login(
     await db.commit()
 
     token_data = {"sub": str(host.id), "role": "host"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
@@ -226,7 +226,7 @@ async def host_biometric_login(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "host": host,
         "device_token": None,  # Never issue a new device token here
     }
@@ -330,7 +330,7 @@ async def refresh_host_token(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
     }
 
 
@@ -356,6 +356,7 @@ async def update_host_profile(
     - **bio**: Host bio/description (optional, max 2000 characters)
     - **mobile_number**: Mobile phone number (optional, max 50 characters)
     - **id_number**: ID number, passport number, or driver's license number (optional, max 100 characters)
+    - **city**: City where the host operates (optional, max 100 characters)
 
     Updates the authenticated host's profile. All fields are optional.
     Only provided fields will be updated.
@@ -367,6 +368,8 @@ async def update_host_profile(
         current_host.mobile_number = request.mobile_number
     if request.id_number is not None:
         current_host.id_number = request.id_number
+    if request.city is not None:
+        current_host.city = request.city
 
     await db.commit()
     await db.refresh(current_host)
@@ -707,7 +710,7 @@ async def host_google_auth(
 
     # Create tokens
     token_data = {"sub": str(host.id), "role": "host"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
@@ -717,7 +720,7 @@ async def host_google_auth(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": access_token_expires_in_seconds(access_token),
         "host": host,
     }
 
