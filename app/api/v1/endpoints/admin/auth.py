@@ -58,7 +58,7 @@ async def login_admin(
         )
 
     # Create access token with role
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(seconds=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     access_token = create_access_token(
         data={"sub": str(admin.id), "role": "admin"}, expires_delta=access_token_expires
     )
@@ -66,7 +66,7 @@ async def login_admin(
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": access_token_expires,
+        "expires_in": int(access_token_expires.total_seconds()),
         "admin": admin,
     }
 

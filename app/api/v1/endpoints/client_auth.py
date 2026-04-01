@@ -197,7 +197,7 @@ async def login_client(
 
     # Create access token with role
     token_data = {"sub": str(client.id), "role": "client"}
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(seconds=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
@@ -223,7 +223,7 @@ async def login_client(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": access_token_expires,
+        "expires_in": int(access_token_expires.total_seconds()),
         "client": client,
         "device_token": device_token_raw,
     }
