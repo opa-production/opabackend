@@ -107,6 +107,7 @@ from app.database import engine, Base, SessionLocal
 from app import models  # Import models to ensure they're registered
 from app.models import DrivingLicense  # Import DrivingLicense to ensure it's registered
 from app.routers import (
+    public_config as public_config_router,
     host_auth,
     client_auth,
     cars,
@@ -157,6 +158,7 @@ app = FastAPI(
     redoc_url="/redoc",  # Explicitly enable ReDoc
     openapi_url="/openapi.json",  # Explicitly enable OpenAPI schema
     openapi_tags=[
+        {"name": "Config", "description": "Public app configuration (no auth)"},
         {"name": "Host Auth", "description": "Host authentication endpoints"},
         {"name": "Client Auth", "description": "Client authentication endpoints"},
         {"name": "Car Management", "description": "Car listing and management"},
@@ -271,6 +273,7 @@ async def startup_init_cache():
         )
 
 # Include routers
+app.include_router(public_config_router.router, prefix="/api/v1", tags=["Config"])
 app.include_router(host_auth.router, prefix="/api/v1", tags=["Host Auth"])
 app.include_router(client_auth.router, prefix="/api/v1", tags=["Client Auth"])
 app.include_router(cars.router, prefix="/api/v1", tags=["Car Management"])
@@ -280,6 +283,7 @@ app.include_router(support.router, prefix="/api/v1", tags=["Support Messages"])
 app.include_router(messages.router, prefix="/api/v1", tags=["Client-Host Messages"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
+app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishlist"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])

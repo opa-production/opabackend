@@ -330,13 +330,6 @@ async def create_booking(
             detail="Please add your driving license information before making a booking."
         )
     
-    # Verify client has accepted terms and conditions
-    if not current_client.terms_accepted_at:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please accept the terms and conditions before making a booking."
-        )
-    
     # Calculate rental days
     rental_days = (request.end_date - request.start_date).days
     if rental_days < 1:

@@ -70,6 +70,15 @@ router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 
+async def _ensure_client_terms_accepted(db: AsyncSession, client: Client) -> None:
+    """Set terms_accepted_at for legacy accounts; registration/Google set it on create."""
+    if client.terms_accepted_at is not None:
+        return
+    client.terms_accepted_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(client)
+
+
 @router.post("/client/auth/register", response_model=ClientRegisterResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register_client(
@@ -99,7 +108,8 @@ async def register_client(
     db_client = Client(
         full_name=body.full_name,
         email=body.email,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        terms_accepted_at=datetime.now(timezone.utc),
     )
     
     db.add(db_client)
@@ -188,6 +198,8 @@ async def login_client(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    await _ensure_client_terms_accepted(db, client)
     
     # Create access token with role
     token_data = {"sub": str(client.id), "role": "client"}
@@ -351,6 +363,8 @@ async def refresh_client_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Client no longer exists"
         )
+
+    await _ensure_client_terms_accepted(db, client)
     
     # Create new token pair
     token_data = {"sub": str(client.id), "role": "client"}
@@ -949,7 +963,8 @@ async def client_google_auth(
                 hashed_password=get_password_hash(secrets.token_urlsafe(32)),
                 google_id=google_id,
                 avatar_url=avatar_url,
-                is_active=True
+                is_active=True,
+                terms_accepted_at=datetime.now(timezone.utc),
             )
             db.add(client)
             await db.commit()
@@ -980,6 +995,8 @@ async def client_google_auth(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is inactive"
         )
+
+    await _ensure_client_terms_accepted(db, client)
 
     # Create tokens
     token_data = {"sub": str(client.id), "role": "client"}
@@ -1054,9 +1071,13 @@ async def biometric_login(
             detail="Client not found or inactive",
         )
 
-    # Update last_used_at for auditing
-    db_token.last_used_at = datetime.now(timezone.utc)
+    # Update last_used_at for auditing; backfill terms for legacy accounts
+    now = datetime.now(timezone.utc)
+    db_token.last_used_at = now
+    if client.terms_accepted_at is None:
+        client.terms_accepted_at = now
     await db.commit()
+    await db.refresh(client)
 
     token_data = {"sub": str(client.id), "role": "client"}
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
