@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
@@ -376,7 +375,7 @@ async def add_client_card_payment_method(
 async def add_client_card_pesapal(
     request: ClientCardAddPesapalRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Add a card payment method for paying via Pesapal (Visa/Mastercard) without storing card number or CVC.
@@ -384,15 +383,16 @@ async def add_client_card_pesapal(
     Use this instead of POST /client/payment-methods/card when using Pesapal for card payments.
     """
     if request.is_default:
-        existing_defaults = db.query(PaymentMethod).filter(
+        stmt = select(PaymentMethod).filter(
             PaymentMethod.client_id == current_client.id,
-            PaymentMethod.is_default == True
-        ).all()
-        for pm in existing_defaults:
+            PaymentMethod.is_default == True,
+        )
+        result = await db.execute(stmt)
+        for pm in result.scalars().all():
             pm.is_default = False
     method_type_map = {
         "visa": PaymentMethodType.VISA,
-        "mastercard": PaymentMethodType.MASTERCARD
+        "mastercard": PaymentMethodType.MASTERCARD,
     }
     db_payment_method = PaymentMethod(
         host_id=None,
@@ -401,11 +401,11 @@ async def add_client_card_pesapal(
         method_type=method_type_map[request.card_type],
         card_type=request.card_type,
         card_last_four=None,
-        is_default=request.is_default or False
+        is_default=request.is_default or False,
     )
     db.add(db_payment_method)
-    db.commit()
-    db.refresh(db_payment_method)
+    await db.commit()
+    await db.refresh(db_payment_method)
     return db_payment_method
 
 
