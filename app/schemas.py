@@ -1628,6 +1628,8 @@ class CarListingResponse(BaseModel):
     location_name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # Host operating city (from hosts.city) — use with operating_cities from GET /config for grouping
+    host_city: Optional[str] = None
     # New media fields (preferred)
     cover_image: Optional[str] = None
     car_images: Optional[List[str]] = None  # Array of image URLs for carousel
@@ -1682,6 +1684,7 @@ class CarExploreItemResponse(BaseModel):
     is_renters_favourite: bool = False  # Placeholder for future favourite system
     is_wishlisted: bool = False  # Placeholder for future wishlist system
     location_name: Optional[str] = None
+    host_city: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1718,6 +1721,7 @@ class WishlistCarItem(BaseModel):
     daily_rate: Optional[float] = None
     cover_image: Optional[str] = None
     location_name: Optional[str] = None
+    host_city: Optional[str] = None
     created_at: datetime
 
 

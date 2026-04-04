@@ -155,7 +155,7 @@ async def list_wishlist_cars(
     """
     result = await db.execute(
         select(WishlistItem)
-        .options(joinedload(WishlistItem.car))
+        .options(joinedload(WishlistItem.car).joinedload(Car.host))
         .where(WishlistItem.client_id == current_client.id)
         .order_by(WishlistItem.created_at.desc())
         .offset(skip)
@@ -176,6 +176,7 @@ async def list_wishlist_cars(
                 daily_rate=car.daily_rate,
                 cover_image=_cover_image_for_car(car),
                 location_name=car.location_name,
+                host_city=car.host.city if car.host else None,
                 created_at=item.created_at,
             )
         )

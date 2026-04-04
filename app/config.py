@@ -82,6 +82,9 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in raw.split(",") if origin.strip()]
         return value
 
+    # Comma-separated list for client apps (city tabs, filters). Override in .env, e.g. OPERATING_CITIES=Nairobi,Nakuru,Mombasa,Kisumu
+    OPERATING_CITIES: str = "Nairobi,Nakuru,Mombasa,Kisumu"
+
     FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
     PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  
     HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  

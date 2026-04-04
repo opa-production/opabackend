@@ -207,6 +207,7 @@ def car_to_listing_response(car: Car) -> dict:
         "location_name": car.location_name,
         "latitude": car.latitude,
         "longitude": car.longitude,
+        "host_city": (car.host.city if car.host else None),
         # New media fields (preferred)
         "cover_image": car.cover_image,
         "car_images": car_images_array,  # Array for carousel
@@ -237,6 +238,10 @@ async def get_car_listings(
     fuel_type: Optional[str] = Query(None, description="Filter by fuel type"),
     transmission: Optional[str] = Query(None, description="Filter by transmission"),
     min_seats: Optional[int] = Query(None, ge=1, description="Minimum number of seats"),
+    city: Optional[str] = Query(
+        None,
+        description="Filter by host operating city (hosts.city), case-insensitive; use names from GET /config operating_cities",
+    ),
     start_date: Optional[datetime] = Query(None, description="Check availability from this date"),
     end_date: Optional[datetime] = Query(None, description="Check availability until this date"),
     db: AsyncSession = Depends(get_db)
@@ -245,7 +250,7 @@ async def get_car_listings(
     Get list of available car listings for clients to browse.
     
     - Returns only complete listings (is_complete = True)
-    - Supports filtering by location, price, car type, etc.
+    - Supports filtering by location, price, car type, host city, etc.
     - When start_date and end_date (pickup and return dates) are provided, returns only cars
       that are available for that period: no overlapping booking (pending/confirmed/active)
       and no overlapping host-blocked dates.
@@ -275,6 +280,9 @@ async def get_car_listings(
     
     if min_seats:
         stmt = stmt.filter(Car.seats >= min_seats)
+
+    if city and city.strip():
+        stmt = stmt.where(Car.host.has(Host.city.ilike(city.strip())))
     
     # Date availability filter (start_date = pickup, end_date = return)
     if start_date and end_date:
@@ -329,6 +337,10 @@ async def explore_cars(
     min_price: Optional[float] = Query(None, ge=0, description="Minimum daily rate"),
     max_price: Optional[float] = Query(None, ge=0, description="Maximum daily rate"),
     body_type: Optional[str] = Query(None, description="Filter by body type"),
+    city: Optional[str] = Query(
+        None,
+        description="Filter by host operating city (hosts.city), case-insensitive; use names from GET /config operating_cities",
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -350,7 +362,7 @@ async def explore_cars(
     - Supports filtering by location, price range, body type
     """
     logger.info(f"🖼️ [EXPLORE CARS] Request received: page={page}, limit={limit}, "
-               f"search={search}, location={location}, min_price={min_price}, "
+               f"search={search}, location={location}, city={city}, min_price={min_price}, "
                f"max_price={max_price}, body_type={body_type}")
     
     # Base query: only verified and visible listings (is_complete not required for explore)
@@ -382,6 +394,9 @@ async def explore_cars(
     # Apply body type filter
     if body_type:
         stmt = stmt.filter(Car.body_type.ilike(f"%{body_type}%"))
+
+    if city and city.strip():
+        stmt = stmt.where(Car.host.has(Host.city.ilike(city.strip())))
     
     # Get total count before pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -448,7 +463,8 @@ async def explore_cars(
             rating=None,  # Placeholder for future rating system
             is_renters_favourite=False,  # Placeholder for future favourite system
             is_wishlisted=False,  # Placeholder for future wishlist system
-            location_name=car.location_name
+            location_name=car.location_name,
+            host_city=car.host.city if car.host else None,
         ))
         
         logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Added to response. cover_image={cover_image} "
