@@ -776,7 +776,7 @@ async def cancel_booking(
     await db.commit()
     await db.refresh(booking)
     
-    return response_dict
+    return booking_to_response(booking)
 
 
 @router.get("/client/bookings/{booking_id}/cancellation-preview", response_model=BookingResponse)
