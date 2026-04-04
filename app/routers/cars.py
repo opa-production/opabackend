@@ -2,7 +2,7 @@
 Car listing endpoints for clients (read-only browsing)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select
 from typing import Optional, List
@@ -933,7 +933,7 @@ async def get_car_details(
 @router.get("/client/cars/{car_id}", response_model=CarListingResponse)
 async def get_car_details_client(
     car_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific car for car details page (client endpoint).
@@ -963,7 +963,7 @@ async def get_car_availability(
     car_id: int,
     start_date: Optional[datetime] = Query(None, description="Check availability from this date"),
     end_date: Optional[datetime] = Query(None, description="Check availability until this date"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Check availability of a specific car.
@@ -974,11 +974,14 @@ async def get_car_availability(
     - Returns list of booked date ranges and availability status
     """
     # Verify car exists and is verified
-    car = db.query(Car).filter(
-        Car.id == car_id,
-        Car.verification_status == VerificationStatus.VERIFIED.value,
-        Car.is_hidden == False
-    ).first()
+    car_result = await db.execute(
+        select(Car).where(
+            Car.id == car_id,
+            Car.verification_status == VerificationStatus.VERIFIED.value,
+            Car.is_hidden == False,
+        )
+    )
+    car = car_result.scalar_one_or_none()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -990,37 +993,45 @@ async def get_car_availability(
     today_datetime = datetime.combine(today, datetime.min.time())
     
     # Get all active bookings for this car that haven't ended yet
-    bookings_query = db.query(Booking).filter(
-        Booking.car_id == car_id,
-        Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
-        Booking.end_date >= today_datetime
+    bookings_stmt = (
+        select(Booking)
+        .where(
+            Booking.car_id == car_id,
+            Booking.status.in_(
+                [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]
+            ),
+            Booking.end_date >= today_datetime,
+        )
+        .order_by(Booking.start_date)
     )
-    
     if start_date and end_date:
-        bookings_query = bookings_query.filter(
+        bookings_stmt = bookings_stmt.where(
             and_(
                 Booking.start_date < end_date,
-                Booking.end_date > start_date
+                Booking.end_date > start_date,
             )
         )
-    
-    bookings = bookings_query.order_by(Booking.start_date).all()
+    bookings_result = await db.execute(bookings_stmt)
+    bookings = list(bookings_result.scalars().all())
     
     # Get host-blocked dates for this car (only future/current ones)
-    blocked_query = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id,
-        CarBlockedDate.end_date >= today_datetime
+    blocked_stmt = (
+        select(CarBlockedDate)
+        .where(
+            CarBlockedDate.car_id == car_id,
+            CarBlockedDate.end_date >= today_datetime,
+        )
+        .order_by(CarBlockedDate.start_date)
     )
-    
     if start_date and end_date:
-        blocked_query = blocked_query.filter(
+        blocked_stmt = blocked_stmt.where(
             and_(
                 CarBlockedDate.start_date < end_date,
-                CarBlockedDate.end_date > start_date
+                CarBlockedDate.end_date > start_date,
             )
         )
-    
-    blocked_entries = blocked_query.order_by(CarBlockedDate.start_date).all()
+    blocked_result = await db.execute(blocked_stmt)
+    blocked_entries = list(blocked_result.scalars().all())
     
     # Build booked dates list
     booked_dates = [
