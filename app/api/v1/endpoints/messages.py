@@ -4,6 +4,7 @@ Client-Host Messaging endpoints
 
 from datetime import datetime, timezone
 from typing import List, Optional
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
@@ -485,24 +486,34 @@ async def get_host_conversations(
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
+     # Bulk-load related clients and messages to avoid N+1 query overhead.
+    conversation_ids = [conv.id for conv in conversations]
+    client_ids = list({conv.client_id for conv in conversations})
+
+    clients_by_id = {}
+    if client_ids:
+        clients_result = await db.execute(select(Client).filter(Client.id.in_(client_ids)))
+        clients = clients_result.scalars().all()
+        clients_by_id = {client.id: client for client in clients}
+
+    messages_by_conversation_id = defaultdict(list)
+    if conversation_ids:
+        messages_result = await db.execute(
+            select(ClientHostMessage)
+            .filter(ClientHostMessage.conversation_id.in_(conversation_ids))
+            .order_by(ClientHostMessage.created_at.asc())
+        )
+        all_messages = messages_result.scalars().all()
+        for msg in all_messages:
+            messages_by_conversation_id[msg.conversation_id].append(msg)
+
     # Build conversation responses
     conversation_list = []
     unread_count = 0
 
     for conv in conversations:
-        # Get client info
-        client_stmt = select(Client).filter(Client.id == conv.client_id)
-        client_result = await db.execute(client_stmt)
-        client = client_result.scalar_one_or_none()
-
-        # Get all messages
-        msg_stmt = (
-            select(ClientHostMessage)
-            .filter(ClientHostMessage.conversation_id == conv.id)
-            .order_by(ClientHostMessage.created_at.asc())
-        )
-        msg_result = await db.execute(msg_stmt)
-        messages = msg_result.scalars().all()
+        client = clients_by_id.get(conv.client_id)
+        messages = messages_by_conversation_id.get(conv.id, [])
 
         # Build message responses
         message_list = []

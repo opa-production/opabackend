@@ -9,11 +9,10 @@ from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi_cache import FastAPICache
 from fastapi_cache.decorator import cache
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 logger = logging.getLogger(__name__)
 
@@ -1065,7 +1064,7 @@ async def get_car_details(car_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/client/cars/{car_id}", response_model=CarListingResponse)
-async def get_car_details_client(car_id: int, db: Session = Depends(get_db)):
+async def get_car_details_client(car_id: int, db: AsyncSession = Depends(get_db)):
     """
     Get detailed information about a specific car for car details page (client endpoint).
 
@@ -1092,101 +1091,100 @@ async def get_car_details_client(car_id: int, db: Session = Depends(get_db)):
 @router.get("/cars/{car_id}/availability", response_model=CarAvailabilityResponse)
 async def get_car_availability(
     car_id: int,
-    start_date: Optional[datetime] = Query(
-        None, description="Check availability from this date"
-    ),
-    end_date: Optional[datetime] = Query(
-        None, description="Check availability until this date"
-    ),
-    db: Session = Depends(get_db),
+    start_date: Optional[datetime] = Query(None, description="Check availability from this date"),
+    end_date: Optional[datetime] = Query(None, description="Check availability until this date"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Check availability of a specific car.
-
+    
     - **car_id**: The unique identifier of the car
     - **start_date**: Optional start date to check specific range
     - **end_date**: Optional end date to check specific range
     - Returns list of booked date ranges and availability status
     """
     # Verify car exists and is verified
-    car = (
-        db.query(Car)
-        .filter(
+    car_result = await db.execute(
+        select(Car).where(
             Car.id == car_id,
             Car.verification_status == VerificationStatus.VERIFIED.value,
             Car.is_hidden == False,
         )
-        .first()
     )
+    car = car_result.scalar_one_or_none()
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found or not available",
+            detail="Car listing not found or not available"
         )
-
+    
     # Get current date (date only, no time)
     today = date.today()
     today_datetime = datetime.combine(today, datetime.min.time())
-
+    
     # Get all active bookings for this car that haven't ended yet
-    bookings_query = db.query(Booking).filter(
-        Booking.car_id == car_id,
-        Booking.status.in_(
-            [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]
-        ),
-        Booking.end_date >= today_datetime,
-    )
-
-    if start_date and end_date:
-        bookings_query = bookings_query.filter(
-            and_(Booking.start_date < end_date, Booking.end_date > start_date)
+    bookings_stmt = (
+        select(Booking)
+        .where(
+            Booking.car_id == car_id,
+            Booking.status.in_(
+                [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]
+            ),
+            Booking.end_date >= today_datetime,
         )
-
-    bookings = bookings_query.order_by(Booking.start_date).all()
-
-    # Get host-blocked dates for this car (only future/current ones)
-    blocked_query = db.query(CarBlockedDate).filter(
-        CarBlockedDate.car_id == car_id, CarBlockedDate.end_date >= today_datetime
+        .order_by(Booking.start_date)
     )
-
     if start_date and end_date:
-        blocked_query = blocked_query.filter(
+        bookings_stmt = bookings_stmt.where(
+            and_(
+                Booking.start_date < end_date,
+                Booking.end_date > start_date,
+            )
+        )
+    bookings_result = await db.execute(bookings_stmt)
+    bookings = list(bookings_result.scalars().all())
+    
+    # Get host-blocked dates for this car (only future/current ones)
+    blocked_stmt = (
+        select(CarBlockedDate)
+        .where(
+            CarBlockedDate.car_id == car_id,
+            CarBlockedDate.end_date >= today_datetime,
+        )
+        .order_by(CarBlockedDate.start_date)
+    )
+    if start_date and end_date:
+        blocked_stmt = blocked_stmt.where(
             and_(
                 CarBlockedDate.start_date < end_date,
                 CarBlockedDate.end_date > start_date,
             )
         )
-
-    blocked_entries = blocked_query.order_by(CarBlockedDate.start_date).all()
-
+    blocked_result = await db.execute(blocked_stmt)
+    blocked_entries = list(blocked_result.scalars().all())
+    
     # Build booked dates list
     booked_dates = [
         {
             "start_date": booking.start_date.isoformat(),
             "end_date": booking.end_date.isoformat(),
-            "status": booking.status.value,
+            "status": booking.status.value
         }
         for booking in bookings
     ]
-
+    
     # Build blocked dates list (host-blocked periods visible to clients)
     blocked_dates = [
         {
-            "start_date": (
-                bd.start_date.isoformat()
-                if bd.start_date
-                else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()
-            ),
-            "end_date": (
-                bd.end_date.isoformat()
-                if bd.end_date
-                else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()
-            ),
-            "reason": bd.reason or "Unavailable",
+            "start_date": (bd.start_date.isoformat() if bd.start_date
+                           else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()),
+            "end_date": (bd.end_date.isoformat() if bd.end_date
+                         else datetime.combine(bd.blocked_date, datetime.min.time()).isoformat()),
+            "reason": bd.reason or "Unavailable"
         }
         for bd in blocked_entries
     ]
-
+    
     # Combined list for easy calendar rendering on the client
     unavailable_dates = [
         {"start_date": d["start_date"], "end_date": d["end_date"], "type": "booked"}
@@ -1195,26 +1193,25 @@ async def get_car_availability(
         {"start_date": d["start_date"], "end_date": d["end_date"], "type": "blocked"}
         for d in blocked_dates
     ]
-
+    
     # Check if today is booked or blocked
     today_is_booked = any(
         booking.start_date.date() <= today <= booking.end_date.date()
         for booking in bookings
     )
     today_is_blocked = any(
-        (bd.start_date.date() if bd.start_date else bd.blocked_date)
-        <= today
-        <= (bd.end_date.date() if bd.end_date else bd.blocked_date)
+        (bd.start_date.date() if bd.start_date else bd.blocked_date) <= today <=
+        (bd.end_date.date() if bd.end_date else bd.blocked_date)
         for bd in blocked_entries
     )
     today_unavailable = today_is_booked or today_is_blocked
-
+    
     # Calculate next available date considering both bookings and blocked dates
-    all_end_dates = [booking.end_date.date() for booking in bookings] + [
-        (bd.end_date.date() if bd.end_date else bd.blocked_date)
-        for bd in blocked_entries
-    ]
-
+    all_end_dates = (
+        [booking.end_date.date() for booking in bookings]
+        + [(bd.end_date.date() if bd.end_date else bd.blocked_date) for bd in blocked_entries]
+    )
+    
     next_available_date = None
     if not all_end_dates:
         next_available_date = today.isoformat()
@@ -1224,21 +1221,19 @@ async def get_car_availability(
             next_available_date = (latest_end_date + timedelta(days=1)).isoformat()
         else:
             next_available_date = today.isoformat()
-
+    
     # Check if specific range is available (against both bookings AND blocked dates)
     available = True
     message = "Car is available"
-
+    
     if start_date and end_date:
         booking_overlap = any(
             booking.start_date < end_date and booking.end_date > start_date
             for booking in bookings
         )
         blocked_overlap = any(
-            (bd.start_date or datetime.combine(bd.blocked_date, datetime.min.time()))
-            < end_date
-            and (bd.end_date or datetime.combine(bd.blocked_date, datetime.min.time()))
-            > start_date
+            (bd.start_date or datetime.combine(bd.blocked_date, datetime.min.time())) < end_date
+            and (bd.end_date or datetime.combine(bd.blocked_date, datetime.min.time())) > start_date
             for bd in blocked_entries
         )
         if booking_overlap or blocked_overlap:
@@ -1257,14 +1252,12 @@ async def get_car_availability(
             message = f"Car is currently unavailable. {', '.join(reasons)}"
         elif len(booked_dates) > 0 or len(blocked_dates) > 0:
             available = True
-            message = (
-                f"Car is available today. {len(booked_dates)} upcoming booking(s), "
-                f"{len(blocked_dates)} blocked period(s)"
-            )
+            message = (f"Car is available today. {len(booked_dates)} upcoming booking(s), "
+                       f"{len(blocked_dates)} blocked period(s)")
         else:
             available = True
             message = "Car is available"
-
+    
     return CarAvailabilityResponse(
         car_id=car_id,
         available=available,
@@ -1272,7 +1265,7 @@ async def get_car_availability(
         blocked_dates=blocked_dates,
         unavailable_dates=unavailable_dates,
         next_available_date=next_available_date,
-        message=message,
+        message=message
     )
 
 

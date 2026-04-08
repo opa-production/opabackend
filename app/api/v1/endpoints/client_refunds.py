@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
+from sqlalchemy import and_, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_client
 from app.db.session import get_db
-from app.models import Booking, Client, Refund, RefundStatus
+from app.models import Client, Refund, RefundStatus
 from app.schemas import ClientRefundListResponse, ClientRefundResponse
 
 router = APIRouter()
@@ -41,11 +43,9 @@ async def list_my_refunds(
         description="Optional numeric booking id to filter by",
     ),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List refunds for the current authenticated client.
@@ -53,20 +53,28 @@ async def list_my_refunds(
     - Optionally filter by a specific booking (numeric id).
     - Results are paginated and sorted by newest first.
     """
-    q = (
-        db.query(Refund)
-        .options(joinedload(Refund.booking))
-        .filter(
-            Refund.client_id == current_client.id,
-            Refund.client_deleted_at.is_(None),
-        )
-    )
-
+    conditions = [
+        Refund.client_id == current_client.id,
+        Refund.client_deleted_at.is_(None),
+    ]
     if booking_id is not None:
-        q = q.filter(Refund.booking_id == booking_id)
+        conditions.append(Refund.booking_id == booking_id)
+    where_clause = and_(*conditions)
 
-    total = q.count()
-    rows = q.order_by(Refund.created_at.desc()).offset(skip).limit(limit).all()
+    count_result = await db.execute(
+        select(func.count()).select_from(Refund).where(where_clause)
+    )
+    total = count_result.scalar_one()
+
+    result = await db.execute(
+        select(Refund)
+        .options(joinedload(Refund.booking))
+        .where(where_clause)
+        .order_by(Refund.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.scalars().all()
 
     return ClientRefundListResponse(
         refunds=[_client_refund_to_response(r) for r in rows],
@@ -80,20 +88,20 @@ async def list_my_refunds(
 async def get_my_refund_details(
     refund_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get details of a single refund belonging to the current client.
     """
-    refund = (
-        db.query(Refund)
+    result = await db.execute(
+        select(Refund)
         .options(joinedload(Refund.booking))
-        .filter(
+        .where(
             Refund.id == refund_id,
             Refund.client_id == current_client.id,
         )
-        .first()
     )
+    refund = result.scalar_one_or_none()
     if not refund:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,7 +114,7 @@ async def get_my_refund_details(
 async def delete_my_refund(
     refund_id: int,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Hide/delete a refund from the client's view.
@@ -116,14 +124,13 @@ async def delete_my_refund(
     - This is a soft delete: sets `client_deleted_at` so it no longer appears
       in `/client/refunds` responses.
     """
-    refund = (
-        db.query(Refund)
-        .filter(
+    result = await db.execute(
+        select(Refund).where(
             Refund.id == refund_id,
             Refund.client_id == current_client.id,
         )
-        .first()
     )
+    refund = result.scalar_one_or_none()
     if not refund:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -140,6 +147,6 @@ async def delete_my_refund(
         return None
 
     refund.client_deleted_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
 
     return None
