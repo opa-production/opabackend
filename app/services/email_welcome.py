@@ -1,13 +1,14 @@
 """
 Email sending via SendGrid: welcome emails and generic send for password reset etc.
 """
+
+import asyncio
 import base64
 import logging
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ DEFAULT_FROM = "Ardena Group Team <hello@ardena.xyz>"
 
 # Global thread pool for email sending
 email_executor = ThreadPoolExecutor(max_workers=3)
+
 
 def _get_from_email() -> str:
     return settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
@@ -54,7 +56,9 @@ async def send_email(to: str, subject: str, html: str) -> bool:
     This is non-blocking (runs in a thread pool).
     """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(email_executor, _send_email_sync, to, subject, html)
+    return await loop.run_in_executor(
+        email_executor, _send_email_sync, to, subject, html
+    )
 
 
 def _send_email_with_attachment_sync(
@@ -68,7 +72,9 @@ def _send_email_with_attachment_sync(
 ) -> bool:
     """Synchronous internal function for sending email with attachment."""
     if not settings.SENDGRID_API_KEY:
-        logger.warning("[Email] SENDGRID_API_KEY not set; skipping send with attachment")
+        logger.warning(
+            "[Email] SENDGRID_API_KEY not set; skipping send with attachment"
+        )
         return False
 
     from_email = _get_from_email()
@@ -76,12 +82,12 @@ def _send_email_with_attachment_sync(
     try:
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import (
-            Mail,
             Attachment,
+            Disposition,
             FileContent,
             FileName,
             FileType,
-            Disposition,
+            Mail,
         )
 
         encoded_file = base64.b64encode(attachment_bytes).decode("utf-8")
@@ -178,7 +184,10 @@ async def send_welcome_email_host(to_email: str, full_name: str) -> bool:
     """
     return await send_email(to_email, subject, html)
 
-async def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) -> bool:
+
+async def send_forgotpassword_email(
+    to_email: str, full_name: str, reset_link: str
+) -> bool:
     """
     Send password reset email to a user (host or client).
     """

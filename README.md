@@ -7,6 +7,7 @@ FastAPI backend for a car rental platform with server-side validation and multi-
 1. Make sure you have [UV](https://docs.astral.sh/) on your system:
 
 2. Setup the uv application:
+
 ```bash
   uv sync
 ```
@@ -14,6 +15,7 @@ FastAPI backend for a car rental platform with server-side validation and multi-
 **Adding new dependencies:** When you add a dependency to `pyproject.toml`, run `uv lock` and commit the updated `uv.lock`. Deploy uses `uv sync --locked`, so the lockfile must include every dependency or deploy will fail (and the app would fail at runtime with `ModuleNotFoundError`).
 
 3. Run the application:
+
 ```bash
 # For local development (localhost only)
 uv run uvicorn app.main:app --reload --port 8001
@@ -23,12 +25,14 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 The API will be available at:
+
 - Local: `http://localhost:8001`
 - Network: `http://<your-local-ip>:8001` (e.g., `http://192.168.100.69:8001`)
 - API Documentation (Swagger): `http://localhost:8001/docs` or `http://<your-local-ip>:8001/docs`
 - Alternative docs (ReDoc): `http://localhost:8001/redoc` or `http://<your-local-ip>:8001/redoc`
 
 **Note for Expo Go/Mobile Development:**
+
 - Make sure your computer and phone are on the same WiFi network
 - Use your local IP address (not localhost) in your app
 - Run the server with `--host 0.0.0.0 --port 8001` to allow network connections
@@ -37,11 +41,32 @@ The API will be available at:
 
 ## Database
 
-The application uses SQLite by default. The database file (`car_rental.db`) will be created automatically on first run.
+The application uses **PostgreSQL** as the main database for all application data. Media files are stored in **Supabase Storage** for scalability and performance.
+
+### Database Setup
+
+1. Set up a PostgreSQL database (local or cloud)
+2. Configure `DATABASE_URL` in your `.env` file:
+   ```
+   DATABASE_URL=postgresql+asyncpg://username:password@host:port/database_name
+   ```
+
+### Media Storage Setup
+
+1. Create a Supabase project at https://supabase.com
+2. Configure storage buckets in Supabase dashboard
+3. Set Supabase credentials in your `.env` file:
+   ```
+   SUPABASE_URL=https://your-project-id.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+   ```
+
+The database will be created automatically on first run with all required tables and relationships.
 
 ## API Endpoints
 
 ### Host Authentication
+
 - `POST /api/v1/host/auth/register` - Register a new host
 - `POST /api/v1/host/auth/login` - Login for hosts
 - `POST /api/v1/host/auth/logout` - Logout for hosts
@@ -50,6 +75,7 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `PUT /api/v1/host/change-password` - Change host password (requires current password verification)
 
 ### Client Authentication
+
 - `POST /api/v1/client/auth/register` - Register a new client
 - `POST /api/v1/client/auth/login` - Login for clients
 - `POST /api/v1/client/auth/logout` - Logout for clients
@@ -58,12 +84,14 @@ The application uses SQLite by default. The database file (`car_rental.db`) will
 - `PUT /api/v1/client/change-password` - Change client password (requires current password verification)
 
 ### Ardena Pay (Stellar wallet – client, requires authentication)
+
 - `GET /api/v1/client/wallet` - Get current client's Stellar wallet (public key, XLM/USDC balances). On testnet, includes `secret_key` for importing into Freighter/Lobstr.
 - `POST /api/v1/client/wallet` - Create a Stellar wallet (funded on testnet, USDC trust line added). Fails if wallet already exists.
 
 A wallet is created automatically when a client registers. Optional **.env**: `STELLAR_HORIZON_URL` (default testnet), `STELLAR_USDC_ISSUER_TESTNET`, `STELLAR_SHOW_SECRET_TESTNET=1` to include secret in response.
 
 ### Car Management (Host only, requires authentication)
+
 - `POST /api/v1/cars/basics` - Step 1: Create car with basic information
 - `PUT /api/v1/cars/{car_id}/specs` - Step 2: Update car technical specifications
 - `PUT /api/v1/cars/{car_id}/pricing` - Step 3: Update car pricing and rules
@@ -75,10 +103,12 @@ A wallet is created automatically when a client registers. Optional **.env**: `S
 ### Media Upload (Requires authentication)
 
 #### Client Media Endpoints
+
 - `POST /api/v1/client/upload/avatar` - Upload client profile avatar
 - `POST /api/v1/client/upload/document` - Upload client documents (ID or license)
 
 #### Host Media Endpoints
+
 - `POST /api/v1/host/upload/avatar` - Upload host profile avatar
 - `POST /api/v1/host/upload/cover` - Upload host profile cover image
 - `POST /api/v1/host/upload/document` - Upload host documents (ID or license)
@@ -134,25 +164,32 @@ Veriff requires an **HTTPS** callback URL. For local development, expose your ba
    - **Use port 8001** (your backend), not 3000: `ngrok http 8001`.
 
 2. **Start your backend** (in one terminal):
+
    ```bash
    uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
    ```
 
 3. **Start ngrok** (in a second terminal), forwarding to port 8001:
+
    ```bash
    ngrok http 8001
    ```
+
    Or from the project root: `scripts\ngrok.bat` (Windows) or `./scripts/ngrok.sh` (Mac/Linux).
    You’ll see a line like:
+
    ```text
    Forwarding   https://abc123.ngrok-free.app -> http://localhost:8001
    ```
 
 4. **Set the callback URL in `.env`** (use the **HTTPS** URL from ngrok):
+
    ```env
    VERIFF_CALLBACK_URL=https://YOUR-NGROK-SUBDOMAIN.ngrok-free.app/api/v1/host/kyc/redirect
    ```
+
    Example: if ngrok shows `https://abc123.ngrok-free.app`, set:
+
    ```env
    VERIFF_CALLBACK_URL=https://abc123.ngrok-free.app/api/v1/host/kyc/redirect
    ```
@@ -176,21 +213,27 @@ Use one ngrok tunnel on port 8001 for both Payhero and Veriff callbacks.
 1. **Install ngrok** (if you haven’t): see [Local dev: ngrok for Veriff KYC](#local-dev-ngrok-for-veriff-kyc) (same steps). Auth token: `ngrok config add-authtoken YOUR_TOKEN`.
 
 2. **Start your backend** (Terminal 1):
+
    ```bash
    uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
    ```
 
 3. **Start ngrok** (Terminal 2), from project root:
+
    ```bash
    scripts\ngrok.bat
    ```
+
    Or: `ngrok http 8001`. Copy the **HTTPS** URL (e.g. `https://abc123.ngrok-free.app`).
 
 4. **Set in `.env`** (replace `YOUR-SUBDOMAIN` with your ngrok subdomain):
+
    ```env
    PAYHERO_CALLBACK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app/api/v1/mpesa/callback
    ```
+
    Optional, for Veriff KYC on the same tunnel:
+
    ```env
    VERIFF_CALLBACK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app/api/v1/host/kyc/redirect
    ```
@@ -220,6 +263,7 @@ Unpaid **pending** bookings are automatically cancelled after a set time so the 
 - **`PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES`** (default: `1`) – How often the background task runs to check for expired bookings.
 
 Optional in `.env`:
+
 ```env
 PENDING_BOOKING_EXPIRE_MINUTES=30
 PENDING_BOOKING_EXPIRE_CHECK_INTERVAL_MINUTES=1
@@ -232,12 +276,14 @@ On startup you’ll see a log like: `[EXPIRE] Pending booking expiry: expire aft
 If the admin panel or mobile app can't reach the backend (no logs appear):
 
 1. **Verify backend is running and listening:**
+
    ```bash
    # Check if port 8001 is listening
    netstat -an | findstr :8001  # Windows
    # or
    lsof -i :8001  # Mac/Linux
    ```
+
    You should see the port listening on `0.0.0.0:8001` (all interfaces).
 
 2. **Test connectivity from browser/terminal:**
@@ -278,6 +324,7 @@ If **no STK push appears on the customer’s phone** but the callback returns (e
 **Production `.env` – two ways to configure:**
 
 **Option A – Explicit URLs (any env var names):**
+
 ```env
 MPESA_TOKEN_URL=https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials
 MPESA_STK_URL=https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest
@@ -290,6 +337,7 @@ CONSUMER_SECRET=<your-live-consumer-secret>
 ```
 
 **Option B – Use MPESA_ENVIRONMENT (backend picks live URLs):**
+
 ```env
 MPESA_ENVIRONMENT=production
 MPESA_CALLBACK_URL=https://api.ardena.xyz/api/v1/mpesa/callback
@@ -312,12 +360,12 @@ MPESA_SHORTCODE_TYPE=till_number
 
 When a payment fails in production, the callback receives a `ResultCode` from Safaricom:
 
-| Code | Meaning | What to do |
-|------|---------|------------|
-| **0** | Success | Booking is confirmed. |
-| **1032** | User cancelled | Customer dismissed the STK prompt. They can retry. |
+| Code     | Meaning                           | What to do                                                                                                                                                                                                                          |
+| -------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0**    | Success                           | Booking is confirmed.                                                                                                                                                                                                               |
+| **1032** | User cancelled                    | Customer dismissed the STK prompt. They can retry.                                                                                                                                                                                  |
 | **2029** | Unresolved reason (often timeout) | Usually: customer didn’t enter PIN in time (~60s), network/operator issue, or sandbox vs live mismatch. Backend stores a user-friendly message; ensure `MPESA_*` URLs and shortcode match the customer’s network (sandbox vs live). |
-| Other | e.g. insufficient funds | Raw `ResultDesc` is stored and returned in `GET /client/payments/status`. |
+| Other    | e.g. insufficient funds           | Raw `ResultDesc` is stored and returned in `GET /client/payments/status`.                                                                                                                                                           |
 
 The backend maps **1032** and **2029** to short, user-friendly messages for the status API so the app can show “Payment cancelled” or “Payment timed out. Please try again.” instead of the raw Safaricom text.
 

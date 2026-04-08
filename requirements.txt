@@ -1,7 +1,6 @@
 # Production (pip): use Python 3.10+ when possible. On Python 3.9, pydantic-settings is
 # capped at 2.11.x (2.12+ requires newer Python). Dev/uv uses pyproject.toml (3.12+).
 # Prefer: uv sync --locked. If you use pip, install gunicorn separately.
-aiosqlite>=0.20.0
 asyncpg>=0.31.0
 bcrypt==4.1.2
 fastapi==0.104.1
