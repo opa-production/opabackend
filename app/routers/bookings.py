@@ -1559,7 +1559,7 @@ async def delete_booking(
 async def delete_completed_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Hide/delete a **completed or cancelled** booking from the client's view.
@@ -1569,7 +1569,7 @@ async def delete_completed_booking(
     - Only bookings owned by the current client and with status `completed` or
       `cancelled` are allowed.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1587,7 +1587,7 @@ async def delete_completed_booking(
         return None
 
     booking.client_deleted_at = datetime.utcnow()
-    db.commit()
+    await db.commit()
 
     return None
 
