@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^class Client\\\\\\(Base\\\\\\):/,/^class [A-Z]/' /c/Users/PC/Desktop/opabackend/app/models.py)"
+    ]
+  }
+}

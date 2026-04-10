@@ -484,8 +484,9 @@ async def process_ardena_pay(
     final_booking = fb_result.scalar_one_or_none()
     if not final_booking:
         raise HTTPException(status_code=404, detail="Booking not found after payment")
-    from app.services.booking_emails import send_booking_ticket_email
+    from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails
     background_tasks.add_task(send_booking_ticket_email, booking.id)
+    background_tasks.add_task(send_rental_agreement_emails, booking.id)
     return ArdenaPayPaymentResponse(
         success=True,
         booking_id=str(final_booking.booking_id),
@@ -861,11 +862,15 @@ def _apply_pesapal_result_to_payment(db: Session, payment: Payment, result: dict
                 booking.status_updated_at = datetime.now(timezone.utc)
         db.commit()
         if booking and payment.extension_request_id is None:
-            from app.services.booking_emails import send_booking_ticket_email
+            from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails
             try:
                 send_booking_ticket_email(booking.id)
             except Exception as e:
                 logger.exception("[PESAPAL] send_booking_ticket_email failed: %s", e)
+            try:
+                send_rental_agreement_emails(booking.id)
+            except Exception as e:
+                logger.exception("[PESAPAL] send_rental_agreement_emails failed: %s", e)
     elif payment_status in ("failed", "invalid", "reversed"):
         payment.status = PaymentStatus.FAILED
         payment.result_desc = result.get("message") or f"Payment status: {payment_status}"
@@ -1181,6 +1186,12 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
             await db.commit()
             logger.info("[PAYHERO CALLBACK] Payment successful: Receipt=%s, CheckoutRequestID=%s", receipt, checkout_request_id)
+            # Send ticket + rental agreement to both parties (only for fresh bookings, not extensions)
+            if booking and payment.extension_request_id is None:
+                from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails
+                from app.services.email_welcome import email_executor
+                email_executor.submit(send_booking_ticket_email, booking.id)
+                email_executor.submit(send_rental_agreement_emails, booking.id)
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
             payment.status = PaymentStatus.CANCELLED if result_code_str == "1032" else PaymentStatus.FAILED
