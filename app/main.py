@@ -696,7 +696,13 @@ async def migrate_car_media_data(conn):
 async def startup_database():
     """Create database tables on startup and create default super admin"""
     print("🚀 Starting up...")
-    
+
+    # Store the running event loop so background threads can schedule DB-backed
+    # coroutines on it via run_coroutine_threadsafe (booking emails, agreements).
+    import asyncio as _asyncio
+    from app.services.booking_emails import set_main_loop
+    set_main_loop(_asyncio.get_running_loop())
+
     # Run migrations first
     await run_migrations()
     
