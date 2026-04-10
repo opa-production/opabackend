@@ -512,6 +512,25 @@ class ClientBiometricToken(Base):
     client: Mapped["Client"] = relationship("Client", back_populates="biometric_tokens")
 
 
+class ClientPushToken(Base):
+    """Expo push notification token for a client device."""
+    __tablename__ = "client_push_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
+    # Expo push token, e.g. ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+    token: Mapped[str] = mapped_column(String(500), nullable=False, unique=True, index=True)
+    platform: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # "ios" | "android"
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    )
+
+    client: Mapped["Client"] = relationship("Client", foreign_keys=[client_id])
+
+
 class HostBiometricToken(Base):
     """Device token used for biometric-based local unlock for hosts (no biometrics stored)."""
     __tablename__ = "host_biometric_tokens"

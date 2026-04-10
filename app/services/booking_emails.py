@@ -28,6 +28,7 @@ from app.models import Booking, Car, Client, Host, Payment, PaymentStatus
 from app.services.receipt import build_receipt_pdf
 from app.services.agreement import build_agreement_pdf
 from app.services.email_welcome import send_email, send_email_with_attachment
+from app.services.push_notifications import notify_booking_confirmed, notify_pickup_reminder
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,16 @@ async def _async_send_booking_ticket_email(booking_id: int) -> bool:
         )
         if ok:
             logger.info("[BookingEmail] Ticket sent to %s for booking_id=%s", client.email, booking_id)
+
+        # Push notification — fire and forget (don't fail email if push fails)
+        try:
+            car = booking.car
+            car_name = f"{getattr(car, 'name', '')} {getattr(car, 'model', '')}".strip() if car else "your car"
+            pickup_str = _fmt_date(booking.start_date)
+            await notify_booking_confirmed(client.id, booking_ref, car_name, pickup_str)
+        except Exception as push_err:
+            logger.warning("[BookingEmail] Push failed for booking_id=%s: %s", booking_id, push_err)
+
         return ok
 
     except Exception as e:
@@ -300,6 +311,21 @@ async def _async_send_pickup_reminder_email(booking_id: int) -> bool:
         ok = await send_email(client.email, subject, html)
         if ok:
             logger.info("[BookingEmail] Pickup reminder sent to %s for booking_id=%s", client.email, booking_id)
+
+        # Push notification
+        try:
+            pickup_time_str = _fmt_date(booking.start_date)
+            pickup_loc = booking.pickup_location or "the pickup location"
+            await notify_pickup_reminder(
+                client.id,
+                getattr(booking, "booking_id", ""),
+                car_name,
+                pickup_time_str,
+                pickup_loc,
+            )
+        except Exception as push_err:
+            logger.warning("[BookingEmail] Pickup push failed for booking_id=%s: %s", booking_id, push_err)
+
         return ok
 
     except Exception as e:

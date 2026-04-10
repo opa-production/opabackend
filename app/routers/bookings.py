@@ -49,6 +49,11 @@ from app.schemas import (
 )
 from app.services.receipt import build_receipt_pdf
 from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
+from app.services.push_notifications import (
+    notify_booking_cancelled,
+    notify_trip_started,
+    notify_trip_completed,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -772,10 +777,17 @@ async def cancel_booking(
     booking.status_updated_at = datetime.now(timezone.utc)
     if request and request.reason:
         booking.cancellation_reason = request.reason
-    
+
     await db.commit()
     await db.refresh(booking)
-    
+
+    import asyncio as _asyncio
+    _asyncio.ensure_future(notify_booking_cancelled(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        booking.cancellation_reason,
+    ))
+
     return booking_to_response(booking)
 
 
@@ -1252,6 +1264,15 @@ async def confirm_pickup_as_host(
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
 
+    import asyncio as _asyncio
+    car = booking.car if hasattr(booking, "car") and booking.car else None
+    car_name = f"{getattr(car, 'name', '')} {getattr(car, 'model', '')}".strip() if car else "your car"
+    _asyncio.ensure_future(notify_trip_started(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        car_name,
+    ))
+
     return booking_to_response(booking)
 
 
@@ -1308,6 +1329,15 @@ async def confirm_dropoff_as_host(
         current_host.id,
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
+
+    import asyncio as _asyncio
+    _car = booking.car if hasattr(booking, "car") and booking.car else None
+    _car_name = f"{getattr(_car, 'name', '')} {getattr(_car, 'model', '')}".strip() if _car else "your car"
+    _asyncio.ensure_future(notify_trip_completed(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        _car_name,
+    ))
 
     return booking_to_response(booking)
 
@@ -1474,6 +1504,15 @@ async def complete_booking_as_host(
         current_host.id,
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
+
+    import asyncio as _asyncio
+    _car2 = booking.car if hasattr(booking, "car") and booking.car else None
+    _car2_name = f"{getattr(_car2, 'name', '')} {getattr(_car2, 'model', '')}".strip() if _car2 else "your car"
+    _asyncio.ensure_future(notify_trip_completed(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        _car2_name,
+    ))
 
     return booking_to_response(booking)
 
