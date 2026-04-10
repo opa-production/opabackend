@@ -1,7 +1,7 @@
 """
 Car listing endpoints for clients (read-only browsing)
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select
@@ -63,6 +63,24 @@ def _host_cars_cache_key(
 
     raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
     return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+
+
+def _explore_cars_cache_key(
+    func,
+    namespace: str = "",
+    request: Request = None,
+    response: Response = None,
+    *args,
+    **kwargs,
+) -> str:
+    """
+    Public cache key for the explore endpoint.
+    Keyed on the full URL path + query string so each filter/page combo is cached separately.
+    """
+    path = request.url.path if request is not None else "/client/cars/explore"
+    query = str(request.query_params) if request is not None else ""
+    raw = f"{namespace}:{func.__module__}:{func.__name__}:{path}:{query}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
 def parse_image_urls(image_urls_str: Optional[str]) -> List[str]:
@@ -329,7 +347,9 @@ async def get_car_listings(
 
 
 @router.get("/client/cars/explore", response_model=CarExploreListResponse)
+@cache(expire=120, namespace="explore-cars", key_builder=_explore_cars_cache_key)
 async def explore_cars(
+    request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by car name, model, or location"),
@@ -947,6 +967,7 @@ async def get_car_details(
 
 
 @router.get("/client/cars/{car_id}", response_model=CarListingResponse)
+@cache(expire=300)  # Cache for 5 minutes (matches /cars/{car_id})
 async def get_car_details_client(
     car_id: int,
     db: AsyncSession = Depends(get_db)

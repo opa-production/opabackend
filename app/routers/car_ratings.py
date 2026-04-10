@@ -7,6 +7,7 @@ The host's overall rating is derived from their cars' ratings (see host_ratings.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi_cache.decorator import cache
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -229,6 +230,7 @@ async def delete_car_rating(
 # ==================== PUBLIC CAR RATING ENDPOINTS ====================
 
 @router.get("/cars/{car_id}/ratings", response_model=CarRatingListResponse)
+@cache(expire=120)  # Cache for 2 minutes — public, read-only
 async def get_car_ratings(
     car_id: int,
     skip: int = Query(0, ge=0),
