@@ -30,6 +30,18 @@ class PublicConfigResponse(BaseModel):
         ...,
         description="Canonical city names for browse tabs / filters (matches host operating city)",
     )
+    android_version: Optional[str] = Field(
+        None, description="Latest required Android app version. Omitted when no update is needed."
+    )
+    ios_version: Optional[str] = Field(
+        None, description="Latest required iOS app version. Omitted when no update is needed."
+    )
+    android_store_url: Optional[str] = Field(
+        None, description="Play Store URL or market:// deep-link for the Android update."
+    )
+    ios_store_url: Optional[str] = Field(
+        None, description="App Store URL for the iOS update."
+    )
 
 
 @router.get("/config", response_model=PublicConfigResponse)
@@ -40,4 +52,8 @@ async def get_public_config():
         ),
         frontend_url=settings.FRONTEND_URL,
         operating_cities=_operating_cities_list(),
+        android_version=settings.ANDROID_LATEST_VERSION or None,
+        ios_version=settings.IOS_LATEST_VERSION or None,
+        android_store_url=settings.ANDROID_STORE_URL or None,
+        ios_store_url=settings.IOS_STORE_URL or None,
     )

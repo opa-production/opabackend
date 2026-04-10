@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     # Comma-separated list for client apps (city tabs, filters). Override in .env, e.g. OPERATING_CITIES=Nairobi,Nakuru,Mombasa,Kisumu
     OPERATING_CITIES: str = "Nairobi,Nakuru,Mombasa,Kisumu"
 
+    # App version gates — set in .env to prompt users to update.
+    # Leave empty (or unset) to not show the update modal.
+    # Example: ANDROID_LATEST_VERSION=1.0.13  IOS_LATEST_VERSION=1.0.13
+    ANDROID_LATEST_VERSION: Optional[str] = None
+    IOS_LATEST_VERSION: Optional[str] = None
+    ANDROID_STORE_URL: Optional[str] = "market://details?id=com.ardena.app"
+    IOS_STORE_URL: Optional[str] = None
+
     FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
     PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  
     HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  
