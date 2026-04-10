@@ -1186,11 +1186,13 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
             await db.commit()
             logger.info("[PAYHERO CALLBACK] Payment successful: Receipt=%s, CheckoutRequestID=%s", receipt, checkout_request_id)
-            # Send ticket + rental agreement to both parties (only for fresh bookings, not extensions)
+            # Fire emails as background coroutines — do NOT use sync wrappers here because
+            # this is an async context; calling .result() would deadlock the event loop.
             if booking and payment.extension_request_id is None:
-                from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails
-                send_booking_ticket_email(booking.id)
-                send_rental_agreement_emails(booking.id)
+                import asyncio as _asyncio
+                from app.services.booking_emails import _async_send_booking_ticket_email, _async_send_rental_agreement_emails
+                _asyncio.ensure_future(_async_send_booking_ticket_email(booking.id))
+                _asyncio.ensure_future(_async_send_rental_agreement_emails(booking.id))
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
             payment.status = PaymentStatus.CANCELLED if result_code_str == "1032" else PaymentStatus.FAILED

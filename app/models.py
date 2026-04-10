@@ -759,7 +759,7 @@ Client.host_ratings = relationship("HostRating", back_populates="client", cascad
 # Update Client model to include ratings received from hosts
 Client.client_ratings = relationship("ClientRating", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include car ratings submitted by this client
-Client.car_ratings = relationship("CarRating", foreign_keys="CarRating.client_id", cascade="all, delete-orphan")
+Client.car_ratings = relationship("CarRating", foreign_keys="CarRating.client_id", back_populates="client", cascade="all, delete-orphan", overlaps="client")
 
 
 class Feedback(Base):
@@ -881,7 +881,7 @@ class CarRating(Base):
 
     # Relationships
     car = relationship("Car", foreign_keys=[car_id])
-    client = relationship("Client", foreign_keys=[client_id])
+    client = relationship("Client", foreign_keys=[client_id], back_populates="car_ratings", overlaps="car_ratings")
     booking = relationship("Booking", foreign_keys=[booking_id])
 
 
