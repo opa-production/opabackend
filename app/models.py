@@ -692,6 +692,10 @@ class Booking(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     pickup_reminder_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Push notification reminder tracking (10h / 5h / 1h before pickup)
+    push_reminder_10h_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    push_reminder_5h_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    push_reminder_1h_sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     client_deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

@@ -297,13 +297,13 @@ async def process_payment(
             # Other methods (e.g. future): confirm booking immediately
             booking.status = BookingStatus.CONFIRMED # type: ignore
             booking.status_updated_at = datetime.now(timezone.utc) # type: ignore
-        
+
         await db.commit()
         await db.refresh(booking)
-        
+
         logger.info(f"💳 [PROCESS PAYMENT] ✅ Request processed: booking_id={request.booking_id}, "
                    f"amount={booking.total_price}, status={booking.status}")
-        
+
         # Reload booking with relationships for response
         from app.models import Car
         final_booking_stmt = select(Booking).options(
@@ -315,10 +315,22 @@ async def process_payment(
         if not final_booking:
              raise HTTPException(status_code=404, detail="Booking lost during processing")
 
+        # Fire booking-confirmed push notification (fire-and-forget)
+        if booking.status == BookingStatus.CONFIRMED:
+            import asyncio as _asyncio
+            from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
+            car_name = ""
+            if final_booking and final_booking.car:
+                car_name = f"{final_booking.car.name} {final_booking.car.model or ''}".strip()
+            pickup_date = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
+            _asyncio.ensure_future(_notify_confirmed(
+                booking.client_id, str(booking.booking_id), car_name, pickup_date
+            ))
+
         # Import here to avoid circular import
         from app.routers.bookings import booking_to_response
         from app.schemas import BookingResponse
-        
+
         # Return payment confirmation with booking details
         return PaymentResponse(
             success=True,
@@ -487,6 +499,16 @@ async def process_ardena_pay(
     from app.services.booking_emails import _async_send_booking_ticket_email, _async_send_rental_agreement_emails
     background_tasks.add_task(_async_send_booking_ticket_email, booking.id)
     background_tasks.add_task(_async_send_rental_agreement_emails, booking.id)
+    # Fire booking-confirmed push notification
+    import asyncio as _asyncio
+    from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
+    _car_name = ""
+    if final_booking and final_booking.car:
+        _car_name = f"{final_booking.car.name} {final_booking.car.model or ''}".strip()
+    _pickup_date = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
+    _asyncio.ensure_future(_notify_confirmed(
+        booking.client_id, str(booking.booking_id), _car_name, _pickup_date
+    ))
     return ArdenaPayPaymentResponse(
         success=True,
         booking_id=str(final_booking.booking_id),
@@ -862,7 +884,8 @@ def _apply_pesapal_result_to_payment(db: Session, payment: Payment, result: dict
                 booking.status_updated_at = datetime.now(timezone.utc)
         db.commit()
         if booking and payment.extension_request_id is None:
-            from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails
+            from app.services.booking_emails import send_booking_ticket_email, send_rental_agreement_emails, _run_on_main_loop
+            from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
             try:
                 send_booking_ticket_email(booking.id)
             except Exception as e:
@@ -871,6 +894,17 @@ def _apply_pesapal_result_to_payment(db: Session, payment: Payment, result: dict
                 send_rental_agreement_emails(booking.id)
             except Exception as e:
                 logger.exception("[PESAPAL] send_rental_agreement_emails failed: %s", e)
+            # Push notification — run on main event loop from this sync thread
+            try:
+                _car_name = ""
+                if hasattr(booking, "car") and booking.car:
+                    _car_name = f"{booking.car.name} {booking.car.model or ''}".strip()
+                _pickup_date = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
+                _run_on_main_loop(_notify_confirmed(
+                    booking.client_id, str(booking.booking_id), _car_name, _pickup_date
+                ), timeout=15)
+            except Exception as e:
+                logger.exception("[PESAPAL] notify_booking_confirmed push failed: %s", e)
     elif payment_status in ("failed", "invalid", "reversed"):
         payment.status = PaymentStatus.FAILED
         payment.result_desc = result.get("message") or f"Payment status: {payment_status}"
@@ -1191,8 +1225,14 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
             if booking and payment.extension_request_id is None:
                 import asyncio as _asyncio
                 from app.services.booking_emails import _async_send_booking_ticket_email, _async_send_rental_agreement_emails
+                from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
                 _asyncio.ensure_future(_async_send_booking_ticket_email(booking.id))
                 _asyncio.ensure_future(_async_send_rental_agreement_emails(booking.id))
+                # Push: booking confirmed notification (no car join here — use generic name)
+                _pickup_date = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
+                _asyncio.ensure_future(_notify_confirmed(
+                    booking.client_id, str(booking.booking_id), "your car", _pickup_date
+                ))
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
             payment.status = PaymentStatus.CANCELLED if result_code_str == "1032" else PaymentStatus.FAILED
