@@ -207,7 +207,7 @@ def build_agreement_pdf(booking, paid_payment=None) -> bytes:
     story.append(HRFlowable(width="100%", thickness=2, color=NAVY, spaceAfter=6))
 
     story.append(Paragraph(
-        "This Vehicle Rental Agreement ("Agreement") is entered into between the parties "
+        'This Vehicle Rental Agreement ("Agreement") is entered into between the parties '
         "identified below and facilitated by Ardena Group as the platform operator. "
         "By completing payment the Renter accepts all terms herein. "
         "Electronic signatures constitute legally binding acceptance.",
