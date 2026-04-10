@@ -120,6 +120,7 @@ from app.routers import (
     payments,
     host_ratings,
     client_ratings,
+    car_ratings,
     host_earnings,
     host_subscription,
     wallet as wallet_router,
@@ -287,6 +288,7 @@ app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishl
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
+app.include_router(car_ratings.router, prefix="/api/v1", tags=["Car Ratings"])
 app.include_router(host_ratings.router, prefix="/api/v1", tags=["Host Ratings"])
 app.include_router(client_ratings.router, prefix="/api/v1", tags=["Client Ratings"])
 app.include_router(host_earnings.router, prefix="/api/v1", tags=["Host Earnings"])

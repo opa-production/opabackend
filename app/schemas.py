@@ -812,6 +812,51 @@ class ClientRatingListResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== CAR RATING SCHEMAS ====================
+
+class CarRatingCreateRequest(BaseModel):
+    """Request to create a car rating (primary rating)"""
+    car_id: int = Field(..., description="ID of the car being rated")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="ID of the completed booking this rating is for")
+
+
+class CarRatingUpdateRequest(BaseModel):
+    """Request to update a car rating"""
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+
+
+class CarRatingResponse(BaseModel):
+    """Car rating response schema"""
+    id: int
+    car_id: int
+    client_id: int
+    booking_id: Optional[int] = None
+    rating: int
+    review: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Display helpers
+    client_name: Optional[str] = None
+    car_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CarRatingListResponse(BaseModel):
+    """List of car ratings response"""
+    ratings: List[CarRatingResponse]
+    total: int
+    average_rating: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
 class ClientProfileForHostResponse(BaseModel):
     """Client summary for hosts (e.g. when viewing a renter profile). Includes trips count and rating."""
     id: int

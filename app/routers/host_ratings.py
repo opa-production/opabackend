@@ -10,13 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, select
 
 from app.database import get_db
-from app.models import HostRating, Host, Client, Booking, BookingStatus
+from app.models import HostRating, Host, Client, Booking, BookingStatus, Car, CarRating
 from app.auth import get_current_client
 from app.schemas import (
     HostRatingCreateRequest,
     HostRatingUpdateRequest,
     HostRatingResponse,
     HostRatingListResponse,
+    CarRatingResponse,
+    CarRatingListResponse,
 )
 
 router = APIRouter()
@@ -284,6 +286,21 @@ async def delete_host_rating(
 
 # ==================== PUBLIC HOST RATING ENDPOINTS ====================
 
+def car_rating_to_host_response(rating: CarRating) -> dict:
+    """Convert a CarRating into a HostRatingResponse-compatible dict for the host's derived rating view."""
+    return {
+        "id": rating.id,
+        "host_id": rating.car.host_id if rating.car else None,
+        "client_id": rating.client_id,
+        "booking_id": rating.booking_id,
+        "rating": rating.rating,
+        "review": rating.review,
+        "created_at": rating.created_at,
+        "updated_at": rating.updated_at,
+        "client_name": rating.client.full_name if rating.client else None,
+    }
+
+
 @router.get("/hosts/{host_id}/ratings", response_model=HostRatingListResponse)
 async def get_host_ratings(
     host_id: int,
@@ -292,12 +309,13 @@ async def get_host_ratings(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get all ratings for a specific host (public endpoint).
-    
+    Get all ratings for a specific host (public endpoint — secondary, derived from car ratings).
+
+    - Aggregates ratings across all cars owned by this host
+    - Average rating reflects each individual car's performance, not a host-level score
+    - A new unrated car does not affect the host's average
     - Returns ratings sorted by creation date (newest first)
-    - Includes average rating calculation
-    - Results are paginated
-    - No authentication required (public endpoint)
+    - No authentication required
     """
     # Verify host exists
     host_stmt = select(Host).filter(Host.id == host_id)
@@ -308,31 +326,36 @@ async def get_host_ratings(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Host not found"
         )
-    
-    stmt = select(HostRating).options(
-        joinedload(HostRating.client)
-    ).filter(HostRating.host_id == host_id)
-    
+
+    # Derive ratings from CarRating joined through Car
+    stmt = (
+        select(CarRating)
+        .join(Car, CarRating.car_id == Car.id)
+        .options(joinedload(CarRating.client), joinedload(CarRating.car))
+        .filter(Car.host_id == host_id)
+    )
+
     # Get total count
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
-    # Calculate average rating
-    avg_stmt = select(func.avg(HostRating.rating)).filter(HostRating.host_id == host_id)
+
+    # Calculate average rating across all host's cars
+    avg_stmt = (
+        select(func.avg(CarRating.rating))
+        .join(Car, CarRating.car_id == Car.id)
+        .filter(Car.host_id == host_id)
+    )
     avg_result = await db.execute(avg_stmt)
     average_rating = avg_result.scalar()
-    
+
     # Apply pagination and order by newest first
-    stmt = stmt.order_by(HostRating.created_at.desc()).offset(skip).limit(limit)
+    stmt = stmt.order_by(CarRating.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     ratings = result.scalars().all()
-    
-    # Convert to response format
-    rating_responses = [rating_to_response(r) for r in ratings]
-    
+
     return HostRatingListResponse(
-        ratings=rating_responses,
+        ratings=[car_rating_to_host_response(r) for r in ratings],
         total=total,
         average_rating=round(float(average_rating), 2) if average_rating else None
     )

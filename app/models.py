@@ -758,6 +758,8 @@ Client.wallet = relationship("ClientWallet", back_populates="client", uselist=Fa
 Client.host_ratings = relationship("HostRating", back_populates="client", cascade="all, delete-orphan")
 # Update Client model to include ratings received from hosts
 Client.client_ratings = relationship("ClientRating", back_populates="client", cascade="all, delete-orphan")
+# Update Client model to include car ratings submitted by this client
+Client.car_ratings = relationship("CarRating", foreign_keys="CarRating.client_id", cascade="all, delete-orphan")
 
 
 class Feedback(Base):
@@ -855,6 +857,31 @@ class ClientRating(Base):
     # Relationships
     client = relationship("Client", back_populates="client_ratings", foreign_keys=[client_id])
     host = relationship("Host", back_populates="client_ratings", foreign_keys=[host_id])
+    booking = relationship("Booking", foreign_keys=[booking_id])
+
+
+class CarRating(Base):
+    """Client ratings for individual cars (primary rating)"""
+    __tablename__ = "car_ratings"
+
+    id = mapped_column(Integer, primary_key=True, index=True)
+    car_id = mapped_column(Integer, ForeignKey("cars.id"), nullable=False, index=True)
+    client_id = mapped_column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    booking_id = mapped_column(Integer, ForeignKey("bookings.id"), nullable=True, unique=True, index=True)  # One rating per booking
+
+    # Rating (1-5 stars)
+    rating = mapped_column(Integer, nullable=False)  # 1 to 5
+
+    # Review content
+    review = mapped_column(Text, nullable=True)  # Optional text review
+
+    # Metadata
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+    # Relationships
+    car = relationship("Car", foreign_keys=[car_id])
+    client = relationship("Client", foreign_keys=[client_id])
     booking = relationship("Booking", foreign_keys=[booking_id])
 
 
