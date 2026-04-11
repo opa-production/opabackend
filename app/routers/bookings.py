@@ -54,6 +54,9 @@ from app.services.push_notifications import (
     notify_booking_cancelled,
     notify_trip_started,
     notify_trip_completed,
+    notify_host_new_booking,
+    notify_host_booking_cancelled,
+    notify_host_extension_requested,
 )
 
 router = APIRouter()
@@ -430,6 +433,14 @@ async def create_booking(
         ["host-bookings-list", "host-booking-details"],
     )
 
+    # Notify host of new booking (fire-and-forget)
+    _client_name = current_client.full_name or "A client"
+    _car_label = f"{car.name} {car.model or ''}".strip()
+    _start = request.start_date.strftime("%d %b %Y")
+    asyncio.ensure_future(notify_host_new_booking(
+        car.host_id, booking_id, _client_name, _car_label, _start
+    ))
+
     # Load relationships for response
     result = await db.execute(
         select(Booking).options(
@@ -786,6 +797,11 @@ async def cancel_booking(
     if request and request.reason:
         booking.cancellation_reason = request.reason
 
+    # Capture car info before commit expires the relationship
+    _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    _cancel_reason = request.reason if request else None
+
     await db.commit()
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
@@ -795,8 +811,11 @@ async def cancel_booking(
 
     asyncio.ensure_future(notify_booking_cancelled(
         booking.client_id,
-        getattr(booking, "booking_id", str(booking.id)),
+        _booking_ref,
         booking.cancellation_reason,
+    ))
+    asyncio.ensure_future(notify_host_booking_cancelled(
+        host_id, _booking_ref, _car_label, _cancel_reason
     ))
 
     return booking_to_response(booking)
@@ -959,6 +978,13 @@ async def create_booking_extension_request(
     db.add(extension)
     await db.commit()
     await db.refresh(extension)
+
+    # Notify host of extension request (fire-and-forget)
+    _car_label = f"{car.name} {getattr(car, 'model', '') or ''}".strip()
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    asyncio.ensure_future(notify_host_extension_requested(
+        car.host.id, _booking_ref, _car_label, extra_days
+    ))
 
     return extension
 
@@ -1553,8 +1579,10 @@ async def delete_booking(
             detail=f"Cannot delete booking with status '{booking.status.value}'"
         )
     
-    # Capture host_id before commit expires the relationship
+    # Capture host_id and car info before commit expires the relationship
     host_id = booking.car.host_id
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
 
     # Soft delete by cancelling
     booking.status = BookingStatus.CANCELLED
@@ -1566,6 +1594,7 @@ async def delete_booking(
         host_id,
         ["host-bookings-list", "host-booking-details"],
     )
+    asyncio.ensure_future(notify_host_booking_cancelled(host_id, _booking_ref, _car_label))
 
     return None
 

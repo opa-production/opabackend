@@ -315,10 +315,11 @@ async def process_payment(
         if not final_booking:
              raise HTTPException(status_code=404, detail="Booking lost during processing")
 
-        # Fire booking-confirmed push notification (fire-and-forget)
+        # Fire booking-confirmed push notifications (fire-and-forget)
         if booking.status == BookingStatus.CONFIRMED:
             import asyncio as _asyncio
             from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
+            from app.services.push_notifications import notify_host_payment_received as _notify_host_payment
             car_name = ""
             if final_booking and final_booking.car:
                 car_name = f"{final_booking.car.name} {final_booking.car.model or ''}".strip()
@@ -326,6 +327,13 @@ async def process_payment(
             _asyncio.ensure_future(_notify_confirmed(
                 booking.client_id, str(booking.booking_id), car_name, pickup_date
             ))
+            if final_booking and final_booking.car:
+                _asyncio.ensure_future(_notify_host_payment(
+                    final_booking.car.host_id,
+                    str(booking.booking_id),
+                    car_name,
+                    float(booking.total_price),
+                ))
 
         # Import here to avoid circular import
         from app.routers.bookings import booking_to_response
@@ -499,9 +507,10 @@ async def process_ardena_pay(
     from app.services.booking_emails import _async_send_booking_ticket_email, _async_send_rental_agreement_emails
     background_tasks.add_task(_async_send_booking_ticket_email, booking.id)
     background_tasks.add_task(_async_send_rental_agreement_emails, booking.id)
-    # Fire booking-confirmed push notification
+    # Fire booking-confirmed push notifications
     import asyncio as _asyncio
     from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
+    from app.services.push_notifications import notify_host_payment_received as _notify_host_payment
     _car_name = ""
     if final_booking and final_booking.car:
         _car_name = f"{final_booking.car.name} {final_booking.car.model or ''}".strip()
@@ -509,6 +518,13 @@ async def process_ardena_pay(
     _asyncio.ensure_future(_notify_confirmed(
         booking.client_id, str(booking.booking_id), _car_name, _pickup_date
     ))
+    if final_booking and final_booking.car:
+        _asyncio.ensure_future(_notify_host_payment(
+            final_booking.car.host_id,
+            str(booking.booking_id),
+            _car_name,
+            float(booking.total_price),
+        ))
     return ArdenaPayPaymentResponse(
         success=True,
         booking_id=str(final_booking.booking_id),
@@ -1226,12 +1242,29 @@ async def mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
                 import asyncio as _asyncio
                 from app.services.booking_emails import _async_send_booking_ticket_email, _async_send_rental_agreement_emails
                 from app.services.push_notifications import notify_booking_confirmed as _notify_confirmed
+                from app.services.push_notifications import notify_host_payment_received as _notify_host_pay
                 _asyncio.ensure_future(_async_send_booking_ticket_email(booking.id))
                 _asyncio.ensure_future(_async_send_rental_agreement_emails(booking.id))
-                # Push: booking confirmed notification (no car join here — use generic name)
+                # Push: client booking confirmed
                 _pickup_date = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
                 _asyncio.ensure_future(_notify_confirmed(
                     booking.client_id, str(booking.booking_id), "your car", _pickup_date
+                ))
+                # Push: host payment received (requires car/host — load separately)
+                async def _notify_host_on_payment(booking_id: int, booking_ref: str, amount: float):
+                    from app.database import SessionLocal
+                    from app.models import Booking as _Booking, Car as _Car
+                    from sqlalchemy import select as _select
+                    from sqlalchemy.orm import joinedload as _jl
+                    async with SessionLocal() as _db:
+                        _stmt = _select(_Booking).options(_jl(_Booking.car)).where(_Booking.id == booking_id)
+                        _res = await _db.execute(_stmt)
+                        _b = _res.scalar_one_or_none()
+                        if _b and _b.car:
+                            _cn = f"{_b.car.name} {getattr(_b.car, 'model', '') or ''}".strip()
+                            await _notify_host_pay(_b.car.host_id, booking_ref, _cn, amount)
+                _asyncio.ensure_future(_notify_host_on_payment(
+                    booking.id, str(booking.booking_id), float(booking.total_price)
                 ))
         else:
             # Failed: cancelled, insufficient funds, timeout, or other
@@ -1320,8 +1353,21 @@ async def payout_callback(request: Request, db: AsyncSession = Depends(get_db)):
         else:
             withdrawal.status = WithdrawalStatus.FAILED
             logger.warning(f"[PAYHERO PAYOUT CALLBACK] ❌ Payout Failed: {result_desc} (Code: {result_code}, ID: {withdrawal_id})")
-            
+
+        _wd_host_id = withdrawal.host_id
+        _wd_amount = float(withdrawal.amount)
+        _wd_success = withdrawal.status == WithdrawalStatus.COMPLETED
         await db.commit()
+
+        # Notify host of payout result (fire-and-forget)
+        import asyncio as _asyncio
+        from app.services.push_notifications import notify_host_withdrawal_completed as _wd_ok
+        from app.services.push_notifications import notify_host_withdrawal_failed as _wd_fail
+        if _wd_success:
+            _asyncio.ensure_future(_wd_ok(_wd_host_id, _wd_amount))
+        else:
+            _asyncio.ensure_future(_wd_fail(_wd_host_id, _wd_amount))
+
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as e:
         await db.rollback()

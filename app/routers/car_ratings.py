@@ -12,9 +12,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+import asyncio
+
 from app.auth import get_current_client
 from app.database import get_db
 from app.models import Booking, BookingStatus, Car, CarRating, Client
+from app.services.push_notifications import notify_host_new_rating
 from app.schemas import (
     CarRatingCreateRequest,
     CarRatingListResponse,
@@ -113,6 +116,14 @@ async def create_car_rating(
     ).filter(CarRating.id == rating.id)
     result = await db.execute(stmt)
     rating = result.scalar_one_or_none()
+
+    # Notify host of new car rating (fire-and-forget)
+    if rating and rating.car:
+        _client_name = rating.client.full_name if rating.client else "A renter"
+        _car_label = f"{rating.car.name} {getattr(rating.car, 'model', '') or ''}".strip()
+        asyncio.ensure_future(notify_host_new_rating(
+            rating.car.host_id, _client_name, rating.rating, _car_label
+        ))
 
     return rating_to_response(rating)
 

@@ -2062,7 +2062,8 @@ class HostEarningsSummaryResponse(BaseModel):
     commission_rate: float = Field(..., description="Platform commission rate (e.g. 0.15 for 15%)")
     commission_amount: float = Field(..., description="Total commission deducted")
     net_earnings: float = Field(..., description="Host earnings after commission (total_gross - commission)")
-    withdrawable: float = Field(..., description="Amount available to withdraw (same as net_earnings for now)")
+    pending_withdrawals_total: float = Field(..., description="Sum of pending + completed withdrawal amounts already claimed")
+    withdrawable: float = Field(..., description="Amount available to withdraw (net_earnings - pending_withdrawals_total)")
     paid_bookings_count: int = Field(..., description="Number of paid (confirmed/active/completed) bookings")
 
 

@@ -149,7 +149,22 @@ async def update_withdrawal_status(
     if new_status in (WithdrawalStatus.COMPLETED, WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED):
         w.processed_at = datetime.now(timezone.utc)
         w.processed_by_admin_id = current_admin.id
-    
+
+    _host_id = w.host_id
+    _amount = float(w.amount)
+
     await db.commit()
     await db.refresh(w)
+
+    # Notify host of withdrawal decision (fire-and-forget)
+    import asyncio as _asyncio
+    from app.services.push_notifications import (
+        notify_host_withdrawal_completed as _wd_ok,
+        notify_host_withdrawal_rejected as _wd_reject,
+    )
+    if new_status == WithdrawalStatus.COMPLETED:
+        _asyncio.ensure_future(_wd_ok(_host_id, _amount))
+    elif new_status in (WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED):
+        _asyncio.ensure_future(_wd_reject(_host_id, _amount))
+
     return _withdrawal_to_response(w)

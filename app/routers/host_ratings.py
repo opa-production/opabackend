@@ -3,6 +3,7 @@ Host Rating endpoints for clients
 
 These endpoints allow clients to rate hosts after completing bookings.
 """
+import asyncio
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
@@ -12,6 +13,7 @@ from sqlalchemy import func, and_, select
 from app.database import get_db
 from app.models import HostRating, Host, Client, Booking, BookingStatus, Car, CarRating
 from app.auth import get_current_client
+from app.services.push_notifications import notify_host_new_rating
 from app.schemas import (
     HostRatingCreateRequest,
     HostRatingUpdateRequest,
@@ -124,14 +126,20 @@ async def create_host_rating(
     db.add(rating)
     await db.commit()
     await db.refresh(rating)
-    
+
     # Load relationships for response
     rating_stmt = select(HostRating).options(
         joinedload(HostRating.client)
     ).filter(HostRating.id == rating.id)
     rating_result = await db.execute(rating_stmt)
     rating = rating_result.scalar_one_or_none()
-    
+
+    # Notify host of new rating (fire-and-forget)
+    _client_name = rating.client.full_name if (rating and rating.client) else "A renter"
+    asyncio.ensure_future(notify_host_new_rating(
+        request.host_id, _client_name, request.rating, "your listing"
+    ))
+
     return rating_to_response(rating)
 
 

@@ -92,7 +92,8 @@ async def get_host_earnings_summary(
     - **commission_rate**: Platform commission rate (0.15 = 15%).
     - **commission_amount**: Total commission deducted.
     - **net_earnings**: total_gross - commission_amount.
-    - **withdrawable**: Amount available to withdraw (currently same as net_earnings).
+    - **pending_withdrawals_total**: Sum of all pending + completed withdrawal amounts already claimed.
+    - **withdrawable**: net_earnings - pending_withdrawals_total (never negative).
     - **paid_bookings_count**: Number of paid bookings.
     """
     paid_statuses = [
@@ -135,13 +136,15 @@ async def get_host_earnings_summary(
     withdrawn_result = await db.execute(withdrawn_stmt)
     withdrawn_sum = withdrawn_result.scalar()
     
-    withdrawable = max(0, round(net_earnings - float(withdrawn_sum or 0), 2))
+    pending_withdrawals_total = round(float(withdrawn_sum or 0), 2)
+    withdrawable = max(0, round(net_earnings - pending_withdrawals_total, 2))
 
     return HostEarningsSummaryResponse(
         total_gross=round(total_gross, 2),
         commission_rate=COMMISSION_RATE,
         commission_amount=commission_amount,
         net_earnings=net_earnings,
+        pending_withdrawals_total=pending_withdrawals_total,
         withdrawable=withdrawable,
         paid_bookings_count=paid_count,
     )

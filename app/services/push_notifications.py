@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
-from app.models import ClientPushToken
+from app.models import ClientPushToken, HostPushToken
 
 logger = logging.getLogger(__name__)
 
@@ -190,4 +190,125 @@ async def notify_dropoff_approaching(client_id: int, booking_ref: str, return_ti
         body=f"Please return the car by {return_time} at {return_location}.",
         data={"type": "dropoff_reminder", "booking_id": booking_ref},
         channel=CHANNEL_REMINDER,
+    )
+
+
+# ── Host push notification helpers ────────────────────────────────────────────
+
+async def push_host(
+    host_id: int,
+    db: AsyncSession,
+    title: str,
+    body: str,
+    data: Optional[dict] = None,
+    channel: str = CHANNEL_DEFAULT,
+    badge: int = 1,
+) -> bool:
+    """Send a push notification to all registered devices for a host."""
+    result = await db.execute(
+        select(HostPushToken.token).filter(HostPushToken.host_id == host_id)
+    )
+    tokens = [row[0] for row in result.fetchall()]
+    if not tokens:
+        logger.debug("[Push] No push tokens for host_id=%s", host_id)
+        return False
+    return await _send_to_tokens(tokens, title, body, data or {}, channel, badge)
+
+
+async def push_host_standalone(
+    host_id: int,
+    title: str,
+    body: str,
+    data: Optional[dict] = None,
+    channel: str = CHANNEL_DEFAULT,
+    badge: int = 1,
+) -> bool:
+    """Send a push notification to a host, opening its own DB session."""
+    async with SessionLocal() as db:
+        return await push_host(host_id, db, title, body, data, channel, badge)
+
+
+# ── Host event wrappers ───────────────────────────────────────────────────────
+
+async def notify_host_new_booking(host_id: int, booking_ref: str, client_name: str, car_name: str, start_date: str):
+    await push_host_standalone(
+        host_id,
+        title="New Booking Request!",
+        body=f"{client_name} booked your {car_name}. Pickup: {start_date}",
+        data={"type": "new_booking", "booking_id": booking_ref},
+        channel=CHANNEL_BOOKING,
+    )
+
+
+async def notify_host_booking_cancelled(host_id: int, booking_ref: str, car_name: str, reason: Optional[str] = None):
+    body = f"A booking for your {car_name} has been cancelled."
+    if reason:
+        body += f" Reason: {reason}"
+    await push_host_standalone(
+        host_id,
+        title="Booking Cancelled",
+        body=body,
+        data={"type": "booking_cancelled", "booking_id": booking_ref},
+        channel=CHANNEL_BOOKING,
+    )
+
+
+async def notify_host_payment_received(host_id: int, booking_ref: str, car_name: str, amount: float):
+    await push_host_standalone(
+        host_id,
+        title="Payment Received!",
+        body=f"KES {amount:,.0f} received for your {car_name}. Booking {booking_ref} is now confirmed.",
+        data={"type": "payment_received", "booking_id": booking_ref},
+        channel=CHANNEL_PAYMENT,
+    )
+
+
+async def notify_host_new_rating(host_id: int, client_name: str, rating: int, car_name: str):
+    stars = "★" * rating + "☆" * (5 - rating)
+    await push_host_standalone(
+        host_id,
+        title="New Rating Received",
+        body=f"{client_name} rated your {car_name} {stars} ({rating}/5)",
+        data={"type": "new_rating"},
+        channel=CHANNEL_DEFAULT,
+    )
+
+
+async def notify_host_extension_requested(host_id: int, booking_ref: str, car_name: str, extra_days: int):
+    await push_host_standalone(
+        host_id,
+        title="Extension Request",
+        body=f"A renter wants to extend the {car_name} booking by {extra_days} day{'s' if extra_days != 1 else ''}. Tap to review.",
+        data={"type": "extension_requested", "booking_id": booking_ref},
+        channel=CHANNEL_BOOKING,
+    )
+
+
+async def notify_host_withdrawal_completed(host_id: int, amount: float):
+    await push_host_standalone(
+        host_id,
+        title="Withdrawal Processed!",
+        body=f"Your withdrawal of KES {amount:,.0f} has been sent successfully.",
+        data={"type": "withdrawal_completed"},
+        channel=CHANNEL_PAYMENT,
+    )
+
+
+async def notify_host_withdrawal_rejected(host_id: int, amount: float):
+    await push_host_standalone(
+        host_id,
+        title="Withdrawal Rejected",
+        body=f"Your withdrawal request of KES {amount:,.0f} was rejected. Contact support for details.",
+        data={"type": "withdrawal_rejected"},
+        channel=CHANNEL_PAYMENT,
+    )
+
+
+async def notify_host_withdrawal_failed(host_id: int, amount: float):
+    await push_host_standalone(
+        host_id,
+        title="Withdrawal Failed",
+        body=f"Your payout of KES {amount:,.0f} could not be processed. Please check your payment details.",
+        data={"type": "withdrawal_failed"},
+        channel=CHANNEL_PAYMENT,
     )
