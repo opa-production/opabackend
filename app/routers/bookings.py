@@ -430,7 +430,7 @@ async def create_booking(
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
         car.host_id,
-        ["host-bookings-list", "host-booking-details"],
+        ["host-bookings-list"],
     )
 
     # Notify host of new booking (fire-and-forget)
@@ -806,7 +806,7 @@ async def cancel_booking(
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
         host_id,
-        ["host-bookings-list", "host-booking-details"],
+        ["host-bookings-list"],
     )
 
     asyncio.ensure_future(notify_booking_cancelled(
@@ -1127,7 +1127,6 @@ async def get_host_completed_bookings(
 
 
 @router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
-@cache(expire=45, namespace="host-booking-details", key_builder=_host_bookings_cache_key)
 async def get_host_booking_details(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
@@ -1137,6 +1136,7 @@ async def get_host_booking_details(
     Get detailed information about a specific booking for a host.
 
     - Only returns bookings where the car belongs to the authenticated host
+    - Not cached — hosts actively manage bookings from this view (pickup / dropoff)
     """
     stmt = (
         select(Booking)
@@ -1230,7 +1230,7 @@ async def delete_host_booking(
     await db.commit()
     await invalidate_host_cache_namespaces(
         current_host.id,
-        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
     )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -1298,7 +1298,7 @@ async def confirm_pickup_as_host(
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
         current_host.id,
-        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
     )
 
     car = booking.car if hasattr(booking, "car") and booking.car else None
@@ -1363,7 +1363,7 @@ async def confirm_dropoff_as_host(
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
         current_host.id,
-        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
     )
 
     _car = booking.car if hasattr(booking, "car") and booking.car else None
@@ -1537,7 +1537,7 @@ async def complete_booking_as_host(
     await db.refresh(booking)
     await invalidate_host_cache_namespaces(
         current_host.id,
-        ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
     )
 
     _car2 = booking.car if hasattr(booking, "car") and booking.car else None
@@ -1592,7 +1592,7 @@ async def delete_booking(
     await db.commit()
     await invalidate_host_cache_namespaces(
         host_id,
-        ["host-bookings-list", "host-booking-details"],
+        ["host-bookings-list"],
     )
     asyncio.ensure_future(notify_host_booking_cancelled(host_id, _booking_ref, _car_label))
 
