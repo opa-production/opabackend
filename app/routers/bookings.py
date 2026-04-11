@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select
 from typing import Optional, List
 from datetime import datetime, timezone
+import asyncio
 import logging
 import json
 import uuid
@@ -424,7 +425,11 @@ async def create_booking(
     db.add(booking)
     await db.commit()
     await db.refresh(booking)
-    
+    await invalidate_host_cache_namespaces(
+        car.host_id,
+        ["host-bookings-list", "host-booking-details"],
+    )
+
     # Load relationships for response
     result = await db.execute(
         select(Booking).options(
@@ -432,7 +437,7 @@ async def create_booking(
         ).filter(Booking.id == booking.id)
     )
     booking = result.scalar_one_or_none()
-    
+
     return booking_to_response(booking)
 
 
@@ -772,6 +777,9 @@ async def cancel_booking(
         refund_policy_reason,
     ) = _compute_refund_preview_for_cancellation(booking)
 
+    # Capture host_id before commit expires the relationship
+    host_id = booking.car.host_id
+
     # Update booking status
     booking.status = BookingStatus.CANCELLED
     booking.status_updated_at = datetime.now(timezone.utc)
@@ -780,9 +788,12 @@ async def cancel_booking(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        host_id,
+        ["host-bookings-list", "host-booking-details"],
+    )
 
-    import asyncio as _asyncio
-    _asyncio.ensure_future(notify_booking_cancelled(
+    asyncio.ensure_future(notify_booking_cancelled(
         booking.client_id,
         getattr(booking, "booking_id", str(booking.id)),
         booking.cancellation_reason,
@@ -1264,10 +1275,9 @@ async def confirm_pickup_as_host(
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
 
-    import asyncio as _asyncio
     car = booking.car if hasattr(booking, "car") and booking.car else None
     car_name = f"{getattr(car, 'name', '')} {getattr(car, 'model', '')}".strip() if car else "your car"
-    _asyncio.ensure_future(notify_trip_started(
+    asyncio.ensure_future(notify_trip_started(
         booking.client_id,
         getattr(booking, "booking_id", str(booking.id)),
         car_name,
@@ -1330,10 +1340,9 @@ async def confirm_dropoff_as_host(
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
 
-    import asyncio as _asyncio
     _car = booking.car if hasattr(booking, "car") and booking.car else None
     _car_name = f"{getattr(_car, 'name', '')} {getattr(_car, 'model', '')}".strip() if _car else "your car"
-    _asyncio.ensure_future(notify_trip_completed(
+    asyncio.ensure_future(notify_trip_completed(
         booking.client_id,
         getattr(booking, "booking_id", str(booking.id)),
         _car_name,
@@ -1505,10 +1514,9 @@ async def complete_booking_as_host(
         ["host-bookings-list", "host-bookings-completed", "host-booking-details", "host-earnings-summary"],
     )
 
-    import asyncio as _asyncio
     _car2 = booking.car if hasattr(booking, "car") and booking.car else None
     _car2_name = f"{getattr(_car2, 'name', '')} {getattr(_car2, 'model', '')}".strip() if _car2 else "your car"
-    _asyncio.ensure_future(notify_trip_completed(
+    asyncio.ensure_future(notify_trip_completed(
         booking.client_id,
         getattr(booking, "booking_id", str(booking.id)),
         _car2_name,
@@ -1545,13 +1553,20 @@ async def delete_booking(
             detail=f"Cannot delete booking with status '{booking.status.value}'"
         )
     
+    # Capture host_id before commit expires the relationship
+    host_id = booking.car.host_id
+
     # Soft delete by cancelling
     booking.status = BookingStatus.CANCELLED
     booking.status_updated_at = datetime.now(timezone.utc)
     booking.cancellation_reason = "Deleted by client"
-    
+
     await db.commit()
-    
+    await invalidate_host_cache_namespaces(
+        host_id,
+        ["host-bookings-list", "host-booking-details"],
+    )
+
     return None
 
 
