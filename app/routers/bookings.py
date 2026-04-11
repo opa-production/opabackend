@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, func, select
+from sqlalchemy import and_, or_, func, select, update, delete
 from typing import Optional, List
 from datetime import datetime, timezone
 import asyncio
@@ -30,6 +30,10 @@ from app.models import (
     Refund,
     RefundStatus,
     StellarPaymentTransaction,
+    HostRating,
+    ClientRating,
+    CarRating,
+    EmergencyReport,
 )
 from app.auth import get_current_client, get_current_host
 from app.schemas import (
@@ -1226,6 +1230,25 @@ async def delete_host_booking(
             detail="Only completed or cancelled bookings can be deleted.",
         )
 
+    bid = booking.id
+
+    # --- 1. Null out nullable FK columns that point at this booking ---
+    await db.execute(update(HostRating).where(HostRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(ClientRating).where(ClientRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(CarRating).where(CarRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(EmergencyReport).where(EmergencyReport.booking_id == bid).values(booking_id=None))
+
+    # --- 2. Null Payment.extension_request_id so extension requests can be deleted ---
+    await db.execute(update(Payment).where(Payment.booking_id == bid).values(extension_request_id=None))
+
+    # --- 3. Delete child records with NOT NULL FK ---
+    await db.execute(delete(BookingIssue).where(BookingIssue.booking_id == bid))
+    await db.execute(delete(Refund).where(Refund.booking_id == bid))
+    await db.execute(delete(BookingExtensionRequest).where(BookingExtensionRequest.booking_id == bid))
+    await db.execute(delete(StellarPaymentTransaction).where(StellarPaymentTransaction.booking_id == bid))
+    await db.execute(delete(Payment).where(Payment.booking_id == bid))
+
+    # --- 4. Now the booking has no dependents — safe to delete ---
     await db.delete(booking)
     await db.commit()
     await invalidate_host_cache_namespaces(

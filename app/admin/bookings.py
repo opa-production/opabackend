@@ -8,10 +8,15 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, func, desc, select
+from sqlalchemy import and_, or_, func, desc, select, update, delete
 
 from app.database import get_db
-from app.models import Booking, BookingStatus, Client, Car, Host, Admin
+from app.models import (
+    Booking, BookingStatus, Client, Car, Host, Admin,
+    Payment, Refund, StellarPaymentTransaction,
+    BookingExtensionRequest, BookingIssue,
+    HostRating, ClientRating, CarRating, EmergencyReport,
+)
 from app.auth import get_current_admin
 from app.routers.bookings import booking_to_response, parse_image_urls
 from app.schemas import BookingResponse, BookingListResponse
@@ -384,9 +389,27 @@ async def delete_booking(
             detail=f"Cannot delete booking with status: {booking.status.value}"
         )
     
+    bid = booking.id
+
+    # Null out nullable FK columns that point at this booking
+    await db.execute(update(HostRating).where(HostRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(ClientRating).where(ClientRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(CarRating).where(CarRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(EmergencyReport).where(EmergencyReport.booking_id == bid).values(booking_id=None))
+
+    # Null Payment.extension_request_id so extension requests can be deleted
+    await db.execute(update(Payment).where(Payment.booking_id == bid).values(extension_request_id=None))
+
+    # Delete child records with NOT NULL FK
+    await db.execute(delete(BookingIssue).where(BookingIssue.booking_id == bid))
+    await db.execute(delete(Refund).where(Refund.booking_id == bid))
+    await db.execute(delete(BookingExtensionRequest).where(BookingExtensionRequest.booking_id == bid))
+    await db.execute(delete(StellarPaymentTransaction).where(StellarPaymentTransaction.booking_id == bid))
+    await db.execute(delete(Payment).where(Payment.booking_id == bid))
+
     await db.delete(booking)
     await db.commit()
-    
+
     return {
         "message": "Booking deleted successfully"
     }
