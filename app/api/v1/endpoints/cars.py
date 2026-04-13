@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from fastapi_cache.decorator import cache
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,8 +17,9 @@ from sqlalchemy.orm import joinedload
 
 logger = logging.getLogger(__name__)
 
-from app.api.deps import get_current_client, get_current_host
+from app.services.host_subscription_payment import host_paid_subscription_active
 from app.db.session import get_db
+from app.api.deps import get_current_client, get_current_host
 from app.models import (
     Booking,
     BookingStatus,
@@ -541,6 +543,33 @@ async def create_car_basics(
                 detail="Please select your operating city before uploading a car.",
             )
         current_host.city = selected_city
+    
+    # Check car listing limits based on subscription plan
+    plan_limits = {
+        "free": 2,
+        "starter": 10,
+        "premium": 50
+    }
+    
+    # Determine effective plan (check if paid subscription is still active)
+    effective_plan = "free"
+    if host_paid_subscription_active(current_host):
+        effective_plan = current_host.subscription_plan
+    
+    current_limit = plan_limits.get(effective_plan, 2)  # Default to free plan limit
+    
+    # Count current cars for this host
+    result = await db.execute(
+        select(func.count(Car.id)).filter(Car.host_id == current_host.id)
+    )
+    current_car_count = result.scalar()
+    
+    if current_car_count >= current_limit:
+        plan_name = "Free" if effective_plan == "free" else effective_plan.capitalize()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You have reached the maximum number of cars ({current_limit}) allowed for your {plan_name} plan. Please upgrade your subscription to list more cars.",
+        )
     
     # Create new car record
     db_car = Car(
