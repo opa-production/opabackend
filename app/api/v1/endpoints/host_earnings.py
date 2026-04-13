@@ -14,6 +14,7 @@ from fastapi_cache.decorator import cache
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
+from app.utils.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 from app.api.deps import get_current_host
 from app.db.session import get_db
@@ -40,34 +41,13 @@ router = APIRouter()
 COMMISSION_RATE = 0.15  # 15% platform commission (same as admin dashboard)
 
 
-def _host_earnings_cache_key(
-    func,
-    namespace: str = "",
-    request: Request = None,
-    response=None,
-    *args,
-    **kwargs,
-) -> str:
-    """Stable host-scoped cache key for earnings endpoints."""
-    host = kwargs.get("current_host")
-    host_id = getattr(host, "id", "anon")
-    query = ""
-    path = "/host/earnings"
-    if request is not None:
-        query = str(request.query_params)
-        path = request.url.path
-    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
-    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+_host_earnings_cache_key = host_scoped_cache_key
 
 
 async def _withdrawable_for_host(db: AsyncSession, host_id: int) -> float:
     """Compute withdrawable balance for host (net earnings minus pending+completed withdrawals)."""
-    paid_statuses = [
-        BookingStatus.CONFIRMED.value,
-        BookingStatus.ACTIVE.value,
-        BookingStatus.COMPLETED.value,
-    ]
-
+    paid_statuses = [BookingStatus.CONFIRMED.value, BookingStatus.ACTIVE.value, BookingStatus.COMPLETED.value]
+    
     total_gross_stmt = (
         select(func.coalesce(func.sum(Booking.total_price), 0))
         .join(Car)
@@ -75,16 +55,19 @@ async def _withdrawable_for_host(db: AsyncSession, host_id: int) -> float:
     )
     total_gross_result = await db.execute(total_gross_stmt)
     total_gross = total_gross_result.scalar()
-
+    
     net = float(total_gross or 0) * (1 - COMMISSION_RATE)
-
-    withdrawn_stmt = select(func.coalesce(func.sum(Withdrawal.amount), 0)).filter(
-        Withdrawal.host_id == host_id,
-        Withdrawal.status.in_([WithdrawalStatus.PENDING, WithdrawalStatus.COMPLETED]),
+    
+    withdrawn_stmt = (
+        select(func.coalesce(func.sum(Withdrawal.amount), 0))
+        .filter(
+            Withdrawal.host_id == host_id,
+            Withdrawal.status.in_([WithdrawalStatus.PENDING, WithdrawalStatus.COMPLETED]),
+        )
     )
     withdrawn_result = await db.execute(withdrawn_stmt)
     withdrawn = withdrawn_result.scalar()
-
+    
     return max(0, round(net - float(withdrawn or 0), 2))
 
 
@@ -107,9 +90,7 @@ def _withdrawal_to_response(w: Withdrawal) -> WithdrawalResponse:
 
 
 @router.get("/host/earnings/summary", response_model=HostEarningsSummaryResponse)
-@cache(
-    expire=120, namespace="host-earnings-summary", key_builder=_host_earnings_cache_key
-)
+@cache(expire=120, namespace="host-earnings-summary", key_builder=_host_earnings_cache_key)
 async def get_host_earnings_summary(
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
@@ -121,7 +102,8 @@ async def get_host_earnings_summary(
     - **commission_rate**: Platform commission rate (0.15 = 15%).
     - **commission_amount**: Total commission deducted.
     - **net_earnings**: total_gross - commission_amount.
-    - **withdrawable**: Amount available to withdraw (currently same as net_earnings).
+    - **pending_withdrawals_total**: Sum of all pending + completed withdrawal amounts already claimed.
+    - **withdrawable**: net_earnings - pending_withdrawals_total (never negative).
     - **paid_bookings_count**: Number of paid bookings.
     """
     paid_statuses = [
@@ -129,13 +111,13 @@ async def get_host_earnings_summary(
         BookingStatus.ACTIVE.value,
         BookingStatus.COMPLETED.value,
     ]
-
+    
     base_stmt = (
         select(Booking)
         .join(Car)
         .filter(Car.host_id == current_host.id, Booking.status.in_(paid_statuses))
     )
-
+    
     total_gross_stmt = (
         select(func.coalesce(func.sum(Booking.total_price), 0))
         .join(Car)
@@ -144,30 +126,35 @@ async def get_host_earnings_summary(
     total_gross_result = await db.execute(total_gross_stmt)
     total_gross_val = total_gross_result.scalar()
     total_gross = float(total_gross_val or 0)
-
+    
     # Get paid count
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     count_result = await db.execute(count_stmt)
     paid_count = count_result.scalar() or 0
-
+    
     commission_amount = round(total_gross * COMMISSION_RATE, 2)
     net_earnings = round(total_gross - commission_amount, 2)
-
+    
     # Withdrawable = net minus amounts already in pending or completed withdrawals
-    withdrawn_stmt = select(func.coalesce(func.sum(Withdrawal.amount), 0)).filter(
-        Withdrawal.host_id == current_host.id,
-        Withdrawal.status.in_([WithdrawalStatus.PENDING, WithdrawalStatus.COMPLETED]),
+    withdrawn_stmt = (
+        select(func.coalesce(func.sum(Withdrawal.amount), 0))
+        .filter(
+            Withdrawal.host_id == current_host.id,
+            Withdrawal.status.in_([WithdrawalStatus.PENDING, WithdrawalStatus.COMPLETED]),
+        )
     )
     withdrawn_result = await db.execute(withdrawn_stmt)
     withdrawn_sum = withdrawn_result.scalar()
-
-    withdrawable = max(0, round(net_earnings - float(withdrawn_sum or 0), 2))
+    
+    pending_withdrawals_total = round(float(withdrawn_sum or 0), 2)
+    withdrawable = max(0, round(net_earnings - pending_withdrawals_total, 2))
 
     return HostEarningsSummaryResponse(
         total_gross=round(total_gross, 2),
         commission_rate=COMMISSION_RATE,
         commission_amount=commission_amount,
         net_earnings=net_earnings,
+        pending_withdrawals_total=pending_withdrawals_total,
         withdrawable=withdrawable,
         paid_bookings_count=paid_count,
     )
@@ -176,9 +163,7 @@ async def get_host_earnings_summary(
 @router.get("/host/earnings/transactions", response_model=HostTransactionListResponse)
 async def get_host_transactions(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
 ):
@@ -193,7 +178,7 @@ async def get_host_transactions(
         BookingStatus.ACTIVE.value,
         BookingStatus.COMPLETED.value,
     ]
-
+    
     stmt = (
         select(Booking)
         .options(
@@ -204,12 +189,12 @@ async def get_host_transactions(
         .join(Car)
         .filter(Car.host_id == current_host.id, Booking.status.in_(paid_statuses))
     )
-
+    
     # Get total
     count_stmt = select(func.count()).select_from(stmt.subquery())
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
-
+    
     # Apply pagination
     stmt = stmt.order_by(Booking.id.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
@@ -222,7 +207,7 @@ async def get_host_transactions(
         net_amount = round(amount - commission_amount, 2)
         paid_at = b.status_updated_at
         mpesa_receipt = None
-        for p in b.payments or []:
+        for p in (b.payments or []):
             if p.status == PaymentStatus.COMPLETED:
                 if p.updated_at and (paid_at is None or p.updated_at > paid_at):
                     paid_at = p.updated_at
@@ -259,11 +244,7 @@ async def get_host_transactions(
 # ==================== HOST WITHDRAWALS (same router so they appear under Host Earnings in Swagger) ====================
 
 
-@router.post(
-    "/host/withdrawals",
-    response_model=WithdrawalResponse,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/host/withdrawals", response_model=WithdrawalResponse, status_code=status.HTTP_201_CREATED)
 async def host_create_withdrawal(
     request: WithdrawalCreateRequest,
     current_host: Host = Depends(get_current_host),
@@ -308,28 +289,25 @@ async def host_create_withdrawal(
     db.add(withdrawal)
     await db.commit()
     await db.refresh(withdrawal)
-
-    # Reload with host for response
-    stmt = (
-        select(Withdrawal)
-        .options(joinedload(Withdrawal.host))
-        .filter(Withdrawal.id == withdrawal.id)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-withdrawals", "host-earnings-summary"],
     )
+    
+    # Reload with host for response
+    stmt = select(Withdrawal).options(joinedload(Withdrawal.host)).filter(Withdrawal.id == withdrawal.id)
     result = await db.execute(stmt)
     withdrawal = result.scalar_one_or_none()
-
+    
     return _withdrawal_to_response(withdrawal)
 
 
 @router.get("/host/withdrawals", response_model=WithdrawalListResponse)
+@cache(expire=90, namespace="host-withdrawals", key_builder=_host_earnings_cache_key)
 async def host_list_my_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    status_filter: Optional[str] = Query(
-        None,
-        alias="status",
-        description="Filter by status: pending, completed, rejected, cancelled",
-    ),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
 ):
@@ -348,17 +326,17 @@ async def host_list_my_withdrawals(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid status. Valid: pending, completed, rejected, cancelled, failed",
             )
-
+            
     # Get total
     count_stmt = select(func.count()).select_from(stmt.subquery())
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
-
+    
     # Apply pagination
     stmt = stmt.order_by(Withdrawal.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     rows = result.scalars().all()
-
+    
     return WithdrawalListResponse(
         withdrawals=[_withdrawal_to_response(w) for w in rows],
         total=total,

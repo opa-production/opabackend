@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     host_kyc,
     host_ratings,
     host_subscription,
+    identity_verification,
     media,
     messages,
     payment_methods,
@@ -91,6 +92,7 @@ api_router.include_router(client_kyc.router, tags=["Client KYC"])
 api_router.include_router(veriff_webhook.router, tags=["Veriff Webhook"])
 api_router.include_router(client_refunds.router, tags=["Client Refunds"])
 api_router.include_router(client_emergency.router, tags=["Client Emergency"])
+api_router.include_router(identity_verification.router, tags=["Identity Verification"])
 api_router.include_router(wishlist.router, tags=["Client Wishlist"])
 api_router.include_router(wallet.router, tags=["Wallet"])
 api_router.include_router(host_subscription.router, tags=["Host Subscription"])

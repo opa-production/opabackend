@@ -16,10 +16,10 @@ class HostRegisterRequest(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.password != self.password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
@@ -35,22 +35,14 @@ class HostRegisterResponse(BaseModel):
 
 class HostProfileUpdateRequest(BaseModel):
     """Update host profile fields"""
-
     bio: Optional[str] = Field(None, max_length=2000)
     mobile_number: Optional[str] = Field(None, max_length=50)
-    id_number: Optional[str] = Field(
-        None,
-        max_length=100,
-        description="ID number, passport number, or driver's license number",
-    )
-    city: Optional[str] = Field(
-        None, max_length=100, description="City where the host operates"
-    )
+    id_number: Optional[str] = Field(None, max_length=100, description="ID number, passport number, or driver's license number")
+    city: Optional[str] = Field(None, max_length=100, description="City where the host operates")
 
 
 class HostProfileResponse(BaseModel):
     """Complete host profile response"""
-
     id: int
     full_name: str
     email: str
@@ -72,7 +64,6 @@ class HostProfileResponse(BaseModel):
 
 class HostKycSessionRequest(BaseModel):
     """Optional body when creating a KYC session."""
-
     callback_url: Optional[str] = Field(
         None,
         max_length=2000,
@@ -82,21 +73,15 @@ class HostKycSessionRequest(BaseModel):
 
 class HostKycSessionResponse(BaseModel):
     """Response after creating a Veriff KYC session - app opens verification_url."""
-
-    verification_url: str = Field(
-        ..., description="Open this URL in browser/webview for verification"
-    )
+    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
     session_id: str = Field(..., description="Veriff session ID (for reference)")
 
 
 class HostKycStatusResponse(BaseModel):
     """Host KYC verification status (latest attempt)."""
-
     user_id: int = Field(..., description="Host ID")
     veriff_session_id: Optional[str] = None
-    status: str = Field(
-        ..., description="approved, declined, pending, resubmission_requested"
-    )
+    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
     document_type: Optional[str] = None
     decision_reason: Optional[str] = None
     verified_at: Optional[datetime] = None
@@ -107,7 +92,6 @@ class HostKycStatusResponse(BaseModel):
 
 class ClientKycSessionRequest(BaseModel):
     """Optional body when creating a client KYC session."""
-
     callback_url: Optional[str] = Field(
         None,
         max_length=2000,
@@ -117,21 +101,15 @@ class ClientKycSessionRequest(BaseModel):
 
 class ClientKycSessionResponse(BaseModel):
     """Response after creating a Veriff KYC session for a client."""
-
-    verification_url: str = Field(
-        ..., description="Open this URL in browser/webview for verification"
-    )
+    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
     session_id: str = Field(..., description="Veriff session ID (for reference)")
 
 
 class ClientKycStatusResponse(BaseModel):
     """Client KYC verification status (latest attempt)."""
-
     user_id: int = Field(..., description="Client ID")
     veriff_session_id: Optional[str] = None
-    status: str = Field(
-        ..., description="approved, declined, pending, resubmission_requested"
-    )
+    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
     document_type: Optional[str] = None
     decision_reason: Optional[str] = None
     verified_at: Optional[datetime] = None
@@ -147,13 +125,13 @@ class HostLoginRequest(BaseModel):
     enable_biometrics: Optional[bool] = Field(
         False,
         alias="enableBiometrics",
-        description="When true, backend issues a one-time device_token for host biometric login",
+        description="When true, backend issues a one-time device_token for host biometric login"
     )
     device_name: Optional[str] = Field(
         None,
         alias="deviceName",
         max_length=255,
-        description="Optional human-readable device name (e.g. 'Host’s iPhone')",
+        description="Optional human-readable device name (e.g. 'Host’s iPhone')"
     )
 
     model_config = {"populate_by_name": True}
@@ -167,19 +145,14 @@ class HostLoginResponse(BaseModel):
 
 class HostChangePasswordRequest(BaseModel):
     """Change host password request (when logged in)"""
-
     current_password: str = Field(..., description="Current password")
-    new_password: str = Field(
-        ..., min_length=8, description="New password (min 8 characters)"
-    )
-    new_password_confirmation: str = Field(
-        ..., min_length=8, description="Confirm new password"
-    )
+    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+    new_password_confirmation: str = Field(..., min_length=8, description="Confirm new password")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.new_password != self.new_password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
@@ -194,10 +167,10 @@ class ClientRegisterRequest(BaseModel):
     password: str = Field(..., min_length=8)
     password_confirmation: str = Field(..., min_length=8)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.password != self.password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
@@ -213,63 +186,35 @@ class ClientRegisterResponse(BaseModel):
 
 class ClientProfileUpdateRequest(BaseModel):
     """Update client profile fields"""
-
     bio: Optional[str] = Field(None, max_length=2000)
     fun_fact: Optional[str] = Field(None, max_length=500)
-    mobile_number: str = Field(
-        ..., min_length=1, max_length=50, description="Mobile phone number (required)"
-    )
-    id_number: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-        description="Driver's licence, passport, or ID number (required)",
-    )
-    date_of_birth: date = Field(
-        ..., description="Date of birth (required, format: YYYY-MM-DD)"
-    )
-    gender: str = Field(
-        ...,
-        min_length=1,
-        max_length=20,
-        description="Gender (required, e.g., 'male', 'female', 'other')",
-    )
+    mobile_number: str = Field(..., min_length=1, max_length=50, description="Mobile phone number (required)")
+    id_number: str = Field(..., min_length=1, max_length=100, description="Driver's licence, passport, or ID number (required)")
+    date_of_birth: date = Field(..., description="Date of birth (required, format: YYYY-MM-DD)")
+    gender: str = Field(..., min_length=1, max_length=20, description="Gender (required, e.g., 'male', 'female', 'other')")
 
 
 class WalletResponse(BaseModel):
     """Ardena Pay (Stellar) wallet: public key, balances (stored in DB, refreshed from Horizon on GET), optional secret (testnet only)."""
-
-    public_key: str = Field(
-        ..., description="Stellar public key (address) – share this to receive USDC"
-    )
+    public_key: str = Field(..., description="Stellar public key (address) – share this to receive USDC")
     network: str = Field("testnet", description="Network: testnet or mainnet")
     balance_xlm: str = Field("0", description="Native XLM balance")
     balance_usdc: str = Field("0", description="USDC balance")
-    balance_updated_at: Optional[datetime] = Field(
-        None, description="When balances were last fetched from Stellar"
-    )
-    secret_key: Optional[str] = Field(
-        None,
-        description="Secret key – only on testnet; keep private and use to import into Freighter/Lobstr",
-    )
+    balance_updated_at: Optional[datetime] = Field(None, description="When balances were last fetched from Stellar")
+    secret_key: Optional[str] = Field(None, description="Secret key – only on testnet; keep private and use to import into Freighter/Lobstr")
     created_at: Optional[datetime] = None
 
 
 class ClientProfileResponse(BaseModel):
     """Complete client profile response"""
-
     id: int
     full_name: str
     email: str
     bio: Optional[str] = None
     fun_fact: Optional[str] = None
-    mobile_number: Optional[str] = (
-        None  # May be None for existing clients before migration
-    )
+    mobile_number: Optional[str] = None  # May be None for existing clients before migration
     id_number: Optional[str] = None  # May be None for existing clients before migration
-    date_of_birth: Optional[date] = (
-        None  # May be None for existing clients before migration
-    )
+    date_of_birth: Optional[date] = None  # May be None for existing clients before migration
     gender: Optional[str] = None  # May be None for existing clients before migration
     avatar_url: Optional[str] = None
     id_document_url: Optional[str] = None
@@ -292,13 +237,13 @@ class ClientLoginRequest(BaseModel):
     enable_biometrics: Optional[bool] = Field(
         False,
         alias="enableBiometrics",
-        description="When true, backend issues a one-time device_token for biometric login",
+        description="When true, backend issues a one-time device_token for biometric login"
     )
     device_name: Optional[str] = Field(
         None,
         alias="deviceName",
         max_length=255,
-        description="Optional human-readable device name (e.g. 'John’s iPhone')",
+        description="Optional human-readable device name (e.g. 'John’s iPhone')"
     )
 
     model_config = {"populate_by_name": True}
@@ -306,60 +251,48 @@ class ClientLoginRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     """Request for Google Authentication"""
-
     id_token: str = Field(..., description="The ID token received from Google")
     enable_biometrics: Optional[bool] = Field(
         False,
         alias="enableBiometrics",
-        description="When true, backend issues a one-time device_token for biometric login",
+        description="When true, backend issues a one-time device_token for biometric login"
     )
     device_name: Optional[str] = Field(
         None,
         alias="deviceName",
         max_length=255,
-        description="Optional human-readable device name (e.g. 'John’s iPhone')",
+        description="Optional human-readable device name (e.g. 'John’s iPhone')"
     )
 
 
 class ForgotPasswordRequest(BaseModel):
     """Request to send password reset email"""
-
     email: EmailStr = Field(..., description="Email address of the account")
 
 
 class ResetPasswordRequest(BaseModel):
     """Request to reset password with token from email"""
-
     token: str = Field(..., description="Reset token from the email link")
-    new_password: str = Field(
-        ..., min_length=8, description="New password (min 8 characters)"
-    )
-    new_password_confirmation: str = Field(
-        ..., min_length=8, description="Confirm new password"
-    )
+    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+    new_password_confirmation: str = Field(..., min_length=8, description="Confirm new password")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.new_password != self.new_password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
 class ClientChangePasswordRequest(BaseModel):
     """Change client password request (when logged in)"""
-
     current_password: str = Field(..., description="Current password")
-    new_password: str = Field(
-        ..., min_length=8, description="New password (min 8 characters)"
-    )
-    new_password_confirmation: str = Field(
-        ..., min_length=8, description="Confirm new password"
-    )
+    new_password: str = Field(..., min_length=8, description="New password (min 8 characters)")
+    new_password_confirmation: str = Field(..., min_length=8, description="Confirm new password")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.new_password != self.new_password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
@@ -372,7 +305,6 @@ class ClientLoginResponse(BaseModel):
 # Car Upload Schemas
 class CarBasicsRequest(BaseModel):
     """Endpoint 1: Car Basics"""
-
     name: str = Field(..., min_length=1, max_length=255)
     model: str = Field(..., min_length=1, max_length=100)
     body_type: str = Field(..., min_length=1, max_length=50)
@@ -388,7 +320,6 @@ class CarBasicsRequest(BaseModel):
 
 class CarTechnicalSpecsRequest(BaseModel):
     """Endpoint 2: Technical Specs"""
-
     seats: int = Field(..., ge=1, le=50)
     fuel_type: str = Field(..., min_length=1, max_length=50)
     transmission: str = Field(..., min_length=1, max_length=50)
@@ -399,7 +330,6 @@ class CarTechnicalSpecsRequest(BaseModel):
 
 class CarPricingRulesRequest(BaseModel):
     """Endpoint 3: Pricing & Rules"""
-
     daily_rate: float = Field(..., gt=0)
     weekly_rate: float = Field(..., gt=0)
     monthly_rate: float = Field(..., gt=0)
@@ -408,7 +338,7 @@ class CarPricingRulesRequest(BaseModel):
     min_age_requirement: int = Field(..., ge=18, le=100)
     rules: str = Field(..., min_length=1)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def validate_max_rental_days(self):
         """Validate max_rental_days: 0 or None means no maximum, otherwise must be >= 1"""
         if self.max_rental_days is not None:
@@ -416,40 +346,30 @@ class CarPricingRulesRequest(BaseModel):
                 # Convert 0 to None (no maximum)
                 self.max_rental_days = None
             elif self.max_rental_days < 1:
-                raise ValueError(
-                    "max_rental_days must be greater than or equal to 1 if provided"
-                )
+                raise ValueError('max_rental_days must be greater than or equal to 1 if provided')
         return self
 
 
 class CarLocationRequest(BaseModel):
     """Endpoint 4: Location"""
-
     location_name: Optional[str] = Field(None, max_length=255)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def location_provided(self):
         """Ensure either location_name OR coordinates are provided"""
         if not self.location_name and (self.latitude is None or self.longitude is None):
-            raise ValueError(
-                "Either location_name or both latitude and longitude must be provided"
-            )
-        if self.location_name and (
-            self.latitude is not None or self.longitude is not None
-        ):
-            raise ValueError("Provide either location_name OR coordinates, not both")
-        if (self.latitude is not None and self.longitude is None) or (
-            self.latitude is None and self.longitude is not None
-        ):
-            raise ValueError("Both latitude and longitude must be provided together")
+            raise ValueError('Either location_name or both latitude and longitude must be provided')
+        if self.location_name and (self.latitude is not None or self.longitude is not None):
+            raise ValueError('Provide either location_name OR coordinates, not both')
+        if (self.latitude is not None and self.longitude is None) or (self.latitude is None and self.longitude is not None):
+            raise ValueError('Both latitude and longitude must be provided together')
         return self
 
 
 class DriveSettingEnum(str, Enum):
     """Drive options for a car - what the host allows"""
-
     SELF_ONLY = "self_only"
     SELF_AND_CHAUFFEUR = "self_and_chauffeur"
     CHAUFFEUR_ONLY = "chauffeur_only"
@@ -465,46 +385,29 @@ DRIVE_SETTING_TO_ALLOWED = {
 
 class DriveSettingsRequest(BaseModel):
     """Request to update car drive setting (host)"""
-
-    drive_setting: DriveSettingEnum = Field(
-        ..., description="self_only | self_and_chauffeur | chauffeur_only"
-    )
+    drive_setting: DriveSettingEnum = Field(..., description="self_only | self_and_chauffeur | chauffeur_only")
 
 
 class DriveSettingsResponse(BaseModel):
     """Drive settings for a car"""
-
-    drive_setting: str = Field(
-        ..., description="self_only | self_and_chauffeur | chauffeur_only"
-    )
-    allowed_drive_types: List[str] = Field(
-        ..., description="Drive types client can choose when booking"
-    )
-    labels: dict = Field(
-        default_factory=lambda: {"self": "Self drive", "withDriver": "With chauffeur"}
-    )
+    drive_setting: str = Field(..., description="self_only | self_and_chauffeur | chauffeur_only")
+    allowed_drive_types: List[str] = Field(..., description="Drive types client can choose when booking")
+    labels: dict = Field(default_factory=lambda: {"self": "Self drive", "withDriver": "With chauffeur"})
 
 
 class CarMediaRequest(BaseModel):
     """Request schema for updating car media URLs after Supabase upload
-
+    
     Frontend sends:
     - files: REQUIRED - Array of image URLs (max 12)
     - cover_image: OPTIONAL - Cover image URL
     - car_video: OPTIONAL - Video URL
     """
-
-    files: List[str] = Field(
-        ..., description="List of image URLs (required, max 12 items)"
-    )
-    cover_image: Optional[str] = Field(
-        default=None, max_length=500, description="Cover image URL (optional)"
-    )
-    car_video: Optional[str] = Field(
-        default=None, max_length=500, description="Car video URL (optional)"
-    )
-
-    @field_validator("files")
+    files: List[str] = Field(..., description="List of image URLs (required, max 12 items)")
+    cover_image: Optional[str] = Field(default=None, max_length=500, description="Cover image URL (optional)")
+    car_video: Optional[str] = Field(default=None, max_length=500, description="Car video URL (optional)")
+    
+    @field_validator('files')
     @classmethod
     def validate_files(cls, v):
         if len(v) > 12:
@@ -516,67 +419,44 @@ class CarMediaRequest(BaseModel):
 
 class CarBlockedDateRequest(BaseModel):
     """Request to block a date or date range for a car"""
-
-    start_date: Optional[datetime] = Field(
-        None, description="Start date to block (ISO format)"
-    )
-    end_date: Optional[datetime] = Field(
-        None, description="End date to block (ISO format)"
-    )
-    blocked_date: Optional[date] = Field(
-        None,
-        description="Single date to block (YYYY-MM-DD) - alternative to start_date/end_date",
-    )
-    reason: Optional[str] = Field(
-        None, max_length=500, description="Optional reason for blocking"
-    )
-
-    @model_validator(mode="after")
+    start_date: Optional[datetime] = Field(None, description="Start date to block (ISO format)")
+    end_date: Optional[datetime] = Field(None, description="End date to block (ISO format)")
+    blocked_date: Optional[date] = Field(None, description="Single date to block (YYYY-MM-DD) - alternative to start_date/end_date")
+    reason: Optional[str] = Field(None, max_length=500, description="Optional reason for blocking")
+    
+    @model_validator(mode='after')
     def validate_dates(self):
         # If blocked_date is provided, use it
         if self.blocked_date:
             return self
-
+        
         # If start_date is provided, use it (client sends start_date and end_date)
         if self.start_date:
             self.blocked_date = self.start_date.date()
             return self
-
+        
         raise ValueError("Either 'blocked_date' or 'start_date' must be provided")
 
 
 class CarMediaUrlsRequest(BaseModel):
     """Alternative request schema that accepts 'files' as primary field (for app compatibility)"""
-
-    files: Optional[List[str]] = Field(
-        default=None,
-        description="List of image URLs (optional, will be stored in car_images)",
-    )
-    cover_image: Optional[str] = Field(
-        default=None,
-        max_length=500,
-        description="Cover image URL (optional, defaults to first file)",
-    )
-    car_video: Optional[str] = Field(
-        default=None, max_length=500, description="Car video URL"
-    )
-
-    @field_validator("files")
+    files: Optional[List[str]] = Field(default=None, description="List of image URLs (optional, will be stored in car_images)")
+    cover_image: Optional[str] = Field(default=None, max_length=500, description="Cover image URL (optional, defaults to first file)")
+    car_video: Optional[str] = Field(default=None, max_length=500, description="Car video URL")
+    
+    @field_validator('files')
     @classmethod
     def validate_files(cls, v):
         if v is not None:
             if len(v) > 12:
                 raise ValueError("Maximum 12 car images allowed")
             if len(v) == 0:
-                raise ValueError(
-                    "If provided, files must contain at least one image URL"
-                )
+                raise ValueError("If provided, files must contain at least one image URL")
         return v
 
 
 class CarResponse(BaseModel):
     """Car response schema"""
-
     id: int
     host_id: int
     name: Optional[str] = None
@@ -604,17 +484,11 @@ class CarResponse(BaseModel):
     verification_status: Optional[str] = None
     is_hidden: Optional[bool] = False
     drive_setting: Optional[str] = "self_only"
-    allowed_drive_types: Optional[List[str]] = (
-        None  # ["self"] | ["self","withDriver"] | ["withDriver"]
-    )
+    allowed_drive_types: Optional[List[str]] = None  # ["self"] | ["self","withDriver"] | ["withDriver"]
     cover_image: Optional[str] = None
-    car_images: Optional[str] = (
-        None  # JSON string: '["url1", "url2"]' (frontend expects string, not array)
-    )
+    car_images: Optional[str] = None  # JSON string: '["url1", "url2"]' (frontend expects string, not array)
     car_video: Optional[str] = None
-    image_urls: Optional[List[str]] = (
-        None  # Legacy - parsed array for backward compatibility
-    )
+    image_urls: Optional[List[str]] = None  # Legacy - parsed array for backward compatibility
     video_url: Optional[str] = None  # Legacy
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -625,10 +499,9 @@ class CarResponse(BaseModel):
 
 class CarStatusResponse(BaseModel):
     """Car verification status response"""
-
     car_id: int
     verification_status: str
-
+    
     class Config:
         from_attributes = True
 
@@ -636,7 +509,6 @@ class CarStatusResponse(BaseModel):
 # Payment Method Schemas
 class PaymentMethodTypeEnum(str, Enum):
     """Payment method types"""
-
     MPESA = "mpesa"
     VISA = "visa"
     MASTERCARD = "mastercard"
@@ -644,120 +516,96 @@ class PaymentMethodTypeEnum(str, Enum):
 
 class MpesaPaymentMethodAddRequest(BaseModel):
     """Add M-Pesa payment method request schema"""
-
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Name for this M-Pesa payment method (e.g., 'John's M-Pesa')",
-    )
-    mpesa_number: str = Field(
-        ..., max_length=20, description="M-Pesa phone number (e.g., 254712345678)"
-    )
-    is_default: Optional[bool] = Field(
-        False, description="Set as default payment method"
-    )
-
-    @model_validator(mode="after")
+    name: str = Field(..., min_length=1, max_length=255, description="Name for this M-Pesa payment method (e.g., 'John's M-Pesa')")
+    mpesa_number: str = Field(..., max_length=20, description="M-Pesa phone number (e.g., 254712345678)")
+    is_default: Optional[bool] = Field(False, description="Set as default payment method")
+    
+    @model_validator(mode='after')
     def validate_mpesa_number(self):
         """Validate M-Pesa number"""
         if not self.mpesa_number:
-            raise ValueError("M-Pesa number is required")
+            raise ValueError('M-Pesa number is required')
         # Remove any spaces or dashes
-        mpesa_clean = re.sub(r"[\s-]", "", self.mpesa_number)
+        mpesa_clean = re.sub(r'[\s-]', '', self.mpesa_number)
         # Validate format (should start with country code like 254 for Kenya)
-        if not re.match(r"^\d{9,15}$", mpesa_clean):
-            raise ValueError("M-Pesa number must be 9-15 digits")
+        if not re.match(r'^\d{9,15}$', mpesa_clean):
+            raise ValueError('M-Pesa number must be 9-15 digits')
         self.mpesa_number = mpesa_clean
         return self
 
 
 class CardPaymentMethodAddRequest(BaseModel):
     """Add card payment method request schema"""
-
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Name for this card payment method (e.g., 'My Visa Card')",
-    )
+    name: str = Field(..., min_length=1, max_length=255, description="Name for this card payment method (e.g., 'My Visa Card')")
     card_number: str = Field(..., description="16-digit card number")
-    expiry_date: str = Field(
-        ..., description="Expiry date in MM/YY format (e.g., '08/30')"
-    )
+    expiry_date: str = Field(..., description="Expiry date in MM/YY format (e.g., '08/30')")
     cvc: str = Field(..., description="3-4 digit CVC/CVV code")
-    card_type: Literal["visa", "mastercard"] = Field(
-        ..., description="Card type (visa or mastercard)"
-    )
-    is_default: Optional[bool] = Field(
-        False, description="Set as default payment method"
-    )
-
-    @model_validator(mode="after")
+    card_type: Literal["visa", "mastercard"] = Field(..., description="Card type (visa or mastercard)")
+    is_default: Optional[bool] = Field(False, description="Set as default payment method")
+    
+    @model_validator(mode='after')
     def validate_card_data(self):
         """Validate card data"""
         # Validate card number format (16 digits, no spaces)
-        card_clean = re.sub(r"[\s-]", "", self.card_number)
-        if not re.match(r"^\d{16}$", card_clean):
-            raise ValueError("Card number must be exactly 16 digits")
-
+        card_clean = re.sub(r'[\s-]', '', self.card_number)
+        if not re.match(r'^\d{16}$', card_clean):
+            raise ValueError('Card number must be exactly 16 digits')
+        
         # Validate card type matches first digit
         first_digit = card_clean[0]
-        if self.card_type == "visa" and first_digit != "4":
-            raise ValueError("Visa cards must start with 4")
-        if self.card_type == "mastercard" and first_digit != "5":
-            raise ValueError("Mastercard cards must start with 5")
-
+        if self.card_type == "visa" and first_digit != '4':
+            raise ValueError('Visa cards must start with 4')
+        if self.card_type == "mastercard" and first_digit != '5':
+            raise ValueError('Mastercard cards must start with 5')
+        
         # Validate expiry date format MM/YY
-        expiry_clean = re.sub(r"[\s]", "", self.expiry_date)
-        if not re.match(r"^\d{2}/\d{2}$", expiry_clean):
-            raise ValueError("Expiry date must be in MM/YY format (e.g., 08/30)")
-
+        expiry_clean = re.sub(r'[\s]', '', self.expiry_date)
+        if not re.match(r'^\d{2}/\d{2}$', expiry_clean):
+            raise ValueError('Expiry date must be in MM/YY format (e.g., 08/30)')
+        
             # Parse expiry date
         try:
-            month_str, year_str = expiry_clean.split("/")
+            month_str, year_str = expiry_clean.split('/')
             expiry_month = int(month_str)
             expiry_year = int(year_str)
-
+            
             # Validate month range
             if expiry_month < 1 or expiry_month > 12:
-                raise ValueError("Invalid expiry month. Must be between 01 and 12")
-
+                raise ValueError('Invalid expiry month. Must be between 01 and 12')
+            
             # Convert YY to YYYY (assuming 20YY for years 00-99)
             # If year is 00-30, assume 2000-2030, otherwise assume 1900-1999
             if expiry_year <= 30:
                 expiry_year_full = 2000 + expiry_year
             else:
                 expiry_year_full = 1900 + expiry_year
-
+            
             # Validate expiry date is not in the past
             today = date.today()
             current_year = today.year
             current_month = today.month
             # Card is expired if expiry year is before current year, or same year but expiry month is before current month
-            if expiry_year_full < current_year or (
-                expiry_year_full == current_year and expiry_month < current_month
-            ):
-                raise ValueError("Card expiry date cannot be in the past")
-
+            if expiry_year_full < current_year or (expiry_year_full == current_year and expiry_month < current_month):
+                raise ValueError('Card expiry date cannot be in the past')
+            
             # Store parsed values (will be used in router)
             self._expiry_month = expiry_month
             self._expiry_year = expiry_year_full
-
+            
         except ValueError as e:
-            if "Invalid expiry" in str(e) or "Card expiry date" in str(e):
+            if 'Invalid expiry' in str(e) or 'Card expiry date' in str(e):
                 raise
-            raise ValueError("Invalid expiry date format. Use MM/YY (e.g., 08/30)")
-
+            raise ValueError('Invalid expiry date format. Use MM/YY (e.g., 08/30)')
+        
         # Validate CVC/CVV (3-4 digits)
-        cvc_clean = re.sub(r"[\s]", "", self.cvc)
-        if not re.match(r"^\d{3,4}$", cvc_clean):
-            raise ValueError("CVC/CVV must be 3 or 4 digits")
-
+        cvc_clean = re.sub(r'[\s]', '', self.cvc)
+        if not re.match(r'^\d{3,4}$', cvc_clean):
+            raise ValueError('CVC/CVV must be 3 or 4 digits')
+        
         # Store cleaned values
         self.card_number = card_clean
         self.cvc = cvc_clean
-
+        
         return self
 
 
@@ -767,18 +615,9 @@ class ClientCardAddPesapalRequest(BaseModel):
     No card number or CVC is stored — the user enters card details on Pesapal's page when they pay.
     Use this to avoid collecting or storing sensitive card data (PCI-friendly).
     """
-
-    name: Optional[str] = Field(
-        "",
-        max_length=255,
-        description="Display name (e.g. 'My Visa'). If empty, defaults to card type.",
-    )
-    card_type: Literal["visa", "mastercard"] = Field(
-        ..., description="Card type (visa or mastercard)"
-    )
-    is_default: Optional[bool] = Field(
-        False, description="Set as default payment method"
-    )
+    name: Optional[str] = Field("", max_length=255, description="Display name (e.g. 'My Visa'). If empty, defaults to card type.")
+    card_type: Literal["visa", "mastercard"] = Field(..., description="Card type (visa or mastercard)")
+    is_default: Optional[bool] = Field(False, description="Set as default payment method")
 
     @field_validator("is_default", mode="before")
     @classmethod
@@ -800,7 +639,6 @@ class ClientCardAddPesapalRequest(BaseModel):
 
 class PaymentMethodResponse(BaseModel):
     """Payment method response schema"""
-
     id: int
     host_id: Optional[int] = None  # Nullable to support clients
     client_id: Optional[int] = None  # Nullable to support hosts
@@ -813,12 +651,10 @@ class PaymentMethodResponse(BaseModel):
     expiry_year: Optional[int] = None  # Stored internally, used to format expiry_date
     expiry_date: Optional[str] = None  # Formatted as MM/YY (e.g., "08/30")
     is_default: bool
-    created_at: Optional[datetime] = (
-        None  # Made optional to handle cases where it might be None initially
-    )
+    created_at: Optional[datetime] = None  # Made optional to handle cases where it might be None initially
     updated_at: Optional[datetime] = None
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def format_expiry_date(self):
         """Format expiry date as MM/YY if card payment method"""
         if self.expiry_month is not None and self.expiry_year is not None:
@@ -834,25 +670,17 @@ class PaymentMethodResponse(BaseModel):
 
 class PaymentMethodListResponse(BaseModel):
     """List of payment methods response"""
-
     payment_methods: List[PaymentMethodResponse]
 
 
 # Feedback Schemas
 class FeedbackCreateRequest(BaseModel):
     """Create feedback request schema"""
-
-    content: str = Field(
-        ...,
-        min_length=1,
-        max_length=250,
-        description="Feedback content (max 250 characters)",
-    )
+    content: str = Field(..., min_length=1, max_length=250, description="Feedback content (max 250 characters)")
 
 
 class FeedbackResponse(BaseModel):
     """Feedback response schema"""
-
     id: int
     host_id: int
     content: str
@@ -865,27 +693,19 @@ class FeedbackResponse(BaseModel):
 
 class FeedbackListResponse(BaseModel):
     """List of feedbacks response"""
-
     feedbacks: List[FeedbackResponse]
-
+    
     class Config:
         from_attributes = True
 
 
 class ClientFeedbackCreateRequest(BaseModel):
     """Create client feedback request schema"""
-
-    content: str = Field(
-        ...,
-        min_length=1,
-        max_length=250,
-        description="Feedback content (max 250 characters)",
-    )
+    content: str = Field(..., min_length=1, max_length=250, description="Feedback content (max 250 characters)")
 
 
 class ClientFeedbackResponse(BaseModel):
     """Client feedback response schema"""
-
     id: int
     client_id: int
     content: str
@@ -898,7 +718,6 @@ class ClientFeedbackResponse(BaseModel):
 
 class ClientFeedbackListResponse(BaseModel):
     """List of client feedbacks response"""
-
     feedbacks: List[ClientFeedbackResponse]
 
     class Config:
@@ -907,32 +726,22 @@ class ClientFeedbackListResponse(BaseModel):
 
 # ==================== HOST RATING SCHEMAS ====================
 
-
 class HostRatingCreateRequest(BaseModel):
     """Request to create a host rating"""
-
     host_id: int = Field(..., description="ID of the host being rated")
     rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
-    review: Optional[str] = Field(
-        None, max_length=1000, description="Optional text review (max 1000 characters)"
-    )
-    booking_id: Optional[int] = Field(
-        None, description="Optional: ID of the completed booking this rating is for"
-    )
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="Optional: ID of the completed booking this rating is for")
 
 
 class HostRatingUpdateRequest(BaseModel):
     """Request to update a host rating"""
-
     rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
-    review: Optional[str] = Field(
-        None, max_length=1000, description="Optional text review (max 1000 characters)"
-    )
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
 
 
 class HostRatingResponse(BaseModel):
     """Host rating response schema"""
-
     id: int
     host_id: int
     client_id: int
@@ -941,53 +750,42 @@ class HostRatingResponse(BaseModel):
     review: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-
+    
     # Client info (for display)
     client_name: Optional[str] = None
-
+    
     class Config:
         from_attributes = True
 
 
 class HostRatingListResponse(BaseModel):
     """List of host ratings response"""
-
     ratings: List[HostRatingResponse]
     total: int
     average_rating: Optional[float] = None
-
+    
     class Config:
         from_attributes = True
 
 
 # ==================== CLIENT (RENTER) RATING SCHEMAS ====================
 
-
 class ClientRatingCreateRequest(BaseModel):
     """Request for a host to create a client/renter rating"""
-
     client_id: int = Field(..., description="ID of the client being rated")
     rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
-    review: Optional[str] = Field(
-        None, max_length=1000, description="Optional text review (max 1000 characters)"
-    )
-    booking_id: Optional[int] = Field(
-        None, description="Optional: ID of the completed booking this rating is for"
-    )
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="Optional: ID of the completed booking this rating is for")
 
 
 class ClientRatingUpdateRequest(BaseModel):
     """Request for a host to update a client/renter rating"""
-
     rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
-    review: Optional[str] = Field(
-        None, max_length=1000, description="Optional text review (max 1000 characters)"
-    )
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
 
 
 class ClientRatingResponse(BaseModel):
     """Client/renter rating response schema"""
-
     id: int
     client_id: int
     host_id: int
@@ -1007,8 +805,52 @@ class ClientRatingResponse(BaseModel):
 
 class ClientRatingListResponse(BaseModel):
     """List of client/renter ratings response"""
-
     ratings: List[ClientRatingResponse]
+    total: int
+    average_rating: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ==================== CAR RATING SCHEMAS ====================
+
+class CarRatingCreateRequest(BaseModel):
+    """Request to create a car rating (primary rating)"""
+    car_id: int = Field(..., description="ID of the car being rated")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+    booking_id: Optional[int] = Field(None, description="ID of the completed booking this rating is for")
+
+
+class CarRatingUpdateRequest(BaseModel):
+    """Request to update a car rating"""
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    review: Optional[str] = Field(None, max_length=1000, description="Optional text review (max 1000 characters)")
+
+
+class CarRatingResponse(BaseModel):
+    """Car rating response schema"""
+    id: int
+    car_id: int
+    client_id: int
+    booking_id: Optional[int] = None
+    rating: int
+    review: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Display helpers
+    client_name: Optional[str] = None
+    car_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CarRatingListResponse(BaseModel):
+    """List of car ratings response"""
+    ratings: List[CarRatingResponse]
     total: int
     average_rating: Optional[float] = None
 
@@ -1018,17 +860,12 @@ class ClientRatingListResponse(BaseModel):
 
 class ClientProfileForHostResponse(BaseModel):
     """Client summary for hosts (e.g. when viewing a renter profile). Includes trips count and rating."""
-
     id: int
     full_name: str
     email: str
     avatar_url: Optional[str] = None
-    trips_count: int = Field(
-        ..., description="Number of completed bookings (trips) by this client"
-    )
-    average_rating: Optional[float] = Field(
-        None, description="Average rating from hosts (1-5)"
-    )
+    trips_count: int = Field(..., description="Number of completed bookings (trips) by this client")
+    average_rating: Optional[float] = Field(None, description="Average rating from hosts (1-5)")
 
     class Config:
         from_attributes = True
@@ -1037,15 +874,11 @@ class ClientProfileForHostResponse(BaseModel):
 # Support Message Schemas
 class SupportMessageRequest(BaseModel):
     """Request to send a message in support conversation"""
-
-    message: str = Field(
-        ..., min_length=1, max_length=2000, description="Message content"
-    )
+    message: str = Field(..., min_length=1, max_length=2000, description="Message content")
 
 
 class SupportMessageResponse(BaseModel):
     """Individual message in a conversation"""
-
     id: int
     conversation_id: int
     sender_type: str  # "host" or "admin"
@@ -1061,7 +894,6 @@ class SupportMessageResponse(BaseModel):
 
 class SupportConversationResponse(BaseModel):
     """Support conversation with messages"""
-
     id: int
     host_id: int
     host_name: Optional[str] = None
@@ -1080,7 +912,6 @@ class SupportConversationResponse(BaseModel):
 
 class SupportConversationListResponse(BaseModel):
     """Paginated support conversations list (for admin)"""
-
     conversations: List[SupportConversationResponse]
     total: int
     page: int
@@ -1091,19 +922,14 @@ class SupportConversationListResponse(BaseModel):
 
 class AdminResponseRequest(BaseModel):
     """Request for admin to respond to a support conversation"""
-
-    message: str = Field(
-        ..., min_length=1, max_length=2000, description="Admin response message"
-    )
+    message: str = Field(..., min_length=1, max_length=2000, description="Admin response message")
 
 
 # ==================== ADMIN SCHEMAS ====================
 
-
 # Admin Auth Schemas
 class AdminProfileResponse(BaseModel):
     """Complete admin profile response"""
-
     id: int
     full_name: str
     email: str
@@ -1124,16 +950,13 @@ class AdminLoginRequest(BaseModel):
 class AdminLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    expires_in: int = Field(
-        ..., description="Access token lifetime in seconds (matches JWT exp)"
-    )
+    expires_in: int = Field(..., description="Access token lifetime in seconds (matches JWT exp)")
     admin: AdminProfileResponse
 
 
 # Admin User Management Schemas
 class HostListResponse(BaseModel):
     """Host list item response"""
-
     id: int
     full_name: str
     email: str
@@ -1149,7 +972,6 @@ class HostListResponse(BaseModel):
 
 class HostDetailResponse(BaseModel):
     """Full host detail response"""
-
     id: int
     full_name: str
     email: str
@@ -1170,7 +992,6 @@ class HostDetailResponse(BaseModel):
 
 class HostUpdateRequest(BaseModel):
     """Update host profile request"""
-
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
     bio: Optional[str] = Field(None, max_length=2000)
@@ -1181,7 +1002,6 @@ class HostUpdateRequest(BaseModel):
 
 class PaginatedHostListResponse(BaseModel):
     """Paginated host list response"""
-
     hosts: List[HostListResponse]
     total: int
     page: int
@@ -1191,7 +1011,6 @@ class PaginatedHostListResponse(BaseModel):
 
 class ClientListResponse(BaseModel):
     """Client list item response"""
-
     id: int
     full_name: str
     email: str
@@ -1205,7 +1024,6 @@ class ClientListResponse(BaseModel):
 
 class ClientDetailResponse(BaseModel):
     """Full client detail response"""
-
     id: int
     full_name: str
     email: str
@@ -1223,7 +1041,6 @@ class ClientDetailResponse(BaseModel):
 
 class ClientUpdateRequest(BaseModel):
     """Update client profile request"""
-
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
     bio: Optional[str] = Field(None, max_length=2000)
@@ -1234,7 +1051,6 @@ class ClientUpdateRequest(BaseModel):
 
 class PaginatedClientListResponse(BaseModel):
     """Paginated client list response"""
-
     clients: List[ClientListResponse]
     total: int
     page: int
@@ -1244,94 +1060,75 @@ class PaginatedClientListResponse(BaseModel):
 
 # ==================== DRIVING LICENSE SCHEMAS ====================
 
-
 class DrivingLicenseRequest(BaseModel):
     """Add or update driving license information"""
-
-    license_number: str = Field(
-        ...,
-        min_length=5,
-        max_length=50,
-        description="License number (mix of letters and numbers)",
-    )
-    category: str = Field(
-        ...,
-        min_length=2,
-        max_length=10,
-        description="License category (one letter + number, e.g., B1, C2)",
-    )
+    license_number: str = Field(..., min_length=5, max_length=50, description="License number (mix of letters and numbers)")
+    category: str = Field(..., min_length=2, max_length=10, description="License category (one letter + number, e.g., B1, C2)")
     issue_date: date = Field(..., description="License issue date")
     expiry_date: date = Field(..., description="License expiry date")
-
-    @model_validator(mode="after")
+    
+    @model_validator(mode='after')
     def validate_license_number(self):
         """Validate license number contains letters and numbers"""
         if not any(c.isalpha() for c in self.license_number):
-            raise ValueError("License number must contain at least one letter")
+            raise ValueError('License number must contain at least one letter')
         if not any(c.isdigit() for c in self.license_number):
-            raise ValueError("License number must contain at least one number")
+            raise ValueError('License number must contain at least one number')
         # Allow only alphanumeric characters
-        if not self.license_number.replace(" ", "").isalnum():
-            raise ValueError(
-                "License number can only contain letters, numbers, and spaces"
-            )
+        if not self.license_number.replace(' ', '').isalnum():
+            raise ValueError('License number can only contain letters, numbers, and spaces')
         return self
-
-    @model_validator(mode="after")
+    
+    @model_validator(mode='after')
     def validate_category(self):
         """Validate category format: one letter followed by one or more numbers"""
         category_clean = self.category.strip().upper()
         if len(category_clean) < 2:
-            raise ValueError(
-                "Category must be at least 2 characters (one letter + number)"
-            )
-
+            raise ValueError('Category must be at least 2 characters (one letter + number)')
+        
         # Check if first character is a letter
         if not category_clean[0].isalpha():
-            raise ValueError("Category must start with a letter")
-
+            raise ValueError('Category must start with a letter')
+        
         # Check if remaining characters are numbers
         if not category_clean[1:].isdigit():
-            raise ValueError(
-                "Category must have numbers after the letter (e.g., B1, C2, D1)"
-            )
-
+            raise ValueError('Category must have numbers after the letter (e.g., B1, C2, D1)')
+        
         self.category = category_clean
         return self
-
-    @model_validator(mode="after")
+    
+    @model_validator(mode='after')
     def validate_dates(self):
         """Validate issue and expiry dates according to Kenyan system"""
         from datetime import date, timedelta
-
+        
         today = date.today()
-
+        
         # Issue date cannot be in the future
         if self.issue_date > today:
-            raise ValueError("Issue date cannot be in the future")
-
+            raise ValueError('Issue date cannot be in the future')
+        
         # Calculate expected expiry date (3 years from issue date)
-        expected_expiry = self.issue_date + timedelta(days=3 * 365)  # 3 years
-
+        expected_expiry = self.issue_date + timedelta(days=3*365)  # 3 years
+        
         # Allow small margin (within 5 days) for expiry date
         days_diff = abs((self.expiry_date - expected_expiry).days)
         if days_diff > 5:
             raise ValueError(
-                f"Expiry date must be approximately 3 years from issue date. "
-                f"Expected expiry: {expected_expiry.strftime('%Y-%m-%d')}, "
-                f"but got: {self.expiry_date.strftime('%Y-%m-%d')}"
+                f'Expiry date must be approximately 3 years from issue date. '
+                f'Expected expiry: {expected_expiry.strftime("%Y-%m-%d")}, '
+                f'but got: {self.expiry_date.strftime("%Y-%m-%d")}'
             )
-
+        
         # Expiry date must be after issue date
         if self.expiry_date <= self.issue_date:
-            raise ValueError("Expiry date must be after issue date")
-
+            raise ValueError('Expiry date must be after issue date')
+        
         return self
 
 
 class DrivingLicenseResponse(BaseModel):
     """Driving license information response"""
-
     id: int
     client_id: int
     license_number: str
@@ -1342,7 +1139,7 @@ class DrivingLicenseResponse(BaseModel):
     verification_notes: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-
+    
     class Config:
         from_attributes = True
 
@@ -1350,7 +1147,6 @@ class DrivingLicenseResponse(BaseModel):
 # Admin Car Management Schemas
 class CarDetailResponse(BaseModel):
     """Car detail response with host information"""
-
     id: int
     host_id: int
     host_name: str
@@ -1389,52 +1185,36 @@ class CarDetailResponse(BaseModel):
 
 class CarStatusUpdateRequest(BaseModel):
     """Update car verification status request"""
-
     verification_status: str
-    rejection_reason: Optional[str] = Field(
-        None, max_length=1000, description="Required if status is 'denied'"
-    )
+    rejection_reason: Optional[str] = Field(None, max_length=1000, description="Required if status is 'denied'")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def validate_rejection_reason(self):
         if self.verification_status == "denied" and not self.rejection_reason:
-            raise ValueError(
-                'rejection_reason is required when verification_status is "denied"'
-            )
+            raise ValueError('rejection_reason is required when verification_status is "denied"')
         return self
 
 
 class BulkCarStatusUpdateRequest(BaseModel):
     """Bulk update car status request"""
-
-    car_ids: List[int] = Field(
-        ..., min_length=1, description="List of car IDs to update"
-    )
+    car_ids: List[int] = Field(..., min_length=1, description="List of car IDs to update")
     verification_status: str
-    rejection_reason: Optional[str] = Field(
-        None, max_length=1000, description="Required if status is 'denied'"
-    )
+    rejection_reason: Optional[str] = Field(None, max_length=1000, description="Required if status is 'denied'")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def validate_rejection_reason(self):
         if self.verification_status == "denied" and not self.rejection_reason:
-            raise ValueError(
-                'rejection_reason is required when verification_status is "denied"'
-            )
+            raise ValueError('rejection_reason is required when verification_status is "denied"')
         return self
 
 
 class CarRejectRequest(BaseModel):
     """Reject car request"""
-
-    rejection_reason: str = Field(
-        ..., min_length=1, max_length=1000, description="Reason for rejection"
-    )
+    rejection_reason: str = Field(..., min_length=1, max_length=1000, description="Reason for rejection")
 
 
 class CarUpdateRequest(BaseModel):
     """Admin car update request - can update any field"""
-
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     model: Optional[str] = Field(None, min_length=1, max_length=100)
     body_type: Optional[str] = Field(None, min_length=1, max_length=50)
@@ -1460,7 +1240,6 @@ class CarUpdateRequest(BaseModel):
 
 class AdminCarListResponse(BaseModel):
     """Car list item response for admin"""
-
     id: int
     host_id: int
     host_name: str
@@ -1477,7 +1256,6 @@ class AdminCarListResponse(BaseModel):
 
 class PaginatedCarListResponse(BaseModel):
     """Paginated car list response"""
-
     cars: List[AdminCarListResponse]
     total: int
     page: int
@@ -1488,7 +1266,6 @@ class PaginatedCarListResponse(BaseModel):
 # Admin Dashboard Schemas
 class DashboardStatsResponse(BaseModel):
     """Dashboard statistics response"""
-
     total_hosts: int
     active_hosts: int
     inactive_hosts: int
@@ -1505,7 +1282,6 @@ class DashboardStatsResponse(BaseModel):
 
 class ActivityItem(BaseModel):
     """Activity item response"""
-
     type: str  # "host_registration", "client_registration", "car_submission", "car_status_change"
     entity_type: str  # "host", "client", "car"
     entity_id: int
@@ -1516,18 +1292,14 @@ class ActivityItem(BaseModel):
 
 class RecentActivityResponse(BaseModel):
     """Recent activity response"""
-
     activities: List[ActivityItem]
     total: int
 
 
 class VerificationQueueStatsResponse(BaseModel):
     """Verification queue statistics response"""
-
     cars_awaiting_verification: int
-    average_verification_time_hours: Optional[float] = (
-        None  # Average time from submission to verification
-    )
+    average_verification_time_hours: Optional[float] = None  # Average time from submission to verification
     rejection_rate: float  # Percentage of rejected cars (0-100)
     total_processed: int  # Total cars that have been verified or rejected
     verified_count: int
@@ -1537,7 +1309,6 @@ class VerificationQueueStatsResponse(BaseModel):
 # Admin Feedback Management Schemas
 class AdminFeedbackListResponse(BaseModel):
     """Feedback list item with host information"""
-
     id: int
     host_id: int
     host_name: str
@@ -1553,7 +1324,6 @@ class AdminFeedbackListResponse(BaseModel):
 
 class AdminFeedbackDetailResponse(BaseModel):
     """Full feedback detail with host information"""
-
     id: int
     host_id: int
     host_name: str
@@ -1570,7 +1340,6 @@ class AdminFeedbackDetailResponse(BaseModel):
 
 class PaginatedFeedbackListResponse(BaseModel):
     """Paginated feedback list response"""
-
     feedbacks: List[AdminFeedbackListResponse]
     total: int
     page: int
@@ -1581,21 +1350,13 @@ class PaginatedFeedbackListResponse(BaseModel):
 # Admin Notification Schemas
 class NotificationRequest(BaseModel):
     """Notification request schema"""
-
-    title: str = Field(
-        ..., min_length=1, max_length=255, description="Notification title"
-    )
-    message: str = Field(
-        ..., min_length=1, max_length=1000, description="Notification message"
-    )
-    type: Optional[str] = Field(
-        "info", description="Notification type (info, warning, success, error)"
-    )
+    title: str = Field(..., min_length=1, max_length=255, description="Notification title")
+    message: str = Field(..., min_length=1, max_length=1000, description="Notification message")
+    type: Optional[str] = Field("info", description="Notification type (info, warning, success, error)")
 
 
 class BroadcastNotificationRequest(BaseModel):
     """Broadcast notification request"""
-
     title: str = Field(..., min_length=1, max_length=255)
     message: str = Field(..., min_length=1, max_length=1000)
     type: Optional[str] = Field("info", description="Notification type")
@@ -1603,10 +1364,7 @@ class BroadcastNotificationRequest(BaseModel):
 
 class UserNotificationRequest(BaseModel):
     """Send notification to specific user"""
-
-    user_type: str = Field(
-        ..., pattern="^(host|client)$", description="User type: host or client"
-    )
+    user_type: str = Field(..., pattern="^(host|client)$", description="User type: host or client")
     user_id: int = Field(..., description="User ID")
     title: str = Field(..., min_length=1, max_length=255)
     message: str = Field(..., min_length=1, max_length=1000)
@@ -1615,7 +1373,6 @@ class UserNotificationRequest(BaseModel):
 
 class NotificationResponse(BaseModel):
     """Notification response"""
-
     message: str
     sent_count: Optional[int] = None
     user_id: Optional[int] = None
@@ -1627,22 +1384,9 @@ class AdminMultiChannelBroadcastToClientsRequest(BaseModel):
     Admin request to broadcast a message to all clients,
     sending via in‑app notifications and/or email depending on each client's preferences.
     """
-
-    title: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Notification title (used for in‑app and default email subject)",
-    )
-    message: str = Field(
-        ...,
-        min_length=1,
-        max_length=1000,
-        description="Plain text message for in‑app notification",
-    )
-    type: Optional[str] = Field(
-        "info", description="Notification type: info, warning, success, error"
-    )
+    title: str = Field(..., min_length=1, max_length=255, description="Notification title (used for in‑app and default email subject)")
+    message: str = Field(..., min_length=1, max_length=1000, description="Plain text message for in‑app notification")
+    type: Optional[str] = Field("info", description="Notification type: info, warning, success, error")
     email_subject: Optional[str] = Field(
         None,
         max_length=255,
@@ -1657,7 +1401,6 @@ class AdminMultiChannelBroadcastToClientsRequest(BaseModel):
 # Host Notification Schemas
 class HostNotificationResponse(BaseModel):
     """Notification response for host"""
-
     id: int
     title: str
     message: str
@@ -1672,7 +1415,6 @@ class HostNotificationResponse(BaseModel):
 
 class HostNotificationListResponse(BaseModel):
     """List of notifications for host"""
-
     notifications: List[HostNotificationResponse]
     total: int
     unread_count: int
@@ -1680,7 +1422,6 @@ class HostNotificationListResponse(BaseModel):
 
 class ClientNotificationResponse(BaseModel):
     """Notification response for client"""
-
     id: int
     title: str
     message: str
@@ -1695,7 +1436,6 @@ class ClientNotificationResponse(BaseModel):
 
 class ClientNotificationListResponse(BaseModel):
     """List of notifications for client"""
-
     notifications: List[ClientNotificationResponse]
     total: int
     unread_count: int
@@ -1703,16 +1443,12 @@ class ClientNotificationListResponse(BaseModel):
 
 class NotificationToggleRequest(BaseModel):
     """Generic request body for toggling a notification preference."""
-
-    enabled: bool = Field(
-        ..., description="True to enable this notification type, false to disable it"
-    )
+    enabled: bool = Field(..., description="True to enable this notification type, false to disable it")
 
 
 # Admin Management Schemas
 class AdminListResponse(BaseModel):
     """Admin list item"""
-
     id: int
     full_name: str
     email: str
@@ -1727,7 +1463,6 @@ class AdminListResponse(BaseModel):
 
 class AdminDetailResponse(BaseModel):
     """Full admin detail"""
-
     id: int
     full_name: str
     email: str
@@ -1742,12 +1477,9 @@ class AdminDetailResponse(BaseModel):
 
 class AdminCreateRequest(BaseModel):
     """Create new admin request"""
-
     full_name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(
-        ..., min_length=8, description="Password must be at least 8 characters"
-    )
+    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
     password_confirmation: str = Field(..., min_length=8)
     role: str = Field(
         "customer_service",
@@ -1756,16 +1488,15 @@ class AdminCreateRequest(BaseModel):
     )
     is_active: bool = Field(True, description="Account active status")
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.password != self.password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
 class AdminUpdateRequest(BaseModel):
     """Update admin profile request"""
-
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
     role: Optional[str] = Field(
@@ -1778,45 +1509,37 @@ class AdminUpdateRequest(BaseModel):
 
 class AdminPasswordChangeRequest(BaseModel):
     """Change admin password request"""
-
-    new_password: str = Field(
-        ..., min_length=8, description="New password must be at least 8 characters"
-    )
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
     new_password_confirmation: str = Field(..., min_length=8)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.new_password != self.new_password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
 class AdminOwnPasswordChangeRequest(BaseModel):
     """Change own password request"""
-
     current_password: str = Field(..., description="Current password")
-    new_password: str = Field(
-        ..., min_length=8, description="New password must be at least 8 characters"
-    )
+    new_password: str = Field(..., min_length=8, description="New password must be at least 8 characters")
     new_password_confirmation: str = Field(..., min_length=8)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def passwords_match(self):
         if self.new_password != self.new_password_confirmation:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
 
 class AdminOwnProfileUpdateRequest(BaseModel):
     """Update own profile request"""
-
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
 
 
 class PaginatedAdminListResponse(BaseModel):
     """Paginated admin list response"""
-
     admins: List[AdminListResponse]
     total: int
     page: int
@@ -1826,22 +1549,18 @@ class PaginatedAdminListResponse(BaseModel):
 
 # ==================== NEWSLETTER SUBSCRIBERS ====================
 
-
 class SubscribeRequest(BaseModel):
     """Request to subscribe to newsletter (public)."""
-
     email: EmailStr = Field(..., description="Email to subscribe")
 
 
 class UnsubscribeRequest(BaseModel):
     """Request to unsubscribe from newsletter (public)."""
-
     email: EmailStr = Field(..., description="Email to unsubscribe")
 
 
 class SubscriberItemResponse(BaseModel):
     """Single subscriber (admin list)."""
-
     id: int
     email: str
     is_subscribed: bool
@@ -1854,7 +1573,6 @@ class SubscriberItemResponse(BaseModel):
 
 class SubscriberListResponse(BaseModel):
     """Paginated subscriber list (admin)."""
-
     subscribers: List[SubscriberItemResponse]
     total: int
     page: int
@@ -1864,23 +1582,19 @@ class SubscriberListResponse(BaseModel):
 
 class AdminSendNewsletterRequest(BaseModel):
     """Send newsletter email to all subscribers (admin)."""
-
     subject: str = Field(..., min_length=1, max_length=500)
     body_html: str = Field(..., min_length=1, description="HTML body of the email")
 
 
 # ==================== TOKEN SCHEMAS ====================
 
-
 class RefreshTokenRequest(BaseModel):
     """Request to refresh access token using refresh token"""
-
     refresh_token: str = Field(..., description="Valid refresh token")
 
 
 class TokenPairResponse(BaseModel):
     """Response containing both access and refresh tokens"""
-
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
@@ -1889,27 +1603,19 @@ class TokenPairResponse(BaseModel):
 
 class BiometricLoginRequest(BaseModel):
     """Biometric login using a device token stored in secure local storage."""
-
-    device_token: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Raw device token string from secure storage",
-    )
+    device_token: str = Field(..., min_length=1, max_length=255, description="Raw device token string from secure storage")
 
 
 class BiometricRevokeRequest(BaseModel):
     """Disable biometric login for current client – one device or all devices."""
-
     device_token: Optional[str] = Field(
         default=None,
-        description="Optional raw device token to revoke for a single device. If omitted, revokes all biometric tokens for this client.",
+        description="Optional raw device token to revoke for a single device. If omitted, revokes all biometric tokens for this client."
     )
 
 
 class HostLoginResponseWithRefresh(BaseModel):
     """Host login response with refresh token"""
-
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
@@ -1918,13 +1624,12 @@ class HostLoginResponseWithRefresh(BaseModel):
     # Optional one-time device token for biometric login setup (host app)
     device_token: Optional[str] = Field(
         default=None,
-        description="One-time device token for host biometric login (only present when enableBiometrics was true)",
+        description="One-time device token for host biometric login (only present when enableBiometrics was true)"
     )
 
 
 class ClientLoginResponseWithRefresh(BaseModel):
     """Client login response with refresh token"""
-
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
@@ -1933,22 +1638,19 @@ class ClientLoginResponseWithRefresh(BaseModel):
     # Optional one-time device token for biometric login setup
     device_token: Optional[str] = Field(
         default=None,
-        description="One-time device token for biometric login (only present when enableBiometrics was true)",
+        description="One-time device token for biometric login (only present when enableBiometrics was true)"
     )
 
 
 class ClientTokenData(BaseModel):
     """Token data for client authentication"""
-
     client_id: Optional[int] = None
 
 
 # ==================== CAR LISTING SCHEMAS (CLIENT VIEW) ====================
 
-
 class CarListingResponse(BaseModel):
     """Car listing for client browsing - full car details page"""
-
     id: int
     host_id: int
     name: Optional[str] = None
@@ -1972,6 +1674,8 @@ class CarListingResponse(BaseModel):
     location_name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # Host operating city (from hosts.city) — use with operating_cities from GET /config for grouping
+    host_city: Optional[str] = None
     # New media fields (preferred)
     cover_image: Optional[str] = None
     car_images: Optional[List[str]] = None  # Array of image URLs for carousel
@@ -1981,15 +1685,11 @@ class CarListingResponse(BaseModel):
     video_url: Optional[str] = None
     # Drive options (for client car details + booking)
     drive_setting: Optional[str] = "self_only"
-    allowed_drive_types: Optional[List[str]] = (
-        None  # ["self"] | ["self","withDriver"] | ["withDriver"]
-    )
+    allowed_drive_types: Optional[List[str]] = None  # ["self"] | ["self","withDriver"] | ["withDriver"]
     # Host information
     host_name: Optional[str] = None
     host_avatar_url: Optional[str] = None
-    host_created_at: Optional[datetime] = (
-        None  # When host joined; use for "Since Feb", "6 months", "2 years" etc.
-    )
+    host_created_at: Optional[datetime] = None  # When host joined; use for "Since Feb", "6 months", "2 years" etc.
     created_at: datetime
 
     class Config:
@@ -1998,7 +1698,6 @@ class CarListingResponse(BaseModel):
 
 class CarListResponse(BaseModel):
     """Paginated car listing response"""
-
     cars: List[CarListingResponse]
     total: int
     skip: int
@@ -2010,30 +1709,19 @@ class CarListResponse(BaseModel):
 
 class CarAvailabilityResponse(BaseModel):
     """Car availability response"""
-
     car_id: int
     available: bool
-    booked_dates: List[
-        dict
-    ]  # List of {start_date, end_date, status} for booked periods
-    blocked_dates: List[
-        dict
-    ] = []  # List of {start_date, end_date, reason} for host-blocked periods
-    unavailable_dates: List[
-        dict
-    ] = []  # Combined booked + blocked dates for calendar rendering
-    next_available_date: Optional[str] = (
-        None  # ISO format date string for next available date
-    )
+    booked_dates: List[dict]  # List of {start_date, end_date, status} for booked periods
+    blocked_dates: List[dict] = []  # List of {start_date, end_date, reason} for host-blocked periods
+    unavailable_dates: List[dict] = []  # Combined booked + blocked dates for calendar rendering
+    next_available_date: Optional[str] = None  # ISO format date string for next available date
     message: str
 
 
 # ==================== EXPLORE PAGE SCHEMAS ====================
 
-
 class CarExploreItemResponse(BaseModel):
     """Simplified car item for explore page"""
-
     id: int
     cover_image: Optional[str] = None  # First image from image_urls
     car_name: Optional[str] = None
@@ -2042,6 +1730,7 @@ class CarExploreItemResponse(BaseModel):
     is_renters_favourite: bool = False  # Placeholder for future favourite system
     is_wishlisted: bool = False  # Placeholder for future wishlist system
     location_name: Optional[str] = None
+    host_city: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -2049,7 +1738,6 @@ class CarExploreItemResponse(BaseModel):
 
 class CarExploreListResponse(BaseModel):
     """Paginated explore page car list response"""
-
     cars: List[CarExploreItemResponse]
     total: int
     page: int
@@ -2065,7 +1753,6 @@ class CarExploreListResponse(BaseModel):
 
 class WishlistSummaryResponse(BaseModel):
     """Summary card for the client's wishlist: count and latest car image."""
-
     total_cars: int
     latest_car_id: Optional[int] = None
     latest_car_name: Optional[str] = None
@@ -2074,28 +1761,25 @@ class WishlistSummaryResponse(BaseModel):
 
 class WishlistCarItem(BaseModel):
     """Single car item in the client's wishlist."""
-
     car_id: int
     name: Optional[str] = None
     model: Optional[str] = None
     daily_rate: Optional[float] = None
     cover_image: Optional[str] = None
     location_name: Optional[str] = None
+    host_city: Optional[str] = None
     created_at: datetime
 
 
 class WishlistListResponse(BaseModel):
     """List of wishlist cars for a client."""
-
     cars: List[WishlistCarItem]
 
 
 # ==================== BOOKING SCHEMAS ====================
 
-
 class BookingStatusEnum(str, Enum):
     """Booking status enum for API"""
-
     PENDING = "pending"
     CONFIRMED = "confirmed"
     ACTIVE = "active"
@@ -2115,7 +1799,6 @@ def _location_to_str(v: Union[str, List[str], None]) -> Optional[str]:
 
 class BookingCreateRequest(BaseModel):
     """Request to create a new booking"""
-
     car_id: int = Field(..., description="ID of the car to book")
     start_date: datetime = Field(..., description="Rental start date")
     end_date: datetime = Field(..., description="Rental end date")
@@ -2125,13 +1808,9 @@ class BookingCreateRequest(BaseModel):
     return_location: Optional[str] = Field(None, max_length=500)
     damage_waiver_enabled: Optional[bool] = Field(False)
     drive_type: Optional[str] = Field("self", description="'self' or 'withDriver'")
-    check_in_preference: Optional[str] = Field(
-        "self", description="'self' or 'assisted'"
-    )
+    check_in_preference: Optional[str] = Field("self", description="'self' or 'assisted'")
     special_requirements: Optional[str] = Field(None, max_length=2000)
-    dropoff_same_as_pickup: Optional[bool] = Field(
-        None, description="If true, return_location is same as pickup"
-    )
+    dropoff_same_as_pickup: Optional[bool] = Field(None, description="If true, return_location is same as pickup")
 
     @field_validator("pickup_location", "return_location", mode="before")
     @classmethod
@@ -2149,11 +1828,7 @@ class BookingCreateRequest(BaseModel):
         if start < now:
             raise ValueError("Start date cannot be in the past")
         # When dropoff_same_as_pickup, use pickup_location for return_location if empty
-        if (
-            self.dropoff_same_as_pickup
-            and not self.return_location
-            and self.pickup_location
-        ):
+        if self.dropoff_same_as_pickup and not self.return_location and self.pickup_location:
             self.return_location = self.pickup_location
         return self
 
@@ -2163,7 +1838,6 @@ class BookingUpdateRequest(BaseModel):
     Request to update a PENDING booking (e.g. change dates or details before paying).
     All fields are optional; only provided fields are updated.
     """
-
     start_date: Optional[datetime] = Field(None, description="New rental start date")
     end_date: Optional[datetime] = Field(None, description="New rental end date")
     pickup_time: Optional[str] = Field(None, max_length=10)
@@ -2174,9 +1848,7 @@ class BookingUpdateRequest(BaseModel):
     drive_type: Optional[str] = Field(None, description="'self' or 'withDriver'")
     check_in_preference: Optional[str] = Field(None, description="'self' or 'assisted'")
     special_requirements: Optional[str] = Field(None, max_length=2000)
-    dropoff_same_as_pickup: Optional[bool] = Field(
-        None, description="If true, return_location = pickup_location"
-    )
+    dropoff_same_as_pickup: Optional[bool] = Field(None, description="If true, return_location = pickup_location")
 
     @field_validator("pickup_location", "return_location", mode="before")
     @classmethod
@@ -2185,51 +1857,38 @@ class BookingUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates_if_provided(self):
-        if (
-            self.start_date is not None
-            and self.end_date is not None
-            and self.start_date >= self.end_date
-        ):
+        if self.start_date is not None and self.end_date is not None and self.start_date >= self.end_date:
             raise ValueError("End date must be after start date")
         if self.start_date is not None:
             now = datetime.now(timezone.utc)
-            start = (
-                self.start_date.replace(tzinfo=timezone.utc)
-                if self.start_date.tzinfo is None
-                else self.start_date
-            )
+            start = self.start_date.replace(tzinfo=timezone.utc) if self.start_date.tzinfo is None else self.start_date
             if start < now:
                 raise ValueError("Start date cannot be in the past")
-        if (
-            self.dropoff_same_as_pickup
-            and not self.return_location
-            and self.pickup_location
-        ):
+        if self.dropoff_same_as_pickup and not self.return_location and self.pickup_location:
             self.return_location = self.pickup_location
         return self
 
 
 class BookingResponse(BaseModel):
     """Booking response with full details"""
-
     id: int
     booking_id: str
     client_id: int
-    client_name: Optional[str] = None  # Renter's name (for host views)
+    client_name: Optional[str] = None   # Renter's name (for host views)
     client_email: Optional[str] = None  # Renter's email (for host contact)
     car_id: int
-
+    
     # Car details (denormalized for convenience)
     car_name: Optional[str] = None
     car_model: Optional[str] = None
     car_year: Optional[int] = None
     car_make: Optional[str] = None
     car_image_urls: Optional[List[str]] = None
-
+    
     # Host details
     host_id: Optional[int] = None
     host_name: Optional[str] = None
-
+    
     # Booking dates
     start_date: datetime
     end_date: datetime
@@ -2237,25 +1896,25 @@ class BookingResponse(BaseModel):
     return_time: Optional[str] = None
     pickup_location: Optional[str] = None
     return_location: Optional[str] = None
-
+    
     # Pricing
     daily_rate: float
     rental_days: int
     base_price: float
     damage_waiver_fee: float
     total_price: float
-
+    
     # Options
     damage_waiver_enabled: bool
     drive_type: Optional[str] = None
     check_in_preference: Optional[str] = None
     special_requirements: Optional[str] = None
-
+    
     # Status
     status: str
     status_updated_at: Optional[datetime] = None
     cancellation_reason: Optional[str] = None
-
+    
     # Refund / cancellation details (for client visibility)
     refund_eligible: Optional[bool] = Field(
         default=None,
@@ -2277,7 +1936,7 @@ class BookingResponse(BaseModel):
         default=None,
         description="Human‑readable explanation of how the refund rule was applied",
     )
-
+    
     # Timestamps
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -2288,7 +1947,6 @@ class BookingResponse(BaseModel):
 
 class BookingListResponse(BaseModel):
     """Paginated booking list response"""
-
     bookings: List[BookingResponse]
     total: int
     skip: int
@@ -2297,7 +1955,6 @@ class BookingListResponse(BaseModel):
 
 class BookingExtensionStatusEnum(str, Enum):
     """Status of a booking extension request."""
-
     PENDING_HOST_APPROVAL = "pending_host_approval"
     HOST_APPROVED = "host_approved"
     PAID = "paid"
@@ -2311,10 +1968,7 @@ class BookingExtensionCreateRequest(BaseModel):
 
     - Only `end_date` is changed (no new pickup date)
     """
-
-    new_end_date: datetime = Field(
-        ..., description="New drop-off date/time (must be after current end_date)"
-    )
+    new_end_date: datetime = Field(..., description="New drop-off date/time (must be after current end_date)")
     dropoff_same_as_previous: bool = Field(
         True,
         description="If true, keep the same drop-off location as the current booking",
@@ -2328,15 +1982,12 @@ class BookingExtensionCreateRequest(BaseModel):
     @model_validator(mode="after")
     def validate_locations(self):
         if not self.dropoff_same_as_previous and not self.new_dropoff_location:
-            raise ValueError(
-                "new_dropoff_location is required when dropoff_same_as_previous is false"
-            )
+            raise ValueError("new_dropoff_location is required when dropoff_same_as_previous is false")
         return self
 
 
 class BookingExtensionRequestResponse(BaseModel):
     """Booking extension request details."""
-
     id: int
     booking_id: int
     client_id: int
@@ -2358,7 +2009,6 @@ class BookingExtensionRequestResponse(BaseModel):
 
 class BookingExtensionListResponse(BaseModel):
     """List of extension requests for a booking."""
-
     extensions: List[BookingExtensionRequestResponse]
 
 
@@ -2369,13 +2019,8 @@ ISSUE_TYPES = ["damage", "late_return", "no_show", "misconduct", "other"]
 
 class ReportIssueRequest(BaseModel):
     """Request to report an issue for an active booking."""
-
-    issue_type: str = Field(
-        ..., description="Type: damage, late_return, no_show, misconduct, other"
-    )
-    description: str = Field(
-        ..., min_length=1, max_length=2000, description="Issue description"
-    )
+    issue_type: str = Field(..., description="Type: damage, late_return, no_show, misconduct, other")
+    description: str = Field(..., min_length=1, max_length=2000, description="Issue description")
 
     @field_validator("issue_type")
     @classmethod
@@ -2387,12 +2032,9 @@ class ReportIssueRequest(BaseModel):
 
 class BookingIssueResponse(BaseModel):
     """Host booking issue response."""
-
     id: int
     booking_id: int
-    booking_id_display: str = Field(
-        ..., description="Human-readable booking ID e.g. BK-12345678"
-    )
+    booking_id_display: str = Field(..., description="Human-readable booking ID e.g. BK-12345678")
     host_id: int
     issue_type: str
     description: str
@@ -2406,7 +2048,6 @@ class BookingIssueResponse(BaseModel):
 
 class BookingIssueListResponse(BaseModel):
     """Paginated list of host booking issues."""
-
     issues: List[BookingIssueResponse]
     total: int
     page: int
@@ -2418,28 +2059,17 @@ class BookingIssueListResponse(BaseModel):
 
 class HostEarningsSummaryResponse(BaseModel):
     """Summary of host earnings for home/dashboard: net earnings, commission, withdrawable."""
-
-    total_gross: float = Field(
-        ..., description="Total amount received from paid bookings (before commission)"
-    )
-    commission_rate: float = Field(
-        ..., description="Platform commission rate (e.g. 0.15 for 15%)"
-    )
+    total_gross: float = Field(..., description="Total amount received from paid bookings (before commission)")
+    commission_rate: float = Field(..., description="Platform commission rate (e.g. 0.15 for 15%)")
     commission_amount: float = Field(..., description="Total commission deducted")
-    net_earnings: float = Field(
-        ..., description="Host earnings after commission (total_gross - commission)"
-    )
-    withdrawable: float = Field(
-        ..., description="Amount available to withdraw (same as net_earnings for now)"
-    )
-    paid_bookings_count: int = Field(
-        ..., description="Number of paid (confirmed/active/completed) bookings"
-    )
+    net_earnings: float = Field(..., description="Host earnings after commission (total_gross - commission)")
+    pending_withdrawals_total: float = Field(..., description="Sum of pending + completed withdrawal amounts already claimed")
+    withdrawable: float = Field(..., description="Amount available to withdraw (net_earnings - pending_withdrawals_total)")
+    paid_bookings_count: int = Field(..., description="Number of paid (confirmed/active/completed) bookings")
 
 
 class HostTransactionItem(BaseModel):
     """Single transaction (paid booking) for host earnings list."""
-
     booking_id: str
     car_name: Optional[str] = None
     client_name: Optional[str] = None
@@ -2452,7 +2082,6 @@ class HostTransactionItem(BaseModel):
 
 class HostTransactionListResponse(BaseModel):
     """Paginated list of host transactions (earnings per booking)."""
-
     transactions: List[HostTransactionItem]
     total: int
     skip: int
@@ -2464,41 +2093,26 @@ class HostTransactionListResponse(BaseModel):
 
 class WithdrawalCreateRequest(BaseModel):
     """Host request to withdraw earnings."""
-
     amount: float = Field(..., gt=0, description="Amount to withdraw")
     payment_method_type: str = Field(..., description="mpesa or bank")
-    mpesa_number: Optional[str] = Field(
-        None,
-        description="M-Pesa phone number (e.g. 254712345678) when payment_method_type is mpesa",
-    )
-    bank_name: Optional[str] = Field(
-        None, description="Bank name when payment_method_type is bank"
-    )
-    account_number: Optional[str] = Field(
-        None, description="Account number when payment_method_type is bank"
-    )
-    account_name: Optional[str] = Field(
-        None, description="Account holder name (optional)"
-    )
+    mpesa_number: Optional[str] = Field(None, description="M-Pesa phone number (e.g. 254712345678) when payment_method_type is mpesa")
+    bank_name: Optional[str] = Field(None, description="Bank name when payment_method_type is bank")
+    account_number: Optional[str] = Field(None, description="Account number when payment_method_type is bank")
+    account_name: Optional[str] = Field(None, description="Account holder name (optional)")
 
     @model_validator(mode="after")
     def validate_payment_details(self):
         if self.payment_method_type.lower() == "mpesa":
             if not self.mpesa_number or not str(self.mpesa_number).strip():
-                raise ValueError(
-                    "mpesa_number is required when payment_method_type is mpesa"
-                )
+                raise ValueError("mpesa_number is required when payment_method_type is mpesa")
         elif self.payment_method_type.lower() == "bank":
             if not self.bank_name or not self.account_number:
-                raise ValueError(
-                    "bank_name and account_number are required when payment_method_type is bank"
-                )
+                raise ValueError("bank_name and account_number are required when payment_method_type is bank")
         return self
 
 
 class WithdrawalResponse(BaseModel):
     """Single withdrawal response (host or admin)."""
-
     id: int
     host_id: int
     host_name: Optional[str] = None
@@ -2510,7 +2124,7 @@ class WithdrawalResponse(BaseModel):
     processed_at: Optional[datetime] = None
     processed_by_admin_id: Optional[int] = None
     admin_notes: Optional[str] = None
-
+    
     # Payhero/M-Pesa B2C callback fields
     checkout_request_id: Optional[str] = None
     result_code: Optional[int] = None
@@ -2518,7 +2132,7 @@ class WithdrawalResponse(BaseModel):
     mpesa_receipt_number: Optional[str] = None
     mpesa_phone: Optional[str] = None
     mpesa_transaction_date: Optional[str] = None
-
+    
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -2528,7 +2142,6 @@ class WithdrawalResponse(BaseModel):
 
 class WithdrawalListResponse(BaseModel):
     """Paginated list of withdrawals."""
-
     withdrawals: List[WithdrawalResponse]
     total: int
     skip: int
@@ -2537,14 +2150,12 @@ class WithdrawalListResponse(BaseModel):
 
 class WithdrawalUpdateRequest(BaseModel):
     """Admin update: set status and optional notes."""
-
     status: str = Field(..., description="completed, rejected, or cancelled")
     admin_notes: Optional[str] = Field(None, max_length=2000)
 
 
 class RefundStatusEnum(str, Enum):
     """Refund lifecycle for admin/finance UI."""
-
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -2558,17 +2169,12 @@ class RefundCreateRequest(BaseModel):
 
     Normally used after a cancellation when the policy says a refund is due.
     """
-
-    booking_id: int = Field(
-        ..., description="Internal numeric booking ID (not BK-… string)"
-    )
+    booking_id: int = Field(..., description="Internal numeric booking ID (not BK-… string)")
     payment_id: Optional[int] = Field(
         None,
         description="Optional payment ID when refunding a specific payment attempt",
     )
-    amount_refund: float = Field(
-        ..., gt=0, description="Refund amount in KES to send back to client"
-    )
+    amount_refund: float = Field(..., gt=0, description="Refund amount in KES to send back to client")
     percentage: Optional[float] = Field(
         None,
         ge=0.0,
@@ -2591,7 +2197,6 @@ class RefundUpdateRequest(BaseModel):
     """
     Admin request to update a refund record status and internal details.
     """
-
     status: RefundStatusEnum = Field(..., description="New refund status")
     internal_note: Optional[str] = Field(
         None,
@@ -2607,7 +2212,6 @@ class RefundUpdateRequest(BaseModel):
 
 class RefundResponse(BaseModel):
     """Single refund record for admin UI."""
-
     id: int
     booking_id: int
     payment_id: Optional[int] = None
@@ -2639,7 +2243,6 @@ class RefundResponse(BaseModel):
 
 class RefundListResponse(BaseModel):
     """Paginated list of refunds for admin UI."""
-
     refunds: List[RefundResponse]
     total: int
     page: int
@@ -2648,7 +2251,6 @@ class RefundListResponse(BaseModel):
 
 class ClientRefundResponse(BaseModel):
     """Refund record as visible to a client."""
-
     id: int
     booking_id: int
     amount_refund: float
@@ -2666,7 +2268,6 @@ class ClientRefundResponse(BaseModel):
 
 class ClientRefundListResponse(BaseModel):
     """Paginated list of refunds for a client."""
-
     refunds: List[ClientRefundResponse]
     total: int
     skip: int
@@ -2675,13 +2276,7 @@ class ClientRefundListResponse(BaseModel):
 
 class ClientEmergencyRequest(BaseModel):
     """Client emergency message with location."""
-
-    message: str = Field(
-        ...,
-        min_length=1,
-        max_length=2000,
-        description="Emergency message describing the situation",
-    )
+    message: str = Field(..., min_length=1, max_length=2000, description="Emergency message describing the situation")
     latitude: Optional[float] = Field(
         None,
         ge=-90,
@@ -2707,7 +2302,6 @@ class ClientEmergencyRequest(BaseModel):
 
 class ClientEmergencyResponse(BaseModel):
     """Emergency report created for a client."""
-
     id: int
     client_id: int
     booking_id: Optional[int] = None
@@ -2723,29 +2317,18 @@ class ClientEmergencyResponse(BaseModel):
 
 class BookingCancelRequest(BaseModel):
     """Request to cancel a booking"""
-
-    reason: Optional[str] = Field(
-        None, max_length=1000, description="Cancellation reason"
-    )
+    reason: Optional[str] = Field(None, max_length=1000, description="Cancellation reason")
 
 
 # ==================== CLIENT-HOST MESSAGING SCHEMAS ====================
 
-
 class ClientHostMessageRequest(BaseModel):
     """Request to send a message"""
-
-    message: str = Field(
-        ...,
-        min_length=1,
-        max_length=2000,
-        description="Message content (1-2000 characters)",
-    )
+    message: str = Field(..., min_length=1, max_length=2000, description="Message content (1-2000 characters)")
 
 
 class ClientHostMessageResponse(BaseModel):
     """Response for a client-host message"""
-
     id: int
     conversation_id: int
     sender_type: str  # "client" or "host"
@@ -2762,7 +2345,6 @@ class ClientHostMessageResponse(BaseModel):
 
 class ClientHostConversationResponse(BaseModel):
     """Response for a client-host conversation"""
-
     id: int
     client_id: int
     client_name: str
@@ -2785,19 +2367,14 @@ class ClientHostConversationResponse(BaseModel):
 
 class ClientHostConversationListResponse(BaseModel):
     """Response for a list of client-host conversations"""
-
     conversations: List[ClientHostConversationResponse]
 
 
 # ==================== PAYMENT SCHEMAS ====================
 
-
 class BookingExtensionPaymentRequest(BaseModel):
     """Request to start payment for an approved booking extension."""
-
-    payment_method_id: int = Field(
-        ..., description="ID of the payment method to use", alias="paymentMethodId"
-    )
+    payment_method_id: int = Field(..., description="ID of the payment method to use", alias="paymentMethodId")
 
     model_config = {"populate_by_name": True}
 
@@ -2806,22 +2383,13 @@ class PaymentRequest(BaseModel):
     """Request to process a payment. Accepts both snake_case and camelCase.
     booking_id can be either the string ID (e.g. 'BK-ABC12345') or the numeric database id.
     """
-
-    booking_id: Union[str, int] = Field(
-        ...,
-        description="Booking ID (string like 'BK-ABC12345') or numeric id",
-        alias="bookingId",
-    )
-    payment_method_id: int = Field(
-        ..., description="ID of the payment method to use", alias="paymentMethodId"
-    )
+    booking_id: Union[str, int] = Field(..., description="Booking ID (string like 'BK-ABC12345') or numeric id", alias="bookingId")
+    payment_method_id: int = Field(..., description="ID of the payment method to use", alias="paymentMethodId")
 
     model_config = {"populate_by_name": True}
 
-
 class PaymentResponse(BaseModel):
     """Response for a payment processing"""
-
     success: bool
     booking_id: str
     amount_paid: float
@@ -2837,23 +2405,13 @@ class PaymentResponse(BaseModel):
 
 class ArdenaPayPaymentRequest(BaseModel):
     """Request to pay for a booking with Ardena Pay. Use payWithXlm=true to pay with XLM (default: USDC)."""
-
-    booking_id: Union[str, int] = Field(
-        ...,
-        description="Booking ID (e.g. 'BK-ABC12345') or numeric id",
-        alias="bookingId",
-    )
-    pay_with_xlm: bool = Field(
-        False,
-        description="If true, deduct XLM (converted from KSH); if false, deduct USDC",
-        alias="payWithXlm",
-    )
+    booking_id: Union[str, int] = Field(..., description="Booking ID (e.g. 'BK-ABC12345') or numeric id", alias="bookingId")
+    pay_with_xlm: bool = Field(False, description="If true, deduct XLM (converted from KSH); if false, deduct USDC", alias="payWithXlm")
     model_config = {"populate_by_name": True}
 
 
 class ArdenaPayPaymentResponse(BaseModel):
     """Response after successful Ardena Pay (USDC or XLM) payment."""
-
     success: bool
     booking_id: str
     amount_ksh: float
@@ -2867,7 +2425,6 @@ class ArdenaPayPaymentResponse(BaseModel):
 
 class StellarTransactionResponse(BaseModel):
     """Single Ardena Pay (USDC or XLM) transaction record for listing. amount_usd is always set for UI display."""
-
     id: int
     booking_id: int
     amount_ksh: float
@@ -2885,16 +2442,13 @@ class StellarTransactionResponse(BaseModel):
 
 class IncomingWalletPaymentResponse(BaseModel):
     """Incoming Ardena Pay (USDC or XLM) payment to the client's wallet – for in-app 'You received X' messages."""
-
     id: int
     amount_asset: str  # "USDC" or "XLM"
     amount: str
     from_address: str
     stellar_tx_hash: str
     created_at: datetime
-    notification_id: Optional[int] = (
-        None  # In-app notification created for this receipt
-    )
+    notification_id: Optional[int] = None  # In-app notification created for this receipt
 
     class Config:
         from_attributes = True
@@ -2902,7 +2456,6 @@ class IncomingWalletPaymentResponse(BaseModel):
 
 class PaymentStatusEnum(str, Enum):
     """Payment attempt status (for UI polling)"""
-
     PENDING = "pending"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
@@ -2911,19 +2464,14 @@ class PaymentStatusEnum(str, Enum):
 
 class PaymentStatusResponse(BaseModel):
     """Response for GET payment status – UI polls this after STK push or Pesapal redirect."""
-
-    checkout_request_id: (
-        str  # M-Pesa CheckoutRequestID or Pesapal order_tracking_id when applicable
-    )
+    checkout_request_id: str  # M-Pesa CheckoutRequestID or Pesapal order_tracking_id when applicable
     booking_id: str
     status: PaymentStatusEnum
     message: Optional[str] = None  # e.g. "Insufficient funds", "User cancelled"
     amount: float
     paid_at: Optional[datetime] = None  # Set when status is completed
     mpesa_receipt_number: Optional[str] = None
-    order_tracking_id: Optional[str] = (
-        None  # Pesapal order_tracking_id for card payments
-    )
+    order_tracking_id: Optional[str] = None  # Pesapal order_tracking_id for card payments
 
     class Config:
         from_attributes = True
@@ -2931,7 +2479,6 @@ class PaymentStatusResponse(BaseModel):
 
 class MpesaStkPushRequest(BaseModel):
     """Internal schema for M-Pesa STK Push request"""
-
     BusinessShortCode: str
     Password: str
     Timestamp: str
@@ -2944,10 +2491,8 @@ class MpesaStkPushRequest(BaseModel):
     AccountReference: str
     CallBackUrl: str
 
-
 class MpesaStkPushResponse(BaseModel):
     """Internal schema for M-Pesa STK Push response"""
-
     MerchantRequestID: str
     CheckoutRequestID: str
     ResponseCode: str
@@ -2957,17 +2502,14 @@ class MpesaStkPushResponse(BaseModel):
 
 # --- Host subscription (M-Pesa Payhero) ---
 
-
 class HostSubscriptionPlanCode(str, Enum):
     """Sellable subscription tiers (free is default on host, not purchased via checkout)."""
-
     starter = "starter"
     premium = "premium"
 
 
 class HostSubscriptionPlanPublic(BaseModel):
     """One plan row for catalog / pricing UI."""
-
     code: str  # free | starter | premium
     name: str
     description: str
@@ -2982,7 +2524,6 @@ class HostSubscriptionPlansResponse(BaseModel):
 
 class HostSubscriptionCheckoutRequest(BaseModel):
     """Start M-Pesa STK for host subscription."""
-
     plan: HostSubscriptionPlanCode = Field(..., description="starter or premium")
     phone_number: str = Field(
         ...,
@@ -3010,7 +2551,6 @@ class HostSubscriptionCheckoutResponse(BaseModel):
 
 class HostSubscriptionMeResponse(BaseModel):
     """Current subscription for the authenticated host."""
-
     plan: str  # free | starter | premium
     expires_at: Optional[datetime] = None
     is_paid_active: bool = Field(
@@ -3022,9 +2562,7 @@ class HostSubscriptionMeResponse(BaseModel):
         False,
         description="True if an STK push is in progress (within server timeout window).",
     )
-    pending_plan: Optional[str] = Field(
-        None, description="Plan for in-progress checkout, if any."
-    )
+    pending_plan: Optional[str] = Field(None, description="Plan for in-progress checkout, if any.")
     pending_checkout_request_id: Optional[str] = Field(
         None,
         description="Poll payment-status with this id while pending.",
@@ -3055,3 +2593,4 @@ class HostSubscriptionPaymentStatusResponse(BaseModel):
     status: HostSubscriptionPaymentStatusEnum
     message: Optional[str] = None
     mpesa_receipt_number: Optional[str] = None
+

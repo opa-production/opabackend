@@ -2,16 +2,15 @@
 Booking endpoints for clients (and hosts)
 """
 
-import hashlib
 import json
 import logging
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
-from fastapi_cache.decorator import cache
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, joinedload
@@ -46,6 +45,7 @@ from app.schemas import (
     ReportIssueRequest,
 )
 from app.services.receipt import build_receipt_pdf
+from app.utils.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,24 +54,7 @@ logger = logging.getLogger(__name__)
 DAMAGE_WAIVER_PRICE_PER_DAY = 250
 
 
-def _host_bookings_cache_key(
-    func,
-    namespace: str = "",
-    request: Request = None,
-    response=None,
-    *args,
-    **kwargs,
-) -> str:
-    """Stable host-scoped cache key for host booking list endpoints."""
-    host = kwargs.get("current_host")
-    host_id = getattr(host, "id", "anon")
-    query = ""
-    path = "/host/bookings"
-    if request is not None:
-        query = str(request.query_params)
-        path = request.url.path
-    raw_key = f"{namespace}:{func.__module__}:{func.__name__}:{host_id}:{path}:{query}"
-    return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+_host_bookings_cache_key = host_scoped_cache_key
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -119,8 +102,7 @@ def _compute_refund_preview_for_cancellation(booking: Booking):
             completed_base_payments = [
                 p
                 for p in getattr(booking, "payments", []) or []
-                if p.status == PaymentStatus.COMPLETED
-                and p.extension_request_id is None
+                if p.status == PaymentStatus.COMPLETED and p.extension_request_id is None
             ]
             total_paid = float(sum(p.amount for p in completed_base_payments))
 
@@ -129,9 +111,7 @@ def _compute_refund_preview_for_cancellation(booking: Booking):
                 refund_amount = 0.0
                 refund_percentage = 0.0
                 refund_policy_code = "NO_PAYMENT"
-                refund_policy_reason = (
-                    "No completed payment found for this booking – nothing to refund."
-                )
+                refund_policy_reason = "No completed payment found for this booking – nothing to refund."
             else:
                 now = datetime.now(timezone.utc)
                 start = booking.start_date
@@ -163,20 +143,14 @@ def _compute_refund_preview_for_cancellation(booking: Booking):
         refund_policy_code = None
         refund_policy_reason = None
 
-    return (
-        refund_eligible,
-        refund_amount,
-        refund_percentage,
-        refund_policy_code,
-        refund_policy_reason,
-    )
+    return refund_eligible, refund_amount, refund_percentage, refund_policy_code, refund_policy_reason
 
 
 def booking_to_response(booking: Booking) -> dict:
     """Convert Booking model to BookingResponse dict"""
     car = booking.car
     host = car.host if car else None
-
+    
     client = getattr(booking, "client", None)
 
     # ----- Refund preview (base trip only, excludes extension payments) -----
@@ -209,15 +183,18 @@ def booking_to_response(booking: Booking) -> dict:
         "client_name": client.full_name if client else None,
         "client_email": client.email if client else None,
         "car_id": booking.car_id,
+        
         # Car details
         "car_name": car.name if car else None,
         "car_model": car.model if car else None,
         "car_year": car.year if car else None,
         "car_make": car.name if car else None,  # Using name as make for now
         "car_image_urls": parse_image_urls(car.image_urls) if car else [],
+        
         # Host details
         "host_id": host.id if host else None,
         "host_name": host.full_name if host else None,
+        
         # Booking dates
         "start_date": booking.start_date,
         "end_date": booking.end_date,
@@ -225,17 +202,20 @@ def booking_to_response(booking: Booking) -> dict:
         "return_time": booking.return_time,
         "pickup_location": booking.pickup_location,
         "return_location": booking.return_location,
+        
         # Pricing
         "daily_rate": booking.daily_rate,
         "rental_days": booking.rental_days,
         "base_price": booking.base_price,
         "damage_waiver_fee": booking.damage_waiver_fee,
         "total_price": booking.total_price,
+        
         # Options
         "damage_waiver_enabled": booking.damage_waiver_enabled,
         "drive_type": booking.drive_type,
         "check_in_preference": booking.check_in_preference,
         "special_requirements": booking.special_requirements,
+        
         # Status
         "status": booking.status.value,
         "status_updated_at": booking.status_updated_at,
@@ -245,51 +225,40 @@ def booking_to_response(booking: Booking) -> dict:
         "refund_percentage": refund_percentage,
         "refund_policy_code": refund_policy_code,
         "refund_policy_reason": refund_policy_reason,
+        
         # Timestamps
         "created_at": booking.created_at,
         "updated_at": booking.updated_at,
     }
 
 
-async def check_booking_overlap(
-    db: AsyncSession,
-    car_id: int,
-    start_date: datetime,
-    end_date: datetime,
-    exclude_booking_id: Optional[int] = None,
-) -> bool:
+async def check_booking_overlap(db: AsyncSession, car_id: int, start_date: datetime, end_date: datetime, exclude_booking_id: Optional[int] = None) -> bool:
     """
     Check if there's an overlapping booking for the given car and date range.
     Returns True if there's an overlap (NOT available), False if available.
     """
     stmt = select(Booking).filter(
         Booking.car_id == car_id,
-        Booking.status.in_(
-            [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]
-        ),
+        Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE]),
         # Overlap condition: booking.start < requested.end AND booking.end > requested.start
         Booking.start_date < end_date,
-        Booking.end_date > start_date,
+        Booking.end_date > start_date
     )
-
+    
     if exclude_booking_id:
         stmt = stmt.filter(Booking.id != exclude_booking_id)
-
+    
     result = await db.execute(stmt)
     return result.first() is not None
 
 
-async def check_blocked_date_overlap(
-    db: AsyncSession, car_id: int, start_date: datetime, end_date: datetime
-) -> bool:
+async def check_blocked_date_overlap(db: AsyncSession, car_id: int, start_date: datetime, end_date: datetime) -> bool:
     """
     Check if the requested date range overlaps with any host-blocked dates.
     Returns True if there's an overlap (dates are blocked), False if clear.
     Checks both the start_date/end_date range columns and the legacy blocked_date column.
     """
-    start_as_date = (
-        start_date.date() if isinstance(start_date, datetime) else start_date
-    )
+    start_as_date = start_date.date() if isinstance(start_date, datetime) else start_date
     end_as_date = end_date.date() if isinstance(end_date, datetime) else end_date
 
     stmt = select(CarBlockedDate).filter(
@@ -297,106 +266,89 @@ async def check_blocked_date_overlap(
         or_(
             and_(
                 CarBlockedDate.start_date < end_date,
-                CarBlockedDate.end_date > start_date,
+                CarBlockedDate.end_date > start_date
             ),
             and_(
                 CarBlockedDate.blocked_date.isnot(None),
                 CarBlockedDate.blocked_date >= start_as_date,
-                CarBlockedDate.blocked_date < end_as_date,
-            ),
-        ),
+                CarBlockedDate.blocked_date < end_as_date
+            )
+        )
     )
     result = await db.execute(stmt)
     return result.first() is not None
 
 
-@router.post(
-    "/client/bookings",
-    response_model=BookingResponse,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/client/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: BookingCreateRequest,
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new car booking.
-
+    
     - Validates car exists and is verified
     - Validates date range doesn't overlap with existing bookings
     - Validates minimum rental days requirement
     - Creates booking with 'pending' status
     - Returns full booking details
-
+    
     Requires client authentication.
     """
     # Verify car exists and is verified
     result = await db.execute(
-        select(Car)
-        .options(joinedload(Car.host))
-        .filter(
+        select(Car).options(joinedload(Car.host)).filter(
             Car.id == request.car_id,
-            Car.verification_status == VerificationStatus.VERIFIED.value,
+            Car.verification_status == VerificationStatus.VERIFIED.value
         )
     )
     car = result.scalar_one_or_none()
-
+    
     if not car:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Car listing not found or not verified",
+            detail="Car listing not found or not verified"
         )
-
+    
     # ==================== PROFILE COMPLETION CHECKS ====================
     # Verify client has updated their profile
-    if not (
-        current_client.mobile_number
-        and current_client.id_number
-        and current_client.date_of_birth
-        and current_client.gender
-    ):
+    if not (current_client.mobile_number and current_client.id_number and 
+            current_client.date_of_birth and current_client.gender):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please complete your profile before making a booking. Required fields: mobile number, ID number, date of birth, and gender.",
+            detail="Please complete your profile before making a booking. Required fields: mobile number, ID number, date of birth, and gender."
         )
-
+    
     # Verify client has added driving license
     if not current_client.driving_license:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please add your driving license information before making a booking.",
+            detail="Please add your driving license information before making a booking."
         )
-
-    # Verify client has accepted terms and conditions
-    if not current_client.terms_accepted_at:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please accept the terms and conditions before making a booking.",
-        )
-
+    
     # Calculate rental days
     rental_days = (request.end_date - request.start_date).days
     if rental_days < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Rental period must be at least 1 day",
+            detail="Rental period must be at least 1 day"
         )
-
+    
     # Validate minimum rental days
     if car.min_rental_days and rental_days < car.min_rental_days:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Minimum rental period for this car is {car.min_rental_days} days",
+            detail=f"Minimum rental period for this car is {car.min_rental_days} days"
         )
-
+    
     # Validate maximum rental days
     if car.max_rental_days and rental_days > car.max_rental_days:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum rental period for this car is {car.max_rental_days} days",
+            detail=f"Maximum rental period for this car is {car.max_rental_days} days"
         )
-
+    
     # Validate drive_type is allowed by the car's drive setting
     drive_setting = getattr(car, "drive_setting", None) or "self_only"
     allowed_drive_types = DRIVE_SETTING_TO_ALLOWED.get(drive_setting, ["self"])
@@ -406,46 +358,38 @@ async def create_booking(
         allowed_str = ", ".join(allowed_drive_types)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This car only allows: {allowed_str}. You selected '{requested_drive}'.",
+            detail=f"This car only allows: {allowed_str}. You selected '{requested_drive}'."
         )
-
+    
     # Check for overlapping bookings (prevents double booking)
     if await check_booking_overlap(db, car.id, request.start_date, request.end_date):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Car is not available for the selected dates. Please choose different dates.",
+            detail="Car is not available for the selected dates. Please choose different dates."
         )
-
+    
     # Check for host-blocked dates
-    if await check_blocked_date_overlap(
-        db, car.id, request.start_date, request.end_date
-    ):
+    if await check_blocked_date_overlap(db, car.id, request.start_date, request.end_date):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="The host has blocked some of the selected dates. Please choose different dates.",
+            detail="The host has blocked some of the selected dates. Please choose different dates."
         )
-
+    
     # Calculate pricing
     base_price = car.daily_rate * rental_days
-    damage_waiver_fee = (
-        DAMAGE_WAIVER_PRICE_PER_DAY * rental_days
-        if request.damage_waiver_enabled
-        else 0
-    )
+    damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if request.damage_waiver_enabled else 0
     total_price = base_price + damage_waiver_fee
-
+    
     # Generate unique booking ID
     booking_id = generate_booking_id()
-
+    
     # Ensure booking ID is unique
     while True:
-        id_result = await db.execute(
-            select(Booking).filter(Booking.booking_id == booking_id)
-        )
+        id_result = await db.execute(select(Booking).filter(Booking.booking_id == booking_id))
         if id_result.first() is None:
             break
         booking_id = generate_booking_id()
-
+    
     # Create booking
     booking = Booking(
         booking_id=booking_id,
@@ -456,9 +400,7 @@ async def create_booking(
         pickup_time=request.pickup_time,
         return_time=request.return_time,
         pickup_location=request.pickup_location or car.location_name,
-        return_location=request.return_location
-        or request.pickup_location
-        or car.location_name,
+        return_location=request.return_location or request.pickup_location or car.location_name,
         daily_rate=car.daily_rate,
         rental_days=rental_days,
         base_price=base_price,
@@ -468,18 +410,30 @@ async def create_booking(
         drive_type=request.drive_type,
         check_in_preference=request.check_in_preference,
         special_requirements=request.special_requirements,
-        status=BookingStatus.PENDING,
+        status=BookingStatus.PENDING
     )
-
+    
     db.add(booking)
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        car.host_id,
+        ["host-bookings-list"],
+    )
+
+    # Notify host of new booking (fire-and-forget)
+    _client_name = current_client.full_name or "A client"
+    _car_label = f"{car.name} {car.model or ''}".strip()
+    _start = request.start_date.strftime("%d %b %Y")
+    asyncio.ensure_future(notify_host_new_booking(
+        car.host_id, booking_id, _client_name, _car_label, _start
+    ))
 
     # Load relationships for response
     result = await db.execute(
-        select(Booking)
-        .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(Booking.id == booking.id)
+        select(Booking).options(
+            joinedload(Booking.car).joinedload(Car.host)
+        ).filter(Booking.id == booking.id)
     )
     booking = result.scalar_one_or_none()
 
@@ -489,29 +443,25 @@ async def create_booking(
 @router.get("/client/bookings", response_model=BookingListResponse)
 async def get_my_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     status: Optional[str] = Query(None, description="Filter by booking status"),
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get all bookings for the current authenticated client.
-
+    
     - Returns bookings sorted by creation date (newest first)
     - Supports filtering by status
     - Results are paginated
-
+    
     Requires client authentication.
     """
-
-    stmt = (
-        select(Booking)
-        .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(Booking.client_id == current_client.id)
-    )
-
+    
+    stmt = select(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.client_id == current_client.id)
+    
     # Filter by status if provided
     if status:
         try:
@@ -520,49 +470,46 @@ async def get_my_bookings(
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}",
+                detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}"
             )
-
+    
     # Get total count
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-
+    
     # Apply pagination and order by newest first
     stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     bookings = result.scalars().all()
-
+    
     # Convert to response format
     booking_responses = [booking_to_response(b) for b in bookings]
-
+    
     return BookingListResponse(
-        bookings=booking_responses, total=total, skip=skip, limit=limit
+        bookings=booking_responses,
+        total=total,
+        skip=skip,
+        limit=limit
     )
 
 
-async def _client_booking_query(
-    db: AsyncSession, booking_id_param: str, client_id: int
-):
+async def _client_booking_query(db: AsyncSession, booking_id_param: str, client_id: int):
     """Resolve booking by either numeric id or string booking_id (e.g. BK-ABC12345). Returns booking with client filter."""
-    stmt = (
-        select(Booking)
-        .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(Booking.client_id == client_id)
-    )
-
+    stmt = select(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.client_id == client_id)
+    
     if booking_id_param.isdigit():
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-
+        
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def _client_booking_for_receipt(
-    db: AsyncSession, booking_id_param: str, client_id: int
-):
+async def _client_booking_for_receipt(db: AsyncSession, booking_id_param: str, client_id: int):
     """Resolve booking for client with car, host, payments loaded (for receipt)."""
     stmt = (
         select(Booking)
@@ -573,19 +520,17 @@ async def _client_booking_for_receipt(
         )
         .filter(Booking.client_id == client_id)
     )
-
+    
     if booking_id_param.isdigit():
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-
+        
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def _host_booking_for_receipt(
-    db: AsyncSession, booking_id_param: str, host_id: int
-):
+async def _host_booking_for_receipt(db: AsyncSession, booking_id_param: str, host_id: int):
     """Resolve booking by numeric id or booking_id string for host (car must belong to host). Loads car, client, payments."""
     stmt = (
         select(Booking)
@@ -597,12 +542,12 @@ async def _host_booking_for_receipt(
         .join(Car)
         .filter(Car.host_id == host_id)
     )
-
+    
     if booking_id_param.isdigit():
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-
+        
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -611,7 +556,7 @@ async def _host_booking_for_receipt(
 async def get_booking_details(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific booking.
@@ -624,7 +569,8 @@ async def get_booking_details(
     booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
         )
     return booking_to_response(booking)
 
@@ -634,7 +580,7 @@ async def update_booking(
     booking_id: str,
     request: BookingUpdateRequest,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
     """
     Update a PENDING booking (e.g. change dates or details before paying).
@@ -650,114 +596,87 @@ async def update_booking(
     booking = _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
         )
     if booking.status != BookingStatus.PENDING:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only pending bookings can be updated. Current status: {booking.status.value}. Cancel and create a new booking to change after payment.",
+            detail=f"Only pending bookings can be updated. Current status: {booking.status.value}. Cancel and create a new booking to change after payment."
         )
 
     car = booking.car
     if not car:
-        car = (
-            db.query(Car)
-            .options(joinedload(Car.host))
-            .filter(Car.id == booking.car_id)
-            .first()
-        )
+        car = db.query(Car).options(joinedload(Car.host)).filter(Car.id == booking.car_id).first()
     if not car:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Car not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Car not found")
 
     # Resolve new dates: use request if provided, else keep existing
-    new_start = (
-        request.start_date if request.start_date is not None else booking.start_date
-    )
+    new_start = request.start_date if request.start_date is not None else booking.start_date
     new_end = request.end_date if request.end_date is not None else booking.end_date
     new_start = _to_utc(new_start)
     new_end = _to_utc(new_end)
     if new_start >= new_end:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="End date must be after start date",
+            detail="End date must be after start date"
         )
 
     # If dates changed, run full availability and pricing validation
-    dates_changed = new_start != _to_utc(booking.start_date) or new_end != _to_utc(
-        booking.end_date
-    )
-    new_damage_waiver = (
-        request.damage_waiver_enabled
-        if request.damage_waiver_enabled is not None
-        else booking.damage_waiver_enabled
-    )
+    dates_changed = new_start != _to_utc(booking.start_date) or new_end != _to_utc(booking.end_date)
+    new_damage_waiver = request.damage_waiver_enabled if request.damage_waiver_enabled is not None else booking.damage_waiver_enabled
 
     if dates_changed:
         rental_days = (new_end - new_start).days
         if rental_days < 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Rental period must be at least 1 day",
+                detail="Rental period must be at least 1 day"
             )
         if car.min_rental_days and rental_days < car.min_rental_days:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Minimum rental period for this car is {car.min_rental_days} days",
+                detail=f"Minimum rental period for this car is {car.min_rental_days} days"
             )
         if car.max_rental_days and rental_days > car.max_rental_days:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Maximum rental period for this car is {car.max_rental_days} days",
+                detail=f"Maximum rental period for this car is {car.max_rental_days} days"
             )
-        if check_booking_overlap(
-            db, car.id, new_start, new_end, exclude_booking_id=booking.id
-        ):
+        if check_booking_overlap(db, car.id, new_start, new_end, exclude_booking_id=booking.id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Car is not available for the selected dates. Please choose different dates.",
+                detail="Car is not available for the selected dates. Please choose different dates."
             )
         if check_blocked_date_overlap(db, car.id, new_start, new_end):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="The host has blocked some of the selected dates. Please choose different dates.",
+                detail="The host has blocked some of the selected dates. Please choose different dates."
             )
         booking.start_date = new_start
         booking.end_date = new_end
         booking.rental_days = rental_days
         base_price = car.daily_rate * rental_days
-        damage_waiver_fee = (
-            DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if new_damage_waiver else 0
-        )
+        damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * rental_days if new_damage_waiver else 0
         booking.base_price = base_price
         booking.damage_waiver_fee = damage_waiver_fee
         booking.damage_waiver_enabled = new_damage_waiver
         booking.total_price = base_price + damage_waiver_fee
     else:
-        if (
-            request.damage_waiver_enabled is not None
-            and request.damage_waiver_enabled != booking.damage_waiver_enabled
-        ):
+        if request.damage_waiver_enabled is not None and request.damage_waiver_enabled != booking.damage_waiver_enabled:
             booking.damage_waiver_enabled = request.damage_waiver_enabled
-            booking.damage_waiver_fee = (
-                DAMAGE_WAIVER_PRICE_PER_DAY * booking.rental_days
-                if booking.damage_waiver_enabled
-                else 0
-            )
+            booking.damage_waiver_fee = DAMAGE_WAIVER_PRICE_PER_DAY * booking.rental_days if booking.damage_waiver_enabled else 0
             booking.total_price = booking.base_price + booking.damage_waiver_fee
 
     # Drive type: validate if changed
-    new_drive = (
-        request.drive_type if request.drive_type is not None else booking.drive_type
-    )
+    new_drive = request.drive_type if request.drive_type is not None else booking.drive_type
     if new_drive is not None:
         drive_setting = getattr(car, "drive_setting", None) or "self_only"
         allowed = DRIVE_SETTING_TO_ALLOWED.get(drive_setting, ["self"])
         if new_drive.strip().lower() not in [a.lower() for a in allowed]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"This car only allows: {', '.join(allowed)}. You selected '{new_drive}'.",
+                detail=f"This car only allows: {', '.join(allowed)}. You selected '{new_drive}'."
             )
         booking.drive_type = new_drive.strip()
 
@@ -777,12 +696,9 @@ async def update_booking(
 
     db.commit()
     db.refresh(booking)
-    booking = (
-        db.query(Booking)
-        .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(Booking.id == booking.id)
-        .first()
-    )
+    booking = db.query(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(Booking.id == booking.id).first()
     return booking_to_response(booking)
 
 
@@ -817,39 +733,40 @@ async def cancel_booking(
     booking_id: str,
     request: Optional[BookingCancelRequest] = None,
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Cancel an existing booking and apply the platform refund policy.
-
+    
     Policy (base trip payments only, extensions are handled separately):
     - If there is **no completed payment** for this booking yet, the booking is simply cancelled (no refund needed).
     - If cancelled **more than 24 hours before pickup**, the client is eligible for a **full refund** of amounts paid.
     - If cancelled **within 24 hours before pickup but before pickup time**, the client is eligible for a **50% refund**.
     - If pickup time has **already passed**, there is **no automatic refund**; support can review edge cases manually.
-
+    
     The response includes `refund_eligible`, `refund_amount`, `refund_percentage`, and `refund_policy_code` so
     the app can show clear messaging to the client and route any manual refund handling to support/finance.
-
+    
     - **booking_id**: The unique booking identifier (e.g. BK-12345678) or numeric id
     - Only pending or confirmed bookings can be cancelled
     - Only the booking owner can cancel
-
+    
     Requires client authentication.
     """
     booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
         )
-
+    
     # Check if booking can be cancelled
     if booking.status not in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot cancel booking with status '{booking.status.value}'. Only pending or confirmed bookings can be cancelled.",
+            detail=f"Cannot cancel booking with status '{booking.status.value}'. Only pending or confirmed bookings can be cancelled."
         )
-
+    
     # Compute refund preview BEFORE changing status so we know what policy applies right now
     (
         refund_eligible,
@@ -859,21 +776,40 @@ async def cancel_booking(
         refund_policy_reason,
     ) = _compute_refund_preview_for_cancellation(booking)
 
+    # Capture host_id before commit expires the relationship
+    host_id = booking.car.host_id
+
     # Update booking status
     booking.status = BookingStatus.CANCELLED
     booking.status_updated_at = datetime.now(timezone.utc)
     if request and request.reason:
         booking.cancellation_reason = request.reason
 
+    # Capture car info before commit expires the relationship
+    _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    _cancel_reason = request.reason if request else None
+
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        host_id,
+        ["host-bookings-list"],
+    )
 
-    return response_dict
+    asyncio.ensure_future(notify_booking_cancelled(
+        booking.client_id,
+        _booking_ref,
+        booking.cancellation_reason,
+    ))
+    asyncio.ensure_future(notify_host_booking_cancelled(
+        host_id, _booking_ref, _car_label, _cancel_reason
+    ))
+
+    return booking_to_response(booking)
 
 
-@router.get(
-    "/client/bookings/{booking_id}/cancellation-preview", response_model=BookingResponse
-)
+@router.get("/client/bookings/{booking_id}/cancellation-preview", response_model=BookingResponse)
 async def get_booking_cancellation_preview(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
@@ -938,7 +874,7 @@ async def create_booking_extension_request(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only confirmed or active bookings can be extended. "
-            "Complete payment for the current booking first.",
+                   "Complete payment for the current booking first.",
         )
 
     # Normalize datetimes to UTC to avoid naive/aware comparison errors
@@ -965,7 +901,7 @@ async def create_booking_extension_request(
     )
     existing_active_result = await db.execute(existing_stmt)
     existing_active = existing_active_result.scalar_one_or_none()
-
+    
     if existing_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -977,9 +913,7 @@ async def create_booking_extension_request(
     extra_end = new_end_utc
 
     # Availability checks (other bookings + host blocked dates)
-    if await check_booking_overlap(
-        db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id
-    ):
+    if await check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Car is not available for the requested extension period.",
@@ -1033,20 +967,23 @@ async def create_booking_extension_request(
     await db.commit()
     await db.refresh(extension)
 
+    # Notify host of extension request (fire-and-forget)
+    _car_label = f"{car.name} {getattr(car, 'model', '') or ''}".strip()
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    asyncio.ensure_future(notify_host_extension_requested(
+        car.host.id, _booking_ref, _car_label, extra_days
+    ))
+
     return extension
 
-
 # ==================== CLIENT COMPLETED BOOKINGS ====================
-
 
 @router.get("/client/bookings/completed", response_model=BookingListResponse)
 async def get_my_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Convenience endpoint to get only **completed** bookings for the current client.
@@ -1054,19 +991,17 @@ async def get_my_completed_bookings(
     - Uses the same shape as `/client/bookings`
     - Results are paginated and sorted by creation date (newest first)
     """
-    stmt = (
-        select(Booking)
-        .options(joinedload(Booking.car).joinedload(Car.host))
-        .filter(
-            Booking.client_id == current_client.id,
-            Booking.status == BookingStatus.COMPLETED,
-        )
+    stmt = select(Booking).options(
+        joinedload(Booking.car).joinedload(Car.host)
+    ).filter(
+        Booking.client_id == current_client.id,
+        Booking.status == BookingStatus.COMPLETED,
     )
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-
+    
     stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     bookings = result.scalars().all()
@@ -1082,14 +1017,11 @@ async def get_my_completed_bookings(
 
 # ==================== HOST BOOKINGS ====================
 
-
 @router.get("/host/bookings", response_model=BookingListResponse)
 @cache(expire=60, namespace="host-bookings-list", key_builder=_host_bookings_cache_key)
 async def get_host_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     status: Optional[str] = Query(None, description="Filter by booking status"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
@@ -1124,7 +1056,7 @@ async def get_host_bookings(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-
+    
     stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     bookings = result.scalars().all()
@@ -1139,16 +1071,10 @@ async def get_host_bookings(
 
 
 @router.get("/host/bookings/completed", response_model=BookingListResponse)
-@cache(
-    expire=120,
-    namespace="host-bookings-completed",
-    key_builder=_host_bookings_cache_key,
-)
+@cache(expire=120, namespace="host-bookings-completed", key_builder=_host_bookings_cache_key)
 async def get_host_completed_bookings(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(
-        20, ge=1, le=100, description="Maximum number of records to return"
-    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1174,7 +1100,7 @@ async def get_host_completed_bookings(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-
+    
     stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     bookings = result.scalars().all()
@@ -1189,7 +1115,6 @@ async def get_host_completed_bookings(
 
 
 @router.get("/host/bookings/{booking_id}", response_model=BookingResponse)
-@cache(expire=45, namespace="host-bookings-details", key_builder=_host_bookings_cache_key)
 async def get_host_booking_details(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
@@ -1199,6 +1124,7 @@ async def get_host_booking_details(
     Get detailed information about a specific booking for a host.
 
     - Only returns bookings where the car belongs to the authenticated host
+    - Not cached — hosts actively manage bookings from this view (pickup / dropoff)
     """
     stmt = (
         select(Booking)
@@ -1212,7 +1138,7 @@ async def get_host_booking_details(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1272,7 +1198,7 @@ async def delete_host_booking(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1288,15 +1214,36 @@ async def delete_host_booking(
             detail="Only completed or cancelled bookings can be deleted.",
         )
 
+    bid = booking.id
+
+    # --- 1. Null out nullable FK columns that point at this booking ---
+    await db.execute(update(HostRating).where(HostRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(ClientRating).where(ClientRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(CarRating).where(CarRating.booking_id == bid).values(booking_id=None))
+    await db.execute(update(EmergencyReport).where(EmergencyReport.booking_id == bid).values(booking_id=None))
+
+    # --- 2. Null Payment.extension_request_id so extension requests can be deleted ---
+    await db.execute(update(Payment).where(Payment.booking_id == bid).values(extension_request_id=None))
+
+    # --- 3. Delete child records with NOT NULL FK ---
+    await db.execute(delete(BookingIssue).where(BookingIssue.booking_id == bid))
+    await db.execute(delete(Refund).where(Refund.booking_id == bid))
+    await db.execute(delete(BookingExtensionRequest).where(BookingExtensionRequest.booking_id == bid))
+    await db.execute(delete(StellarPaymentTransaction).where(StellarPaymentTransaction.booking_id == bid))
+    await db.execute(delete(Payment).where(Payment.booking_id == bid))
+
+    # --- 4. Now the booking has no dependents — safe to delete ---
     await db.delete(booking)
     await db.commit()
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.put(
-    "/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse
-)
+@router.put("/host/bookings/{booking_id}/confirm-pickup", response_model=BookingResponse)
 async def confirm_pickup_as_host(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
@@ -1320,7 +1267,7 @@ async def confirm_pickup_as_host(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1356,13 +1303,23 @@ async def confirm_pickup_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
+    )
+
+    car = booking.car if hasattr(booking, "car") and booking.car else None
+    car_name = f"{getattr(car, 'name', '')} {getattr(car, 'model', '')}".strip() if car else "your car"
+    asyncio.ensure_future(notify_trip_started(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        car_name,
+    ))
 
     return booking_to_response(booking)
 
 
-@router.put(
-    "/host/bookings/{booking_id}/confirm-dropoff", response_model=BookingResponse
-)
+@router.put("/host/bookings/{booking_id}/confirm-dropoff", response_model=BookingResponse)
 async def confirm_dropoff_as_host(
     booking_id: str,
     current_host: Host = Depends(get_current_host),
@@ -1386,7 +1343,7 @@ async def confirm_dropoff_as_host(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1411,6 +1368,18 @@ async def confirm_dropoff_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
+    )
+
+    _car = booking.car if hasattr(booking, "car") and booking.car else None
+    _car_name = f"{getattr(_car, 'name', '')} {getattr(_car, 'model', '')}".strip() if _car else "your car"
+    asyncio.ensure_future(notify_trip_completed(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        _car_name,
+    ))
 
     return booking_to_response(booking)
 
@@ -1432,11 +1401,7 @@ def _issue_to_response(issue: BookingIssue) -> dict:
     }
 
 
-@router.post(
-    "/host/bookings/{booking_id}/report-issue",
-    response_model=BookingIssueResponse,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/host/bookings/{booking_id}/report-issue", response_model=BookingIssueResponse, status_code=status.HTTP_201_CREATED)
 async def report_booking_issue(
     booking_id: str,
     request: ReportIssueRequest,
@@ -1459,7 +1424,7 @@ async def report_booking_issue(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1469,11 +1434,7 @@ async def report_booking_issue(
             detail="Booking not found",
         )
 
-    if booking.status not in [
-        BookingStatus.CONFIRMED,
-        BookingStatus.ACTIVE,
-        BookingStatus.COMPLETED,
-    ]:
+    if booking.status not in [BookingStatus.CONFIRMED, BookingStatus.ACTIVE, BookingStatus.COMPLETED]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -1503,9 +1464,7 @@ async def list_host_issues(
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    status: Optional[str] = Query(
-        None, description="Filter by status: open, in_review, resolved, closed"
-    ),
+    status: Optional[str] = Query(None, description="Filter by status: open, in_review, resolved, closed"),
 ):
     """
     List all issues reported by the host, with optional status filter.
@@ -1521,12 +1480,8 @@ async def list_host_issues(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-
-    stmt = (
-        stmt.order_by(BookingIssue.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-    )
+    
+    stmt = stmt.order_by(BookingIssue.created_at.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(stmt)
     issues = result.scalars().all()
 
@@ -1562,7 +1517,7 @@ async def complete_booking_as_host(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
 
@@ -1587,6 +1542,18 @@ async def complete_booking_as_host(
 
     await db.commit()
     await db.refresh(booking)
+    await invalidate_host_cache_namespaces(
+        current_host.id,
+        ["host-bookings-list", "host-bookings-completed", "host-earnings-summary"],
+    )
+
+    _car2 = booking.car if hasattr(booking, "car") and booking.car else None
+    _car2_name = f"{getattr(_car2, 'name', '')} {getattr(_car2, 'model', '')}".strip() if _car2 else "your car"
+    asyncio.ensure_future(notify_trip_completed(
+        booking.client_id,
+        getattr(booking, "booking_id", str(booking.id)),
+        _car2_name,
+    ))
 
     return booking_to_response(booking)
 
@@ -1595,7 +1562,7 @@ async def complete_booking_as_host(
 async def delete_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a booking (soft delete by cancelling).
@@ -1608,15 +1575,21 @@ async def delete_booking(
     booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booking not found"
         )
-
+    
     # Check if booking can be cancelled
     if booking.status not in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot delete booking with status '{booking.status.value}'",
+            detail=f"Cannot delete booking with status '{booking.status.value}'"
         )
+    
+    # Capture host_id and car info before commit expires the relationship
+    host_id = booking.car.host_id
+    _booking_ref = getattr(booking, "booking_id", str(booking.id))
+    _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
 
     # Soft delete by cancelling
     booking.status = BookingStatus.CANCELLED
@@ -1624,17 +1597,20 @@ async def delete_booking(
     booking.cancellation_reason = "Deleted by client"
 
     await db.commit()
+    await invalidate_host_cache_namespaces(
+        host_id,
+        ["host-bookings-list"],
+    )
+    asyncio.ensure_future(notify_host_booking_cancelled(host_id, _booking_ref, _car_label))
 
     return None
 
 
-@router.delete(
-    "/client/bookings/{booking_id}/completed", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/client/bookings/{booking_id}/completed", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_completed_booking(
     booking_id: str,
     current_client: Client = Depends(get_current_client),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Hide/delete a **completed or cancelled** booking from the client's view.
@@ -1644,7 +1620,7 @@ async def delete_completed_booking(
     - Only bookings owned by the current client and with status `completed` or
       `cancelled` are allowed.
     """
-    booking = _client_booking_query(db, booking_id, current_client.id)
+    booking = await _client_booking_query(db, booking_id, current_client.id)
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1662,7 +1638,7 @@ async def delete_completed_booking(
         return None
 
     booking.client_deleted_at = datetime.utcnow()
-    db.commit()
+    await db.commit()
 
     return None
 
@@ -1688,12 +1664,10 @@ async def get_client_booking_extensions(
             detail="Booking not found",
         )
 
-    stmt = (
-        select(BookingExtensionRequest)
-        .filter(BookingExtensionRequest.booking_id == booking.id)
-        .order_by(BookingExtensionRequest.created_at.desc())
-    )
-
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.booking_id == booking.id
+    ).order_by(BookingExtensionRequest.created_at.desc())
+    
     result = await db.execute(stmt)
     extensions = result.scalars().all()
 
@@ -1722,22 +1696,20 @@ async def get_host_booking_extensions(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
-
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Booking not found",
         )
 
-    stmt = (
-        select(BookingExtensionRequest)
-        .filter(BookingExtensionRequest.booking_id == booking.id)
-        .order_by(BookingExtensionRequest.created_at.desc())
-    )
-
+    stmt = select(BookingExtensionRequest).filter(
+        BookingExtensionRequest.booking_id == booking.id
+    ).order_by(BookingExtensionRequest.created_at.desc())
+    
     result = await db.execute(stmt)
     extensions = result.scalars().all()
 
@@ -1769,10 +1741,10 @@ async def approve_booking_extension(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
-
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1783,10 +1755,10 @@ async def approve_booking_extension(
         BookingExtensionRequest.id == extension_id,
         BookingExtensionRequest.booking_id == booking.id,
     )
-
+    
     result = await db.execute(stmt)
     extension = result.scalar_one_or_none()
-
+    
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1803,14 +1775,10 @@ async def approve_booking_extension(
     extra_start = extension.old_end_date
     extra_end = extension.requested_end_date
 
-    if await check_booking_overlap(
-        db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id
-    ):
+    if await check_booking_overlap(db, booking.car_id, extra_start, extra_end, exclude_booking_id=booking.id):
         # Mark as rejected so client sees it's no longer possible
         extension.status = BookingExtensionStatusEnum.REJECTED.value
-        extension.host_note = (
-            "Car is no longer available for the requested extension period."
-        )
+        extension.host_note = "Car is no longer available for the requested extension period."
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1840,9 +1808,7 @@ async def approve_booking_extension(
 async def reject_booking_extension(
     booking_id: str,
     extension_id: int,
-    reason: Optional[str] = Body(
-        None, embed=True, description="Optional reason for rejecting the extension"
-    ),
+    reason: Optional[str] = Body(None, embed=True, description="Optional reason for rejecting the extension"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1860,10 +1826,10 @@ async def reject_booking_extension(
             Car.host_id == current_host.id,
         )
     )
-
+    
     result = await db.execute(stmt)
     booking = result.scalar_one_or_none()
-
+    
     if not booking:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1874,10 +1840,10 @@ async def reject_booking_extension(
         BookingExtensionRequest.id == extension_id,
         BookingExtensionRequest.booking_id == booking.id,
     )
-
+    
     result = await db.execute(stmt)
     extension = result.scalar_one_or_none()
-
+    
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
