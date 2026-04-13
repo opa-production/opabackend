@@ -38,6 +38,7 @@ load_dotenv()
 
 from app.api.v1.router import api_router
 from app.cache.redis import init_cache
+from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import RequestLoggingMiddleware, SecurityHeadersMiddleware
 from app.core.rate_limit import limiter
@@ -120,8 +121,12 @@ app = FastAPI(
 # 1. Security headers (X-Frame-Options, CSP, HSTS …)
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 2. Trusted host
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+# 2. Trusted host - Restrict to known domains for security
+allowed_hosts = ["ardena.co.ke", "adminnn.ardena.xyz"]
+# Add localhost variations for development
+if os.getenv("ENVIRONMENT", "development").lower() in ["development", "dev", "local"]:
+    allowed_hosts.extend(["localhost", "127.0.0.1"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # 3. Rate-limiter state + error handler
 app.state.limiter = limiter
@@ -130,19 +135,21 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # 4. Gzip compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# 5. CORS
+# 5. CORS - Allow only explicitly configured origins for security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[],
-    allow_origin_regex=os.getenv(
-        "CORS_ALLOW_ORIGIN_REGEX",
-        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
-        r"|^https://([a-z0-9-]+\.)?ardena\.(xyz|co\.ke)(:\d+)?$",
-    ),
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Accept",
+        "Accept-Language", 
+        "Content-Language",
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+    ],
+    expose_headers=["X-Total-Count", "X-Rate-Limit-Remaining"],
 )
 
 # 6. Request logging (innermost — closest to handlers)
