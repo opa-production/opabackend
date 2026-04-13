@@ -14,6 +14,7 @@ Structure:
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -46,8 +47,15 @@ from app.db.init_db import startup_database
 
 setup_logging()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_cache()
+    await startup_database()
+    yield
+
 # ── App factory ───────────────────────────────────────────────────────────────
 app = FastAPI(
+    lifespan=lifespan,
     title="Car Rental API",
     description="Backend API for car rental platform",
     version="1.0.0",
@@ -154,13 +162,6 @@ app.add_middleware(
 
 # 6. Request logging (innermost — closest to handlers)
 app.add_middleware(RequestLoggingMiddleware)
-
-
-# ── Startup ───────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def on_startup() -> None:
-    await init_cache()
-    await startup_database()
 
 
 # ── API v1 ────────────────────────────────────────────────────────────────────
