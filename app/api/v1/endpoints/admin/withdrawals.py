@@ -9,11 +9,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_current_admin
 from app.db.session import get_db
-from app.models import Admin, Host, Withdrawal, WithdrawalStatus
+from app.models import Admin, Withdrawal, WithdrawalStatus
 from app.schemas import (
     WithdrawalListResponse,
     WithdrawalResponse,
@@ -45,11 +45,7 @@ def _withdrawal_to_response(w: Withdrawal) -> WithdrawalResponse:
 async def list_withdrawals(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    status_filter: Optional[str] = Query(
-        None,
-        alias="status",
-        description="Filter by status: pending, completed, rejected, cancelled",
-    ),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, completed, rejected, cancelled"),
     host_id: Optional[int] = Query(None, description="Filter by host ID"),
     current_admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
@@ -57,7 +53,10 @@ async def list_withdrawals(
     """
     List all withdrawal requests. Filter by status or host.
     """
-    stmt = select(Withdrawal).options(joinedload(Withdrawal.host))
+    stmt = (
+        select(Withdrawal)
+        .options(joinedload(Withdrawal.host))
+    )
     if status_filter:
         try:
             status_enum = WithdrawalStatus(status_filter.lower())
@@ -69,17 +68,17 @@ async def list_withdrawals(
             )
     if host_id is not None:
         stmt = stmt.filter(Withdrawal.host_id == host_id)
-
+        
     # Get total
     count_stmt = select(func.count()).select_from(stmt.subquery())
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
-
+    
     # Apply pagination
     stmt = stmt.order_by(Withdrawal.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     rows = result.scalars().unique().all()
-
+    
     return WithdrawalListResponse(
         withdrawals=[_withdrawal_to_response(w) for w in rows],
         total=total,
@@ -102,11 +101,9 @@ async def get_withdrawal(
     )
     result = await db.execute(stmt)
     w = result.scalar_one_or_none()
-
+    
     if not w:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found")
     return _withdrawal_to_response(w)
 
 
@@ -130,11 +127,9 @@ async def update_withdrawal_status(
     )
     result = await db.execute(stmt)
     w = result.scalar_one_or_none()
-
+    
     if not w:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Withdrawal not found")
     if w.status != WithdrawalStatus.PENDING:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -155,19 +150,26 @@ async def update_withdrawal_status(
         )
     w.status = new_status
     if request.admin_notes is not None:
-        w.admin_notes = (
-            request.admin_notes[:2000]
-            if len(request.admin_notes) > 2000
-            else request.admin_notes
-        )
-    if new_status in (
-        WithdrawalStatus.COMPLETED,
-        WithdrawalStatus.REJECTED,
-        WithdrawalStatus.CANCELLED,
-    ):
+        w.admin_notes = request.admin_notes[:2000] if len(request.admin_notes) > 2000 else request.admin_notes
+    if new_status in (WithdrawalStatus.COMPLETED, WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED):
         w.processed_at = datetime.now(timezone.utc)
         w.processed_by_admin_id = current_admin.id
 
+    _host_id = w.host_id
+    _amount = float(w.amount)
+
     await db.commit()
     await db.refresh(w)
+
+    # Notify host of withdrawal decision (fire-and-forget)
+    import asyncio as _asyncio
+    from app.services.push_notifications import (
+        notify_host_withdrawal_completed as _wd_ok,
+        notify_host_withdrawal_rejected as _wd_reject,
+    )
+    if new_status == WithdrawalStatus.COMPLETED:
+        _asyncio.ensure_future(_wd_ok(_host_id, _amount))
+    elif new_status in (WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED):
+        _asyncio.ensure_future(_wd_reject(_host_id, _amount))
+
     return _withdrawal_to_response(w)

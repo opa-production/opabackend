@@ -626,6 +626,18 @@ async def startup_database():
                 )
                 await conn.commit()
                 print("✓ Added dropoff_confirmed_at column to bookings table")
+            if 'push_reminder_10h_sent_at' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN push_reminder_10h_sent_at TIMESTAMP WITH TIME ZONE"))
+                await conn.commit()
+                print("✓ Added push_reminder_10h_sent_at column to bookings table")
+            if 'push_reminder_5h_sent_at' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN push_reminder_5h_sent_at TIMESTAMP WITH TIME ZONE"))
+                await conn.commit()
+                print("✓ Added push_reminder_5h_sent_at column to bookings table")
+            if 'push_reminder_1h_sent_at' not in columns:
+                await conn.execute(text("ALTER TABLE bookings ADD COLUMN push_reminder_1h_sent_at TIMESTAMP WITH TIME ZONE"))
+                await conn.commit()
+                print("✓ Added push_reminder_1h_sent_at column to bookings table")
 
         # Check and add missing columns to withdrawals table
         if "withdrawals" in table_names:
@@ -685,10 +697,12 @@ async def startup_database():
     from app.workers.scheduler import (
         _run_expire_pending_bookings_loop,
         _run_pickup_reminder_loop,
+        _run_push_reminder_loop,
     )
 
     asyncio.create_task(_run_expire_pending_bookings_loop())
     asyncio.create_task(_run_pickup_reminder_loop())
+    asyncio.create_task(_run_push_reminder_loop())
 
 
 # ---------------------------------------------------------------------------
