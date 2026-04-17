@@ -1,0 +1,23 @@
+name: Deploy To Namecheap VPS
+
+on:
+  push:
+    branches: [ Staging ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: fastapi
+          key: ${{ secrets.VPS_SECRET }}
+          script: |
+            cd /var/www/opabackend-testing
+            git pull
+            source .venv/bin/activate
+            uv sync
+            sudo systemctl restart fastapi-staging
