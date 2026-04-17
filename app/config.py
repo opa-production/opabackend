@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  
     CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html" 
 
+    # Paystack card payments (hosted page — no card data stored)
+    PAYSTACK_SECRET_KEY: Optional[str] = None
+    PAYSTACK_CALLBACK_BASE_URL: Optional[str] = None   # e.g. https://api.ardena.xyz/api/v1
+
     # Veriff KYC (host + client verification)
     VERIFF_API_KEY: Optional[str] = None
     VERIFF_BASE_URL: Optional[str] = "https://stationapi.veriff.com"  

@@ -63,10 +63,11 @@ def _detect_payment_method(paid_payment) -> str:
         return "—"
     if getattr(paid_payment, "mpesa_receipt_number", None):
         return "M-Pesa (Mobile Money)"
-    if getattr(paid_payment, "pesapal_order_tracking_id", None):
-        method = getattr(paid_payment, "pesapal_payment_method", None) or "Card"
-        account = getattr(paid_payment, "pesapal_payment_account", None)
-        return f"{method}" + (f" ending {account}" if account else "")
+    if getattr(paid_payment, "paystack_reference", None):
+        brand = getattr(paid_payment, "paystack_card_brand", None) or "Card"
+        last4 = getattr(paid_payment, "paystack_card_last4", None)
+        label = brand.capitalize() if brand else "Card"
+        return label + (f" ending {last4}" if last4 else "")
     if getattr(paid_payment, "stellar_tx_hash", None):
         return "Stellar USDC (Ardena Pay)"
     return "Electronic Payment"
@@ -77,9 +78,8 @@ def _payment_reference(paid_payment) -> str:
         return "—"
     ref = (
         getattr(paid_payment, "mpesa_receipt_number", None)
-        or getattr(paid_payment, "pesapal_confirmation_code", None)
+        or getattr(paid_payment, "paystack_reference", None)
         or getattr(paid_payment, "stellar_tx_hash", None)
-        or getattr(paid_payment, "pesapal_order_tracking_id", None)
     )
     return _safe(ref)
 

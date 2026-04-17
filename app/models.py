@@ -10,7 +10,8 @@ import datetime
 class PaymentMethodType(str, enum.Enum):
     """Payment method types"""
     MPESA = "mpesa"
-    VISA = "visa"
+    CARD = "card"   # Generic card via Paystack hosted page
+    VISA = "visa"   # Legacy — kept for existing rows
     MASTERCARD = "mastercard"
 
 
@@ -85,12 +86,12 @@ class Payment(Base):
     mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    # Pesapal: Card payment tracking (Visa/Mastercard)
-    pesapal_order_tracking_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
-    pesapal_merchant_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    pesapal_confirmation_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    pesapal_payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g., "Visa", "Mastercard"
-    pesapal_payment_account: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Last 4 digits
+    # Paystack: Card payment tracking (hosted page — no card data stored here)
+    paystack_reference: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    paystack_authorization_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    paystack_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)   # "card", "bank_transfer", etc.
+    paystack_card_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    paystack_card_brand: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "visa", "mastercard"
     # Ardena Pay: Stellar transaction hash when payment was made via USDC
     stellar_tx_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 

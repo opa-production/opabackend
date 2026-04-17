@@ -8,7 +8,7 @@ from app.models import Host, Client, PaymentMethod, PaymentMethodType
 from app.schemas import (
     MpesaPaymentMethodAddRequest,
     CardPaymentMethodAddRequest,
-    ClientCardAddPesapalRequest,
+    ClientCardAddPaystackRequest,
     PaymentMethodResponse,
     PaymentMethodListResponse
 )
@@ -371,16 +371,17 @@ async def add_client_card_payment_method(
     return db_payment_method
 
 
-@router.post("/client/payment-methods/card-pesapal", response_model=PaymentMethodResponse, status_code=status.HTTP_201_CREATED)
-async def add_client_card_pesapal(
-    request: ClientCardAddPesapalRequest,
+@router.post("/client/payment-methods/card-paystack", response_model=PaymentMethodResponse, status_code=status.HTTP_201_CREATED)
+async def add_client_card_paystack(
+    request: ClientCardAddPaystackRequest,
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Add a card payment method for paying via Pesapal (Visa/Mastercard) without storing card number or CVC.
-    When the user pays, they are redirected to Pesapal to enter card details there (PCI-friendly).
-    Use this instead of POST /client/payment-methods/card when using Pesapal for card payments.
+    Add a card payment method for paying via Paystack hosted page.
+    No card number or CVC is stored — the user enters card details on Paystack's page when they pay.
+    After the first payment Paystack stores the card; use POST /client/payments/process as normal for
+    subsequent payments (Paystack will show the saved card on the hosted page).
     """
     if request.is_default:
         stmt = select(PaymentMethod).filter(
@@ -390,16 +391,12 @@ async def add_client_card_pesapal(
         result = await db.execute(stmt)
         for pm in result.scalars().all():
             pm.is_default = False
-    method_type_map = {
-        "visa": PaymentMethodType.VISA,
-        "mastercard": PaymentMethodType.MASTERCARD,
-    }
     db_payment_method = PaymentMethod(
         host_id=None,
         client_id=current_client.id,
         name=request.name,
-        method_type=method_type_map[request.card_type],
-        card_type=request.card_type,
+        method_type=PaymentMethodType.CARD,
+        card_type="card",
         card_last_four=None,
         is_default=request.is_default or False,
     )

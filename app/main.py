@@ -252,6 +252,18 @@ app.add_middleware(RequestLoggingMiddleware)
 # Initialize cache with Redis backend
 # Note: Cache will only work if Redis is available; graceful fallback if not
 @app.on_event("startup")
+async def startup_run_migrations():
+    """Run pending database migrations before the app starts handling requests."""
+    import app.migrations.m001_paystack  # noqa: F401 — registers the migration
+    from app.migrations.runner import run_pending
+    try:
+        await run_pending(engine)
+    except Exception:
+        logging.exception("[MIGRATION] Migration run failed — check DB state before proceeding")
+        raise
+
+
+@app.on_event("startup")
 async def startup_init_cache():
     try:
         import redis.asyncio as redis

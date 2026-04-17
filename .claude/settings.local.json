@@ -3,7 +3,10 @@
     "allow": [
       "Bash(awk '/^class Client\\\\\\(Base\\\\\\):/,/^class [A-Z]/' /c/Users/PC/Desktop/opabackend/app/models.py)",
       "Bash(python -c \"import fastapi_cache; print\\(fastapi_cache.__version__\\)\")",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "Bash(xargs grep *)",
+      "Bash(xargs wc *)",
+      "Bash(xargs -I {} basename {})"
     ]
   }
 }

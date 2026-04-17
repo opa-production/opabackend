@@ -608,14 +608,12 @@ class CardPaymentMethodAddRequest(BaseModel):
         return self
 
 
-class ClientCardAddPesapalRequest(BaseModel):
+class ClientCardAddPaystackRequest(BaseModel):
     """
-    Add a card payment method for paying via Pesapal (Visa/Mastercard).
-    No card number or CVC is stored — the user enters card details on Pesapal's page when they pay.
-    Use this to avoid collecting or storing sensitive card data (PCI-friendly).
+    Add a card payment method for paying via Paystack hosted page.
+    No card number or CVC is stored — the user enters card details on Paystack's page when they pay.
     """
-    name: Optional[str] = Field("", max_length=255, description="Display name (e.g. 'My Visa'). If empty, defaults to card type.")
-    card_type: Literal["visa", "mastercard"] = Field(..., description="Card type (visa or mastercard)")
+    name: Optional[str] = Field("", max_length=255, description="Display name (e.g. 'My Visa'). Defaults to 'Card' if empty.")
     is_default: Optional[bool] = Field(False, description="Set as default payment method")
 
     @field_validator("is_default", mode="before")
@@ -630,10 +628,14 @@ class ClientCardAddPesapalRequest(BaseModel):
     @model_validator(mode="after")
     def normalize_name(self):
         if not (self.name and str(self.name).strip()):
-            self.name = "Visa" if self.card_type == "visa" else "Mastercard"
+            self.name = "Card"
         else:
             self.name = str(self.name).strip()[:255]
         return self
+
+
+# Keep the old name as an alias so any existing imports don't break during transition
+ClientCardAddPesapalRequest = ClientCardAddPaystackRequest
 
 
 class PaymentMethodResponse(BaseModel):
@@ -2462,15 +2464,15 @@ class PaymentStatusEnum(str, Enum):
 
 
 class PaymentStatusResponse(BaseModel):
-    """Response for GET payment status – UI polls this after STK push or Pesapal redirect."""
-    checkout_request_id: str  # M-Pesa CheckoutRequestID or Pesapal order_tracking_id when applicable
+    """Response for GET payment status – UI polls this after STK push or Paystack redirect."""
+    checkout_request_id: str  # M-Pesa CheckoutRequestID or Paystack reference when applicable
     booking_id: str
     status: PaymentStatusEnum
     message: Optional[str] = None  # e.g. "Insufficient funds", "User cancelled"
     amount: float
     paid_at: Optional[datetime] = None  # Set when status is completed
     mpesa_receipt_number: Optional[str] = None
-    order_tracking_id: Optional[str] = None  # Pesapal order_tracking_id for card payments
+    paystack_reference: Optional[str] = None  # Paystack reference for card payments
 
     class Config:
         from_attributes = True
