@@ -254,7 +254,9 @@ app.add_middleware(RequestLoggingMiddleware)
 @app.on_event("startup")
 async def startup_run_migrations():
     """Run pending database migrations before the app starts handling requests."""
-    import app.migrations.m001_paystack  # noqa: F401 — registers the migration
+    import app.migrations.m001_paystack                  # noqa: F401
+    import app.migrations.m002_clear_stale_push_tokens  # noqa: F401
+    import app.migrations.m003_fix_card_enum_case        # noqa: F401
     from app.migrations.runner import run_pending
     try:
         await run_pending(engine)

@@ -44,6 +44,22 @@ def _build_message(token: str, title: str, body: str, data: dict, channel: str, 
     }
 
 
+async def _delete_stale_tokens(stale: list[str]) -> None:
+    """Remove tokens that Expo reported as DeviceNotRegistered so they stop accumulating."""
+    if not stale:
+        return
+    from sqlalchemy import delete as _delete
+    async with SessionLocal() as db:
+        await db.execute(
+            _delete(ClientPushToken).where(ClientPushToken.token.in_(stale))
+        )
+        await db.execute(
+            _delete(HostPushToken).where(HostPushToken.token.in_(stale))
+        )
+        await db.commit()
+    logger.info("[Push] Deleted %d stale DeviceNotRegistered token(s): %s", len(stale), stale)
+
+
 async def _send_to_tokens(tokens: list[str], title: str, body: str, data: dict, channel: str, badge: int) -> bool:
     """Send one notification to a list of Expo push tokens (batched, max 100 each)."""
     valid = [t for t in tokens if t and t.startswith("ExponentPushToken")]
@@ -53,26 +69,35 @@ async def _send_to_tokens(tokens: list[str], title: str, body: str, data: dict, 
     messages = [_build_message(t, title, body, data, channel, badge) for t in valid]
 
     ok = True
+    stale_tokens: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             for i in range(0, len(messages), 100):
-                batch = messages[i:i + 100]
+                batch_tokens = valid[i:i + 100]
+                batch_msgs = messages[i:i + 100]
                 resp = await client.post(
                     EXPO_PUSH_URL,
-                    json=batch,
+                    json=batch_msgs,
                     headers={"Accept": "application/json", "Content-Type": "application/json"},
                 )
                 if resp.status_code != 200:
                     logger.error("[Push] Expo API error %s: %s", resp.status_code, resp.text[:300])
                     ok = False
                 else:
-                    # Log any per-ticket errors
-                    for ticket in resp.json().get("data", []):
+                    tickets = resp.json().get("data", [])
+                    for token, ticket in zip(batch_tokens, tickets):
                         if ticket.get("status") == "error":
-                            logger.warning("[Push] Ticket error: %s", ticket)
+                            err = (ticket.get("details") or {}).get("error", "")
+                            logger.warning("[Push] Ticket error for token %s: %s", token[:30], ticket)
+                            if err == "DeviceNotRegistered":
+                                stale_tokens.append(token)
     except Exception as e:
         logger.exception("[Push] Failed to send push notification: %s", e)
         return False
+
+    if stale_tokens:
+        import asyncio as _asyncio
+        _asyncio.ensure_future(_delete_stale_tokens(stale_tokens))
 
     return ok
 
