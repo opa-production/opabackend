@@ -224,7 +224,10 @@ def booking_to_response(booking: Booking) -> dict:
         "rental_days": booking.rental_days,
         "base_price": booking.base_price,
         "damage_waiver_fee": booking.damage_waiver_fee,
-        "total_price": booking.total_price,
+        "total_price": booking.total_price or sum(
+            p.amount for p in getattr(booking, "payments", [])
+            if p.status == PaymentStatus.COMPLETED
+        ) or 0,
         
         # Options
         "damage_waiver_enabled": booking.damage_waiver_enabled,
@@ -1008,19 +1011,21 @@ async def get_my_completed_bookings(
     - Results are paginated and sorted by creation date (newest first)
     """
     stmt = select(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.payments),
     ).filter(
         Booking.client_id == current_client.id,
         Booking.status == BookingStatus.COMPLETED,
+        Booking.client_deleted_at == None,
     )
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
+
     stmt = stmt.order_by(Booking.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
-    bookings = result.scalars().all()
+    bookings = result.unique().scalars().all()
     booking_responses = [booking_to_response(b) for b in bookings]
 
     return BookingListResponse(
