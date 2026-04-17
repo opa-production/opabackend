@@ -218,7 +218,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/", include_in_schema=False)
 async def root():
     return {
-        "message": "Car Rental API",
+        "message": "Car Rental API testing",
         "version": "1.0.0",
         "docs": "/docs",
         "api_base": "/api/v1",
