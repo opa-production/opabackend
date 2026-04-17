@@ -375,5 +375,4 @@ The backend maps **1032** and **2029** to short, user-friendly messages for the 
 - **Supabase "proxy" error:** If workers fail with `__init__() got an unexpected keyword argument 'proxy'`, it is usually a version mismatch between `supabase-py`, `gotrue`, and `httpx`. The app will still start (Supabase init is caught); media uploads will fail until you pin compatible versions, e.g. `httpx>=0.26` and matching supabase/gotrue. See [supabase-py#949](https://github.com/supabase/supabase-py/issues/949).
 
 ## Development
-
 See `guide.md` for the complete development checklist and project requirements.
