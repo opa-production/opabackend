@@ -541,9 +541,9 @@ async def _client_booking_for_receipt(db: AsyncSession, booking_id_param: str, c
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-        
+
     result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.unique().scalar_one_or_none()
 
 
 async def _host_booking_for_receipt(db: AsyncSession, booking_id_param: str, host_id: int):
@@ -558,14 +558,14 @@ async def _host_booking_for_receipt(db: AsyncSession, booking_id_param: str, hos
         .join(Car)
         .filter(Car.host_id == host_id)
     )
-    
+
     if booking_id_param.isdigit():
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-        
+
     result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.unique().scalar_one_or_none()
 
 
 @router.get("/client/bookings/{booking_id}", response_model=BookingResponse)
