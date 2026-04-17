@@ -130,7 +130,7 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 
 # 2. Trusted host - Restrict to known domains for security
-allowed_hosts = ["ardena.co.ke", "adminnn.ardena.xyz"]
+allowed_hosts = ["ardena.co.ke", "adminnn.ardena.xyz", "testing.ardena.xyz"]
 # Add localhost variations for development
 if os.getenv("ENVIRONMENT", "development").lower() in ["development", "dev", "local"]:
     allowed_hosts.extend(["localhost", "127.0.0.1"])
