@@ -84,6 +84,7 @@ async def _send_to_tokens(tokens: list[str], title: str, body: str, data: dict, 
                     logger.error("[Push] Expo API error %s: %s", resp.status_code, resp.text[:300])
                     ok = False
                 else:
+                    logger.info("[Push] Expo accepted batch of %d message(s)", len(batch_msgs))
                     tickets = resp.json().get("data", [])
                     for token, ticket in zip(batch_tokens, tickets):
                         if ticket.get("status") == "error":
@@ -130,9 +131,10 @@ async def push_client(
     tokens = [row[0] for row in result.fetchall()]
 
     if not tokens:
-        logger.debug("[Push] No push tokens for client_id=%s", client_id)
+        logger.warning("[Push] No push tokens for client_id=%s — notification not sent", client_id)
         return False
 
+    logger.info("[Push] Sending to client_id=%s (%d token(s)): %s", client_id, len(tokens), title)
     return await _send_to_tokens(tokens, title, body, data or {}, channel, badge)
 
 
@@ -235,8 +237,9 @@ async def push_host(
     )
     tokens = [row[0] for row in result.fetchall()]
     if not tokens:
-        logger.debug("[Push] No push tokens for host_id=%s", host_id)
+        logger.warning("[Push] No push tokens for host_id=%s — notification not sent", host_id)
         return False
+    logger.info("[Push] Sending to host_id=%s (%d token(s)): %s", host_id, len(tokens), title)
     return await _send_to_tokens(tokens, title, body, data or {}, channel, badge)
 
 
