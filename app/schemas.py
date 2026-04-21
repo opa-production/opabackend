@@ -2559,6 +2559,14 @@ class HostSubscriptionMeResponse(BaseModel):
         ...,
         description="True if plan is starter or premium and expires_at is in the future",
     )
+    is_trial: bool = Field(
+        False,
+        description="True if the host is currently in their free trial period.",
+    )
+    trial_available: bool = Field(
+        False,
+        description="True if the host has never used their free trial and is currently on the free plan.",
+    )
     days_remaining: Optional[int] = None
     has_pending_checkout: bool = Field(
         False,
@@ -2577,6 +2585,15 @@ class HostSubscriptionMeResponse(BaseModel):
         90,
         description="Configured STK pending window (seconds); same as checkout response field.",
     )
+
+
+class HostTrialActivateResponse(BaseModel):
+    """Response after successfully activating the free trial."""
+    success: bool = True
+    message: str
+    plan: str
+    expires_at: datetime
+    days_granted: int
 
 
 class HostSubscriptionPaymentStatusEnum(str, Enum):

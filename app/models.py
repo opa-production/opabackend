@@ -258,6 +258,10 @@ class Host(Base):
     subscription_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Free trial — set once when host activates trial; null means trial not yet used.
+    free_trial_activated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Relationship to cars
     cars: Mapped[list["Car"]] = relationship(back_populates="host")

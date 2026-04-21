@@ -193,6 +193,65 @@ def host_paid_subscription_active(host: Host, now: Optional[datetime] = None) ->
     return exp > now
 
 
+def host_trial_available(host: Host) -> bool:
+    """True if the host has never activated a trial and is currently on the free plan."""
+    if getattr(host, "free_trial_activated_at", None) is not None:
+        return False
+    return (host.subscription_plan or "free").lower() == "free"
+
+
+def host_is_on_trial(host: Host, now: Optional[datetime] = None) -> bool:
+    """True if the host is currently in an active free-trial period."""
+    trial_at = getattr(host, "free_trial_activated_at", None)
+    if not trial_at:
+        return False
+    now = now or datetime.now(timezone.utc)
+    exp = _ensure_aware_utc(host.subscription_expires_at)
+    if not exp or exp <= now:
+        return False
+    return (host.subscription_plan or "free").lower() != "free"
+
+
+def free_trial_duration_days() -> int:
+    return _int_env("HOST_FREE_TRIAL_DAYS", 30)
+
+
+async def activate_free_trial(db: AsyncSession, host: Host) -> Tuple[datetime, int]:
+    """
+    Grant the host a one-time free trial of the starter plan.
+    Returns (expires_at, days_granted).
+    Raises ValueError if the trial has already been used or if the host is on a paid plan.
+    """
+    if getattr(host, "free_trial_activated_at", None) is not None:
+        raise ValueError("Your free trial has already been used.")
+
+    now = datetime.now(timezone.utc)
+    plan = (host.subscription_plan or "free").lower()
+    if plan != "free":
+        exp = _ensure_aware_utc(host.subscription_expires_at)
+        if exp and exp > now:
+            raise ValueError(
+                f"You already have an active {plan} plan. "
+                "The free trial is only available to hosts on the free plan."
+            )
+
+    days = free_trial_duration_days()
+    expires_at = now + timedelta(days=days)
+
+    host.subscription_plan = "starter"
+    host.subscription_expires_at = expires_at
+    host.free_trial_activated_at = now
+    await db.commit()
+    await db.refresh(host)
+
+    logger.info(
+        "[HOST TRIAL] host_id=%s activated free trial — starter until %s",
+        host.id,
+        expires_at.isoformat(),
+    )
+    return expires_at, days
+
+
 def _payhero_subscription_sync_enabled() -> bool:
     """Poll Payhero GET transaction-status when host app polls payment-status (callback backup)."""
     v = os.getenv("HOST_SUB_SYNC_PAYHERO_STATUS", "1").strip().lower()

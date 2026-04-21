@@ -21,13 +21,18 @@ from app.schemas import (
     HostSubscriptionPaymentStatusEnum,
     HostSubscriptionPlansResponse,
     HostSubscriptionPlanPublic,
+    HostTrialActivateResponse,
 )
 from app.services.host_subscription_payment import (
+    activate_free_trial,
     expire_stale_host_subscription_payments,
+    free_trial_duration_days,
     get_active_pending_subscription_payment,
     get_paid_plan_details,
     get_subscription_plan_catalog,
+    host_is_on_trial,
     host_paid_subscription_active,
+    host_trial_available,
     pending_subscription_seconds_remaining,
     stk_pending_window_seconds,
     sync_pending_host_subscription_from_payhero,
@@ -92,12 +97,51 @@ async def get_my_subscription(
         plan=plan,
         expires_at=exp,
         is_paid_active=paid_active,
+        is_trial=host_is_on_trial(host, now),
+        trial_available=host_trial_available(host),
         days_remaining=days_remaining,
         has_pending_checkout=bool(pending),
         pending_plan=pending.plan if pending else None,
         pending_checkout_request_id=(pending.checkout_request_id if pending else None),
         pending_seconds_remaining=pending_secs,
         stk_pending_window_seconds=window_sec,
+    )
+
+
+@router.post(
+    "/host/subscription/trial",
+    response_model=HostTrialActivateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def activate_host_free_trial(
+    current_host: Host = Depends(get_current_host),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Activate the one-time 30-day free trial of the **starter** plan.
+
+    - Only available to hosts who have never used the trial before.
+    - Only available when currently on the **free** plan.
+    - No payment required — activates immediately.
+    - After the trial expires the host returns to the free plan unless they subscribe.
+    """
+    result = await db.execute(select(Host).where(Host.id == current_host.id))
+    host = result.scalar_one_or_none()
+    if not host:
+        raise HTTPException(status_code=404, detail="Host not found")
+
+    try:
+        expires_at, days = await activate_free_trial(db, host)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
+
+    return HostTrialActivateResponse(
+        message=f"Your {days}-day free trial of the Starter plan is now active. Enjoy!",
+        plan="starter",
+        expires_at=expires_at,
+        days_granted=days,
     )
 
 

@@ -2,10 +2,17 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, or_, select, delete
+from sqlalchemy import func, or_, select, delete, update
 
 from app.database import get_db
-from app.models import Host, Client, Car, PaymentMethod, Feedback
+from app.models import (
+    Host, Client, Car, PaymentMethod, Feedback,
+    HostPushToken, HostBiometricToken, HostSubscriptionPayment, HostKyc,
+    Withdrawal, Booking, BookingExtensionRequest, BookingIssue,
+    HostRating, ClientRating, CarRating, CarBlockedDate, WishlistItem,
+    SupportMessage, SupportConversation, ClientHostConversation, ClientHostMessage,
+    Payment, Refund, StellarPaymentTransaction, EmergencyReport,
+)
 from app.schemas import (
     HostListResponse,
     HostDetailResponse,
@@ -346,10 +353,54 @@ async def delete_host(
     fb_count_result = await db.execute(fb_count_stmt)
     feedbacks_count = fb_count_result.scalar() or 0
     
-    # Delete all cars (cascade should handle payment methods and feedbacks)
+    # Subqueries reused across delete steps
+    car_ids_q = select(Car.id).filter(Car.host_id == host.id)
+    booking_ids_q = select(Booking.id).where(Booking.car_id.in_(car_ids_q))
+    supp_conv_ids_q = select(SupportConversation.id).filter(SupportConversation.host_id == host.id)
+    chat_conv_ids_q = select(ClientHostConversation.id).filter(ClientHostConversation.host_id == host.id)
+
+    # 1. Deepest booking dependents
+    await db.execute(delete(Refund).where(Refund.booking_id.in_(booking_ids_q)))
+    await db.execute(delete(StellarPaymentTransaction).where(StellarPaymentTransaction.booking_id.in_(booking_ids_q)))
+    await db.execute(delete(CarRating).where(CarRating.car_id.in_(car_ids_q)))
+    await db.execute(delete(HostRating).filter(HostRating.host_id == host.id))
+    await db.execute(delete(ClientRating).filter(ClientRating.host_id == host.id))
+    # Null out nullable booking FK on emergency reports to avoid constraint violation
+    await db.execute(
+        update(EmergencyReport)
+        .where(EmergencyReport.booking_id.in_(booking_ids_q))
+        .values(booking_id=None)
+    )
+
+    # 2. Payments (depends on bookings and booking_extension_requests)
+    await db.execute(delete(Payment).where(Payment.booking_id.in_(booking_ids_q)))
+
+    # 3. Booking dependents that reference bookings directly
+    await db.execute(delete(BookingIssue).where(BookingIssue.booking_id.in_(booking_ids_q)))
+    await db.execute(delete(BookingExtensionRequest).where(BookingExtensionRequest.booking_id.in_(booking_ids_q)))
+
+    # 4. Bookings and remaining car dependents
+    await db.execute(delete(Booking).where(Booking.car_id.in_(car_ids_q)))
+    await db.execute(delete(WishlistItem).where(WishlistItem.car_id.in_(car_ids_q)))
+    await db.execute(delete(CarBlockedDate).where(CarBlockedDate.car_id.in_(car_ids_q)))
+
+    # 5. Conversations
+    await db.execute(delete(ClientHostMessage).where(ClientHostMessage.conversation_id.in_(chat_conv_ids_q)))
+    await db.execute(delete(ClientHostConversation).filter(ClientHostConversation.host_id == host.id))
+    await db.execute(delete(SupportMessage).where(SupportMessage.conversation_id.in_(supp_conv_ids_q)))
+    await db.execute(delete(SupportConversation).filter(SupportConversation.host_id == host.id))
+
+    # 6. Direct host dependents
+    await db.execute(delete(HostPushToken).filter(HostPushToken.host_id == host.id))
+    await db.execute(delete(HostBiometricToken).filter(HostBiometricToken.host_id == host.id))
+    await db.execute(delete(HostSubscriptionPayment).filter(HostSubscriptionPayment.host_id == host.id))
+    await db.execute(delete(HostKyc).filter(HostKyc.host_id == host.id))
+    await db.execute(delete(Withdrawal).filter(Withdrawal.host_id == host.id))
+    await db.execute(delete(Feedback).filter(Feedback.host_id == host.id))
+    await db.execute(delete(PaymentMethod).filter(PaymentMethod.host_id == host.id))
     await db.execute(delete(Car).filter(Car.host_id == host.id))
-    
-    # Delete the host
+
+    # 7. Delete the host
     await db.delete(host)
     await db.commit()
     
