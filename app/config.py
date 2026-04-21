@@ -102,17 +102,15 @@ class Settings(BaseSettings):
     PAYSTACK_SECRET_KEY: Optional[str] = None
     PAYSTACK_CALLBACK_BASE_URL: Optional[str] = None   # e.g. https://api.ardena.xyz/api/v1
 
-    # Veriff KYC (host + client verification)
-    VERIFF_API_KEY: Optional[str] = None
-    VERIFF_BASE_URL: Optional[str] = "https://stationapi.veriff.com"  
-   
-    VERIFF_CALLBACK_URL: Optional[str] = None
-    
+    # Dojah KYC (host + client verification)
+    DOJAH_APP_ID: Optional[str] = None           # App ID (used as AppId header)
+    DOJAH_SECRET_KEY: Optional[str] = None       # Secret key (Authorization header)
+    DOJAH_PUBLIC_KEY: Optional[str] = None       # Public/publishable key (sent to frontend for widget)
+    DOJAH_WIDGET_ID: Optional[str] = None        # Pre-configured widget ID from Dojah dashboard
+    DOJAH_BASE_URL: str = "https://api.dojah.io"
+    DOJAH_WEBHOOK_SECRET: Optional[str] = None   # HMAC-SHA512 secret for webhook validation
+
     KYC_ALLOWED_RETURN_PREFIXES: str = "ardenahost://,ardena://,oparides://"
-   
-    VERIFF_WEBHOOK_SECRET: Optional[str] = None
-    SHARED_SECRET_KEY: Optional[str] = None   
-    MASTER_SECRET_KEY: Optional[str] = None   
 
     class Config:
     

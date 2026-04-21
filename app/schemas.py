@@ -61,27 +61,40 @@ class HostProfileResponse(BaseModel):
         from_attributes = True
 
 
-class HostKycSessionRequest(BaseModel):
-    """Optional body when creating a KYC session."""
-    callback_url: Optional[str] = Field(
-        None,
-        max_length=2000,
-        description="URL to redirect the user to after verification (e.g. deep link: myapp://kyc/result). If not set, Veriff uses default or user stays on Veriff.",
-    )
+class KycLookupRequest(BaseModel):
+    """Step 1: look up a government ID to prefill the user's profile."""
+    id_type: str = Field(..., description="NATIONAL_ID, PASSPORT, or DRIVERS_LICENSE")
+    id_number: str = Field(..., min_length=1, max_length=100, description="The government-issued ID number")
+    country: str = Field("KE", max_length=2, description="ISO 3166-1 alpha-2 country code")
 
 
-class HostKycSessionResponse(BaseModel):
-    """Response after creating a Veriff KYC session - app opens verification_url."""
-    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
-    session_id: str = Field(..., description="Veriff session ID (for reference)")
+class KycLookupResponse(BaseModel):
+    """Verified identity details returned from the government database."""
+    verified_name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    id_number: str
+    id_type: str
+    country: str
+
+
+class KycWidgetInitResponse(BaseModel):
+    """Credentials the mobile app needs to launch the Dojah widget (Step 2)."""
+    reference_id: str = Field(..., description="Unique reference — pass to widget config.reference_id")
+    app_id: str = Field(..., description="Dojah App ID — pass to widget app_id")
+    p_key: str = Field(..., description="Dojah public key — pass to widget p_key")
+    widget_id: str = Field(..., description="Dojah widget ID — pass to widget config.widget_id")
 
 
 class HostKycStatusResponse(BaseModel):
     """Host KYC verification status (latest attempt)."""
     user_id: int = Field(..., description="Host ID")
-    veriff_session_id: Optional[str] = None
-    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
+    reference_id: Optional[str] = None
+    status: str = Field(..., description="approved, declined, pending")
     document_type: Optional[str] = None
+    verified_name: Optional[str] = None
+    verified_dob: Optional[date] = None
+    face_match_score: Optional[float] = None
     decision_reason: Optional[str] = None
     verified_at: Optional[datetime] = None
 
@@ -89,27 +102,15 @@ class HostKycStatusResponse(BaseModel):
         from_attributes = True
 
 
-class ClientKycSessionRequest(BaseModel):
-    """Optional body when creating a client KYC session."""
-    callback_url: Optional[str] = Field(
-        None,
-        max_length=2000,
-        description="URL to redirect the user to after verification (e.g. deep link: ardena://kyc/result).",
-    )
-
-
-class ClientKycSessionResponse(BaseModel):
-    """Response after creating a Veriff KYC session for a client."""
-    verification_url: str = Field(..., description="Open this URL in browser/webview for verification")
-    session_id: str = Field(..., description="Veriff session ID (for reference)")
-
-
 class ClientKycStatusResponse(BaseModel):
     """Client KYC verification status (latest attempt)."""
     user_id: int = Field(..., description="Client ID")
-    veriff_session_id: Optional[str] = None
-    status: str = Field(..., description="approved, declined, pending, resubmission_requested")
+    reference_id: Optional[str] = None
+    status: str = Field(..., description="approved, declined, pending")
     document_type: Optional[str] = None
+    verified_name: Optional[str] = None
+    verified_dob: Optional[date] = None
+    face_match_score: Optional[float] = None
     decision_reason: Optional[str] = None
     verified_at: Optional[datetime] = None
 

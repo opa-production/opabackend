@@ -139,7 +139,7 @@ def build_client_data_pdf(
     story.append(Paragraph("KYC verification (latest)", heading_style))
     if latest_kyc:
         kyc_rows = [
-            ["Session ID", latest_kyc.veriff_session_id],
+            ["Session ID", latest_kyc.dojah_reference_id],
             ["Status", latest_kyc.status],
             ["Document type", latest_kyc.document_type or "—"],
             ["Decision reason", latest_kyc.decision_reason or "—"],

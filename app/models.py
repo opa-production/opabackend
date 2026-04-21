@@ -34,7 +34,7 @@ class PaymentMethod(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     
     # Payment method type
-    method_type: Mapped[PaymentMethodType] = mapped_column(SQLEnum(PaymentMethodType), nullable=False)
+    method_type: Mapped[PaymentMethodType] = mapped_column(SQLEnum(PaymentMethodType, values_callable=lambda x: [e.value for e in x]), nullable=False)
     
     # For M-Pesa
     mpesa_number: Mapped[str] = mapped_column(String(20), nullable=True)  # e.g., "254712345678"
@@ -314,16 +314,20 @@ class HostSubscriptionPayment(Base):
 
 
 class HostKyc(Base):
-    """Host KYC verification result from Veriff (no doc images stored)."""
+    """Host KYC verification result from Dojah."""
     __tablename__ = "host_kycs"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id"), nullable=False, index=True)
-    veriff_session_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)  # Veriff verification/session ID
-    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # approved, declined, pending, resubmission_requested
-    document_type: Mapped[str] = mapped_column(String(80), nullable=True)  # passport, id_card, drivers_license, etc.
-    decision_reason: Mapped[str] = mapped_column(String(500), nullable=True)  # reason if declined
-    verified_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=True)  # when Veriff decided
+    dojah_reference_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # approved, declined, pending
+    document_type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    decision_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    verified_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    verified_dob: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    verified_gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    face_match_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
 
     host: Mapped["Host"] = relationship(back_populates="host_kycs")
@@ -418,16 +422,20 @@ class Client(Base):
 
 
 class ClientKyc(Base):
-    """Client KYC verification result from Veriff (mirrors HostKyc)."""
+    """Client KYC verification result from Dojah."""
     __tablename__ = "client_kycs"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False, index=True)
-    veriff_session_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # approved, declined, pending, resubmission_requested
-    document_type: Mapped[str] = mapped_column(String(80), nullable=True)
-    decision_reason: Mapped[str] = mapped_column(String(500), nullable=True)
-    verified_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    dojah_reference_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # approved, declined, pending
+    document_type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    decision_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    verified_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    verified_dob: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    verified_gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    face_match_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
 
     client: Mapped["Client"] = relationship(back_populates="client_kycs")

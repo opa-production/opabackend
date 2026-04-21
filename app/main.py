@@ -129,7 +129,7 @@ from app.routers import (
     subscribers as subscribers_router,
     host_kyc as host_kyc_router,
     client_kyc as client_kyc_router,
-    veriff_webhook as veriff_webhook_router,
+    dojah_webhook as dojah_webhook_router,
     client_refunds as client_refunds_router,
     client_emergency as client_emergency_router,
     wishlist as wishlist_router,
@@ -195,8 +195,8 @@ app = FastAPI(
         {"name": "Admin Refunds", "description": "Track and manage booking refunds for finance"},
         {"name": "Newsletter", "description": "Public subscribe / unsubscribe"},
         {"name": "Admin Subscribers", "description": "Newsletter subscriber list and send email to all"},
-        {"name": "Host KYC", "description": "Host KYC verification (Veriff)"},
-        {"name": "Veriff Webhook", "description": "Veriff decision webhook (do not call directly)"},
+        {"name": "Host KYC", "description": "Host KYC verification (Dojah)"},
+        {"name": "Dojah Webhook", "description": "Dojah decision webhook (do not call directly)"},
     ],
     servers=[{"url": "/", "description": "Current host"}],
 )
@@ -257,6 +257,7 @@ async def startup_run_migrations():
     import app.migrations.m001_paystack                  # noqa: F401
     import app.migrations.m002_clear_stale_push_tokens  # noqa: F401
     import app.migrations.m003_fix_card_enum_case        # noqa: F401
+    import app.migrations.m004_dojah_kyc                 # noqa: F401
     from app.migrations.runner import run_pending
     try:
         await run_pending(engine)
@@ -316,7 +317,7 @@ app.include_router(host_subscription.router, prefix="/api/v1", tags=["Host Subsc
 app.include_router(subscribers_router.router, prefix="/api/v1", tags=["Newsletter"])
 app.include_router(host_kyc_router.router, prefix="/api/v1", tags=["Host KYC"])
 app.include_router(client_kyc_router.router, prefix="/api/v1", tags=["Client KYC"])
-app.include_router(veriff_webhook_router.router, prefix="/api/v1", tags=["Veriff Webhook"])
+app.include_router(dojah_webhook_router.router, prefix="/api/v1", tags=["Dojah Webhook"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["Admin Auth"])
 app.include_router(admin_users.router, prefix="/api/v1", tags=["Admin User Management"])
 app.include_router(admin_cars.router, prefix="/api/v1", tags=["Admin Car Management"])
