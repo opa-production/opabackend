@@ -18,6 +18,7 @@ from app.schemas import (
 )
 from app.auth import get_current_admin
 from app.routers.cars import _car_to_response
+from app.cache_utils import invalidate_host_cache_namespaces
 from app.storage import (
     BUCKETS,
     SUPABASE_CLIENT_INIT_ERROR,
@@ -598,16 +599,16 @@ async def update_car_status(
         )
     
     car.verification_status = request.verification_status.value
-    
+
     if request.verification_status == VerificationStatus.DENIED:
         car.rejection_reason = request.rejection_reason
     else:
-        # Clear rejection reason if status is not denied
         car.rejection_reason = None
-    
+
     await db.commit()
     await db.refresh(car)
-    
+    await invalidate_host_cache_namespaces(car.host_id, ["host-cars"])
+
     # Reload with host info
     stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
     result = await db.execute(stmt)
@@ -712,10 +713,11 @@ async def approve_car(
     
     car.verification_status = VerificationStatus.VERIFIED.value
     car.rejection_reason = None
-    
+
     await db.commit()
     await db.refresh(car)
-    
+    await invalidate_host_cache_namespaces(car.host_id, ["host-cars"])
+
     # Reload with host info
     stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
     result = await db.execute(stmt)
@@ -776,10 +778,11 @@ async def reject_car(
     
     car.verification_status = VerificationStatus.DENIED.value
     car.rejection_reason = request.rejection_reason
-    
+
     await db.commit()
     await db.refresh(car)
-    
+    await invalidate_host_cache_namespaces(car.host_id, ["host-cars"])
+
     # Reload with host info
     stmt = select(Car).options(joinedload(Car.host)).filter(Car.id == car_id)
     result = await db.execute(stmt)

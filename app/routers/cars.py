@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 from app.database import get_db
 from app.models import Car, Host, Booking, BookingStatus, VerificationStatus, CarBlockedDate
 from app.auth import get_current_client, get_current_host
+from app.cache_utils import invalidate_host_cache_namespaces
 from app.schemas import (
     CarListingResponse,
     CarListResponse,
@@ -515,7 +516,7 @@ async def create_car_basics(
     db.add(db_car)
     await db.commit()
     await db.refresh(db_car)
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -560,10 +561,10 @@ async def update_car_specs(
     db_car.color = request.color
     db_car.mileage = request.mileage
     db_car.features = json.dumps(request.features) if request.features else None
-    
+
     await db.commit()
     await db.refresh(db_car)
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -610,10 +611,10 @@ async def update_car_pricing(
     db_car.max_rental_days = request.max_rental_days
     db_car.min_age_requirement = request.min_age_requirement
     db_car.rules = request.rules
-    
+
     await db.commit()
     await db.refresh(db_car)
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -661,12 +662,11 @@ async def update_car_location(
     
     # Mark car as complete
     db_car.is_complete = True
-    
+
     await db.commit()
     await db.refresh(db_car)
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
-
 
 
 @router.put("/host/cars/{car_id}/media", response_model=CarResponse)
@@ -761,7 +761,7 @@ async def update_car_media(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update car media: {str(e)}"
         )
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -879,7 +879,7 @@ async def save_car_media_urls(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save car media URLs: {str(e)}"
         )
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -1235,10 +1235,10 @@ async def toggle_car_visibility(
     
     # Toggle visibility
     db_car.is_hidden = not db_car.is_hidden
-    
+
     await db.commit()
     await db.refresh(db_car)
-    
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return _car_to_response(db_car)
 
 
@@ -1359,6 +1359,7 @@ async def delete_my_car(
 
     await db.delete(car)
     await db.commit()
+    await invalidate_host_cache_namespaces(current_host.id, ["host-cars"])
     return {"message": "Car deleted successfully"}
 
 
