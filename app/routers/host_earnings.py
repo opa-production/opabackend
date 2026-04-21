@@ -102,25 +102,18 @@ async def get_host_earnings_summary(
         BookingStatus.COMPLETED.value,
     ]
     
-    base_stmt = (
-        select(Booking)
+    # Single query for both sum and count
+    agg_stmt = (
+        select(
+            func.coalesce(func.sum(Booking.total_price), 0),
+            func.count(Booking.id),
+        )
         .join(Car)
         .filter(Car.host_id == current_host.id, Booking.status.in_(paid_statuses))
     )
-    
-    total_gross_stmt = (
-        select(func.coalesce(func.sum(Booking.total_price), 0))
-        .join(Car)
-        .filter(Car.host_id == current_host.id, Booking.status.in_(paid_statuses))
-    )
-    total_gross_result = await db.execute(total_gross_stmt)
-    total_gross_val = total_gross_result.scalar()
+    agg_result = await db.execute(agg_stmt)
+    total_gross_val, paid_count = agg_result.one()
     total_gross = float(total_gross_val or 0)
-    
-    # Get paid count
-    count_stmt = select(func.count()).select_from(base_stmt.subquery())
-    count_result = await db.execute(count_stmt)
-    paid_count = count_result.scalar() or 0
     
     commission_amount = round(total_gross * COMMISSION_RATE, 2)
     net_earnings = round(total_gross - commission_amount, 2)

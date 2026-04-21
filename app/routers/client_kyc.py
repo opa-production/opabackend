@@ -25,10 +25,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_client
+from app.config import settings
 from app.database import get_db
 from app.models import Client, ClientKyc
 from app.schemas import KycLookupRequest, KycLookupResponse, KycWidgetInitResponse, ClientKycStatusResponse
 from app.services import dojah_kyc as dojah
+
+
+def _require_dojah_config() -> None:
+    """Raise 503 if Dojah API keys are not yet configured."""
+    if not settings.DOJAH_APP_ID or not settings.DOJAH_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Identity verification is not yet available. Please try again later.",
+        )
 
 router = APIRouter(tags=["Client KYC"])
 logger = logging.getLogger(__name__)
@@ -51,6 +61,7 @@ async def client_kyc_lookup(
     with the government-verified data so the app can prefill both the KYC details
     screen and the profile screen.
     """
+    _require_dojah_config()
     try:
         result = await dojah.lookup_government_id(body.id_type, body.id_number, body.country)
     except ValueError as exc:
@@ -100,6 +111,7 @@ async def client_kyc_initialize(
     liveness check, and face match.  A pending ClientKyc row is stored so the
     webhook can update it when Dojah sends the decision.
     """
+    _require_dojah_config()
     try:
         creds = dojah.generate_widget_credentials()
     except ValueError as exc:

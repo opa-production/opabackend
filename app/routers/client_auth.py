@@ -222,6 +222,7 @@ async def login_client(
         )
         db.add(db_token)
         await db.commit()
+        await db.refresh(client)
 
     return {
         "access_token": access_token,
@@ -1017,6 +1018,7 @@ async def client_google_auth(
         )
         db.add(db_token)
         await db.commit()
+        await db.refresh(client)
 
     return {
         "access_token": access_token,

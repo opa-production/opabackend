@@ -381,17 +381,17 @@ async def explore_cars(
     - Supports search by name, model, or location
     - Supports filtering by location, price range, body type
     """
-    logger.info(f"🖼️ [EXPLORE CARS] Request received: page={page}, limit={limit}, "
-               f"search={search}, location={location}, city={city}, min_price={min_price}, "
-               f"max_price={max_price}, body_type={body_type}")
-    
-    # Base query: only verified and visible listings (is_complete not required for explore)
+    # Lightweight count query — no joinedload, same WHERE conditions
+    count_stmt = select(func.count(Car.id)).filter(
+        Car.verification_status == VerificationStatus.VERIFIED.value,
+        Car.is_hidden == False
+    )
+    # Data query — joinedload host for host_city field
     stmt = select(Car).options(joinedload(Car.host)).filter(
         Car.verification_status == VerificationStatus.VERIFIED.value,
         Car.is_hidden == False
     )
-    
-    # Apply search filter
+
     if search:
         search_filter = or_(
             Car.name.ilike(f"%{search}%"),
@@ -399,100 +399,66 @@ async def explore_cars(
             Car.location_name.ilike(f"%{search}%")
         )
         stmt = stmt.filter(search_filter)
-    
-    # Apply location filter
+        count_stmt = count_stmt.filter(search_filter)
+
     if location:
         stmt = stmt.filter(Car.location_name.ilike(f"%{location}%"))
-    
-    # Apply price filters
+        count_stmt = count_stmt.filter(Car.location_name.ilike(f"%{location}%"))
+
     if min_price is not None:
         stmt = stmt.filter(Car.daily_rate >= min_price)
-    
+        count_stmt = count_stmt.filter(Car.daily_rate >= min_price)
+
     if max_price is not None:
         stmt = stmt.filter(Car.daily_rate <= max_price)
-    
-    # Apply body type filter
+        count_stmt = count_stmt.filter(Car.daily_rate <= max_price)
+
     if body_type:
         stmt = stmt.filter(Car.body_type.ilike(f"%{body_type}%"))
+        count_stmt = count_stmt.filter(Car.body_type.ilike(f"%{body_type}%"))
 
     if city and city.strip():
-        stmt = stmt.where(Car.host.has(Host.city.ilike(city.strip())))
-    
-    # Get total count before pagination
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+        city_filter = Car.host.has(Host.city.ilike(city.strip()))
+        stmt = stmt.where(city_filter)
+        count_stmt = count_stmt.where(city_filter)
+
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
-    # Calculate pagination
+
     skip = (page - 1) * limit
     total_pages = (total + limit - 1) // limit if limit > 0 else 0
-    
-    # Apply pagination and order by newest first
+
     stmt = stmt.order_by(Car.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     cars = result.scalars().all()
-    
-    # Convert to explore response format
+
     car_responses = []
-    logger.info(f"🖼️ [EXPLORE CARS] Processing {len(cars)} cars for explore page")
-    
     for car in cars:
-        # Get cover image - prefer cover_image, fallback to first image from car_images or image_urls
-        cover_image = None
-        cover_image_source = None
-        
         if car.cover_image:
             cover_image = car.cover_image
-            cover_image_source = "cover_image_field"
-            logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Using cover_image field: {cover_image}")
         elif car.car_images:
             car_images = parse_image_urls(car.car_images)
-            logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Parsed car_images: {car_images}")
-            if car_images and len(car_images) > 0:
-                cover_image = car_images[0]
-                cover_image_source = "car_images_first"
-                logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Using first from car_images: {cover_image}")
-            else:
-                logger.warning(f"🖼️ [EXPLORE CARS] Car {car.id}: car_images exists but parsed to empty list")
+            cover_image = car_images[0] if car_images else None
         elif car.image_urls:
-            # Legacy fallback
             image_urls = parse_image_urls(car.image_urls)
-            logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Parsed legacy image_urls: {image_urls}")
-            if image_urls and len(image_urls) > 0:
-                cover_image = image_urls[0]
-                cover_image_source = "image_urls_legacy"
-                logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Using first from legacy image_urls: {cover_image}")
-            else:
-                logger.warning(f"🖼️ [EXPLORE CARS] Car {car.id}: image_urls exists but parsed to empty list")
-        
-        if not cover_image:
-            logger.warning(f"🖼️ [EXPLORE CARS] Car {car.id}: No cover image found. "
-                          f"cover_image={car.cover_image}, car_images={car.car_images}, "
-                          f"image_urls={car.image_urls}")
-        
-        # Build car name (name + model if available)
-        car_name = car.name
-        if car.model:
-            car_name = f"{car.name} {car.model}".strip() if car.name else car.model
-        
+            cover_image = image_urls[0] if image_urls else None
+        else:
+            cover_image = None
+
+        car_name = f"{car.name} {car.model}".strip() if car.model else car.name
+
         car_responses.append(CarExploreItemResponse(
             id=car.id,
             cover_image=cover_image,
             car_name=car_name,
             price_per_day=car.daily_rate,
-            rating=None,  # Placeholder for future rating system
-            is_renters_favourite=False,  # Placeholder for future favourite system
-            is_wishlisted=False,  # Placeholder for future wishlist system
+            rating=None,
+            is_renters_favourite=False,
+            is_wishlisted=False,
             location_name=car.location_name,
             host_city=car.host.city if car.host else None,
         ))
-        
-        logger.debug(f"🖼️ [EXPLORE CARS] Car {car.id}: Added to response. cover_image={cover_image} "
-                    f"(source={cover_image_source}), car_name={car_name}")
-    
-    logger.info(f"🖼️ [EXPLORE CARS] ✅ Returning {len(car_responses)} cars. "
-               f"Total matching: {total}, Page: {page}/{total_pages}")
-    
+
     return CarExploreListResponse(
         cars=car_responses,
         total=total,

@@ -14,10 +14,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_host
+from app.config import settings
 from app.database import get_db
 from app.models import Host, HostKyc
 from app.schemas import KycLookupRequest, KycLookupResponse, KycWidgetInitResponse, HostKycStatusResponse
 from app.services import dojah_kyc as dojah
+
+
+def _require_dojah_config() -> None:
+    """Raise 503 if Dojah API keys are not yet configured."""
+    if not settings.DOJAH_APP_ID or not settings.DOJAH_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Identity verification is not yet available. Please try again later.",
+        )
 
 router = APIRouter(tags=["Host KYC"])
 logger = logging.getLogger(__name__)
@@ -38,6 +48,7 @@ async def host_kyc_lookup(
 
     Updates full_name and id_number on the host profile with government-verified data.
     """
+    _require_dojah_config()
     try:
         result = await dojah.lookup_government_id(body.id_type, body.id_number, body.country)
     except ValueError as exc:
@@ -76,6 +87,7 @@ async def host_kyc_initialize(
     Generate a unique reference_id and return the Dojah EasyLookup widget credentials
     for the host app.
     """
+    _require_dojah_config()
     try:
         creds = dojah.generate_widget_credentials()
     except ValueError as exc:
