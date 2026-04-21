@@ -259,6 +259,7 @@ async def startup_run_migrations():
     import app.migrations.m003_fix_card_enum_case        # noqa: F401
     import app.migrations.m004_dojah_kyc                 # noqa: F401
     import app.migrations.m005_perf_indexes              # noqa: F401
+    import app.migrations.m006_normalize_payment_method_type_case  # noqa: F401
     from app.migrations.runner import run_pending
     try:
         await run_pending(engine)
