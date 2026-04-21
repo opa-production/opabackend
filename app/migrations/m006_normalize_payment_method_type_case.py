@@ -15,10 +15,12 @@ from app.migrations.runner import migration
 @migration("m006_normalize_payment_method_type_case")
 async def m006_normalize_payment_method_type_case(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
-        # Cast through text to bypass enum type check during the UPDATE
+        # Compare method_type as raw text (::text) so we don't CAST the uppercase
+        # value through the enum — uppercase variants may not all be valid enum values.
+        # Only the SET side needs a valid enum cast.
         for upper, lower in [("CARD", "card"), ("MPESA", "mpesa"), ("VISA", "visa"), ("MASTERCARD", "mastercard")]:
             await conn.execute(text(
                 "UPDATE payment_methods "
                 "SET method_type = CAST(:lower AS paymentmethodtype) "
-                "WHERE method_type = CAST(:upper AS paymentmethodtype)"
+                "WHERE method_type::text = :upper"
             ), {"lower": lower, "upper": upper})
