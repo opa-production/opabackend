@@ -45,8 +45,8 @@ from app.services.host_subscription_payment import (
     CARD_REF_PREFIX,
 )
 from app.services.paystack_payment import (
-    initialize_transaction as paystack_initialize,
-    verify_transaction as paystack_verify,
+    async_initialize_transaction as paystack_initialize,
+    async_verify_transaction as paystack_verify,
 )
 from app.services.mpesa_stk_push import sendStkPush
 from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces

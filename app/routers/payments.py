@@ -42,8 +42,8 @@ from app.services.mpesa_stk_push import sendStkPush
 from app.services.host_subscription_payment import process_host_subscription_mpesa_callback
 from app.services.mpesa_callback_utils import infer_insufficient_funds, normalize_stk_result_code
 from app.services.paystack_payment import (
-    initialize_transaction as paystack_initialize,
-    verify_transaction as paystack_verify,
+    async_initialize_transaction as paystack_initialize,
+    async_verify_transaction as paystack_verify,
     verify_webhook_signature as paystack_verify_sig,
 )
 from app.services.stellar_wallet import (
@@ -970,7 +970,26 @@ async def paystack_host_callback(
     from app.config import settings
 
     ref = reference or trxref or ""
-    host_frontend = (settings.HOST_FRONTEND_URL or settings.FRONTEND_URL or "ardenahost://").strip()
+    host_frontend = (settings.HOST_FRONTEND_URL or "").strip()
+    if not host_frontend:
+        logger.warning(
+            "[PAYSTACK HOST CALLBACK] HOST_FRONTEND_URL not set — "
+            "cannot redirect host back to app. ref=%s", ref
+        )
+        # Graceful fallback: show a plain page so the host knows payment was received
+        return HTMLResponse(
+            content=(
+                "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Payment submitted</title></head><body style='font-family:sans-serif;padding:2rem'>"
+                "<h2>Payment submitted!</h2>"
+                "<p>Your subscription payment has been received. "
+                "Please return to the host app — your plan will activate within a few seconds.</p>"
+                "</body></html>"
+            ),
+            status_code=200,
+        )
+
     base = host_frontend if host_frontend.endswith("://") else host_frontend.rstrip("/")
     qs = f"paystack_reference={ref}" if ref else ""
     path_suffix = f"subscription/result?{qs}" if qs else "subscription/result"
@@ -981,10 +1000,16 @@ async def paystack_host_callback(
         html_content = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Payment complete</title>
-<script>window.location.href = {repr(redirect_to)};</script>
-</head><body>
-<p>Payment submitted. Opening host app...</p>
-<p><a href="{safe_url}">Open in app</a> if nothing happens.</p>
+<script>
+  // Try immediately, then retry after 1 s in case the scheme handler needs a moment
+  function open() {{ window.location.href = {repr(redirect_to)}; }}
+  open();
+  setTimeout(open, 1000);
+</script>
+</head><body style="font-family:sans-serif;padding:2rem;text-align:center">
+<h2>Payment submitted!</h2>
+<p>Returning to the host app&hellip;</p>
+<p><a href="{safe_url}" style="font-size:1.1rem">Tap here if the app doesn&rsquo;t open</a></p>
 </body></html>"""
         return HTMLResponse(content=html_content, status_code=200)
     return RedirectResponse(url=redirect_to, status_code=302)

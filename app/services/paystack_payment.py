@@ -3,6 +3,7 @@ Paystack payment integration.
 Hosted payment page — no card data is collected or stored on our end.
 Paystack's API base: https://api.paystack.co
 """
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -130,3 +131,24 @@ def verify_webhook_signature(payload_bytes: bytes, signature: str) -> bool:
         hashlib.sha512,
     ).hexdigest()
     return hmac.compare_digest(expected, signature or "")
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers — use these from async endpoints / background tasks so the
+# synchronous requests calls run in a thread pool and don't block the event loop.
+# ---------------------------------------------------------------------------
+
+async def async_initialize_transaction(
+    email: str,
+    amount_kes: float,
+    reference: str,
+    callback_url: str,
+    metadata: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    return await asyncio.to_thread(
+        initialize_transaction, email, amount_kes, reference, callback_url, metadata
+    )
+
+
+async def async_verify_transaction(reference: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(verify_transaction, reference)

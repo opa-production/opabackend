@@ -409,6 +409,7 @@ async def sync_pending_host_subscription_from_payhero(
     if rec.status != "pending":
         return
 
+    import asyncio as _asyncio
     from app.services.mpesa_stk_push import fetch_payhero_transaction_status
 
     refs: list[str] = []
@@ -422,7 +423,7 @@ async def sync_pending_host_subscription_from_payhero(
         return
 
     for ref in refs:
-        data = fetch_payhero_transaction_status(ref)
+        data = await _asyncio.to_thread(fetch_payhero_transaction_status, ref)
         if not data or not isinstance(data, dict):
             continue
 
