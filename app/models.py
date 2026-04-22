@@ -290,7 +290,7 @@ class Host(Base):
 
 
 class HostSubscriptionPayment(Base):
-    """M-Pesa STK checkout for host subscription (starter / premium)."""
+    """Subscription payment for a host — either M-Pesa STK (Payhero) or Paystack card."""
 
     __tablename__ = "host_subscription_payments"
 
@@ -299,14 +299,23 @@ class HostSubscriptionPayment(Base):
     plan: Mapped[str] = mapped_column(String(20), nullable=False)  # starter | premium
     amount_ksh: Mapped[float] = mapped_column(Float, nullable=False)
     duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(10), nullable=False, default="mpesa")  # mpesa | card
+    # M-Pesa fields
     checkout_request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    external_reference: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    result_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    external_reference: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     mpesa_receipt_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     mpesa_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     mpesa_transaction_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Paystack card fields
+    paystack_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True, index=True)
+    paystack_authorization_code: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    paystack_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    paystack_card_last4: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    paystack_card_brand: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Shared status fields
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_desc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

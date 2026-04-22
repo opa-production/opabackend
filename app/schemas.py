@@ -2585,6 +2585,10 @@ class HostSubscriptionMeResponse(BaseModel):
         90,
         description="Configured STK pending window (seconds); same as checkout response field.",
     )
+    pending_paystack_reference: Optional[str] = Field(
+        None,
+        description="Paystack reference for an in-progress card checkout; poll card-status with this.",
+    )
 
 
 class HostTrialActivateResponse(BaseModel):
@@ -2612,4 +2616,23 @@ class HostSubscriptionPaymentStatusResponse(BaseModel):
     status: HostSubscriptionPaymentStatusEnum
     message: Optional[str] = None
     mpesa_receipt_number: Optional[str] = None
+    # Card payment fields (populated for Paystack payments)
+    paystack_reference: Optional[str] = None
+    paystack_card_last4: Optional[str] = None
+    paystack_card_brand: Optional[str] = None
+
+
+class HostSubscriptionCardCheckoutRequest(BaseModel):
+    """Start a Paystack card checkout for host subscription."""
+    plan: HostSubscriptionPlanCode = Field(..., description="starter or premium")
+
+
+class HostSubscriptionCardCheckoutResponse(BaseModel):
+    """Response after initialising a Paystack card checkout."""
+    success: bool = True
+    message: str
+    plan: str
+    amount_kes: int
+    paystack_reference: str = Field(..., description="Poll card-status with this reference.")
+    authorization_url: str = Field(..., description="Open this URL in the browser / WebView for payment.")
 

@@ -844,10 +844,18 @@ async def paystack_webhook(
 
 def _paystack_confirm_payment(reference: str) -> None:
     """
-    Background task: verify a Paystack charge, then update Payment + Booking.
-    Uses its own synchronous DB session (called from a background thread).
+    Background task: verify a Paystack charge, then update the appropriate record.
+    Dispatches to host-subscription handler if reference starts with H-SUB-CARD-,
+    otherwise handles client booking payments.
+    Uses its own DB session (called from a background thread).
     """
     from app.database import SessionLocal
+    from app.services.host_subscription_payment import (
+        CARD_REF_PREFIX,
+        activate_host_subscription_from_paystack,
+        fail_host_subscription_from_paystack,
+        HostSubscriptionPayment as _HSP,
+    )
     import asyncio as _asyncio
 
     async def _run():
@@ -859,6 +867,27 @@ def _paystack_confirm_payment(reference: str) -> None:
                     return
 
                 payment_status = result.get("payment_status", "")
+
+                # --- Host subscription card payment ---
+                if reference.startswith(CARD_REF_PREFIX):
+                    res = await db.execute(
+                        select(_HSP).filter(
+                            _HSP.paystack_reference == reference,
+                            _HSP.status == "pending",
+                        )
+                    )
+                    sub = res.scalar_one_or_none()
+                    if not sub:
+                        logger.warning("[PAYSTACK HOST SUB] No pending subscription for ref=%s", reference)
+                        return
+                    if payment_status == "success":
+                        await activate_host_subscription_from_paystack(db, sub, result)
+                        logger.info("[PAYSTACK HOST SUB] Confirmed: ref=%s host_id=%s", reference, sub.host_id)
+                    elif payment_status in ("failed", "abandoned"):
+                        await fail_host_subscription_from_paystack(db, sub, payment_status)
+                    return
+
+                # --- Client booking payment ---
                 stmt = (
                     select(Payment)
                     .options(joinedload(Payment.booking))
@@ -905,7 +934,6 @@ def _paystack_confirm_payment(reference: str) -> None:
                         _ai.ensure_future(_notify_confirmed(
                             booking.client_id, str(booking.booking_id), "your car", _pickup
                         ))
-                        # Load car/host for host notification
                         from app.models import Car as _Car
                         _fb = await db.execute(
                             select(Booking).options(joinedload(Booking.car)).where(Booking.id == booking.id)
@@ -937,6 +965,40 @@ def _paystack_confirm_payment(reference: str) -> None:
             loop.run_until_complete(_run())
     except RuntimeError:
         _asyncio.run(_run())
+
+
+@router.get("/paystack/host-callback")
+async def paystack_host_callback(
+    reference: Optional[str] = Query(None),
+    trxref: Optional[str] = Query(None),
+):
+    """
+    Paystack redirects the host here after completing (or abandoning) the hosted payment page.
+    Sends them back to the host app via HOST_FRONTEND_URL deep link.
+    """
+    from fastapi.responses import RedirectResponse, HTMLResponse
+    import html as _html
+    from app.config import settings
+
+    ref = reference or trxref or ""
+    host_frontend = (settings.HOST_FRONTEND_URL or settings.FRONTEND_URL or "ardenahost://").strip()
+    base = host_frontend if host_frontend.endswith("://") else host_frontend.rstrip("/")
+    qs = f"paystack_reference={ref}" if ref else ""
+    path_suffix = f"subscription/result?{qs}" if qs else "subscription/result"
+    redirect_to = f"{base}{path_suffix}" if base.endswith("://") else f"{base}/{path_suffix}"
+
+    if "://" in base and not base.startswith("http"):
+        safe_url = _html.escape(redirect_to, quote=True)
+        html_content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment complete</title>
+<script>window.location.href = {repr(redirect_to)};</script>
+</head><body>
+<p>Payment submitted. Opening host app...</p>
+<p><a href="{safe_url}">Open in app</a> if nothing happens.</p>
+</body></html>"""
+        return HTMLResponse(content=html_content, status_code=200)
+    return RedirectResponse(url=redirect_to, status_code=302)
 
 
 @router.get("/client/payments/status", response_model=PaymentStatusResponse)

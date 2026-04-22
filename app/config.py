@@ -93,10 +93,13 @@ class Settings(BaseSettings):
     ANDROID_STORE_URL: Optional[str] = "market://details?id=com.ardena.app"
     IOS_STORE_URL: Optional[str] = None
 
-    FRONTEND_URL: Optional[str] = "https://ardena.co.ke"  
-    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None  
-    HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None  
-    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html" 
+    FRONTEND_URL: Optional[str] = "https://ardena.co.ke"
+    PASSWORD_RESET_LINK_BASE_URL: Optional[str] = None
+    HOST_PASSWORD_RESET_WEB_URL: Optional[str] = None
+    CLIENT_PASSWORD_RESET_WEB_URL: Optional[str] = "https://ardena.co.ke/reset-password.html"
+    # Deep-link scheme for the host app (e.g. ardenahost:// or https://host.ardena.co.ke)
+    # Paystack redirects hosts here after card checkout.
+    HOST_FRONTEND_URL: Optional[str] = None
 
     # Paystack card payments (hosted page — no card data stored)
     PAYSTACK_SECRET_KEY: Optional[str] = None

@@ -482,3 +482,75 @@ async def sync_pending_host_subscription_from_payhero(
         # Still in flight at Payhero
         if st in ("QUEUED", "PENDING") or (success_flag is None and st == ""):
             return
+
+
+# ---------------------------------------------------------------------------
+# Paystack card helpers
+# ---------------------------------------------------------------------------
+
+CARD_REF_PREFIX = "H-SUB-CARD-"
+
+
+async def get_pending_paystack_host_subscription(
+    db: AsyncSession, host_id: int
+) -> Optional[HostSubscriptionPayment]:
+    """Return the most recent pending card checkout for this host, if any."""
+    result = await db.execute(
+        select(HostSubscriptionPayment)
+        .where(
+            HostSubscriptionPayment.host_id == host_id,
+            HostSubscriptionPayment.payment_method == "card",
+            HostSubscriptionPayment.status == "pending",
+            HostSubscriptionPayment.paystack_reference.isnot(None),
+        )
+        .order_by(HostSubscriptionPayment.id.desc())
+    )
+    return result.scalars().first()
+
+
+async def activate_host_subscription_from_paystack(
+    db: AsyncSession,
+    sub: HostSubscriptionPayment,
+    verify_result: Dict[str, Any],
+) -> None:
+    """
+    Mark a card subscription payment as completed and activate the host's plan.
+    Called from the Paystack webhook background task.
+    """
+    sub.status = "completed"
+    sub.result_desc = "Card payment completed via Paystack"
+    sub.paystack_authorization_code = verify_result.get("authorization_code")
+    sub.paystack_channel = verify_result.get("channel")
+    sub.paystack_card_last4 = verify_result.get("card_last4")
+    sub.paystack_card_brand = verify_result.get("card_brand")
+
+    h_result = await db.execute(select(Host).where(Host.id == sub.host_id))
+    host = h_result.scalar_one_or_none()
+    if host:
+        now = datetime.now(timezone.utc)
+        duration = timedelta(days=int(sub.duration_days))
+        current_end = _ensure_aware_utc(host.subscription_expires_at)
+        base = now if not current_end or current_end <= now else current_end
+        new_end = base + duration
+        host.subscription_plan = sub.plan
+        host.subscription_expires_at = new_end
+        logger.info(
+            "[HOST SUB CARD] Activated plan=%s for host_id=%s until %s (payment id=%s)",
+            sub.plan, host.id, new_end.isoformat(), sub.id,
+        )
+    else:
+        logger.error("[HOST SUB CARD] Host %s missing for subscription payment %s", sub.host_id, sub.id)
+
+    await db.commit()
+
+
+async def fail_host_subscription_from_paystack(
+    db: AsyncSession,
+    sub: HostSubscriptionPayment,
+    payment_status: str,
+) -> None:
+    """Mark a card subscription payment as failed/abandoned."""
+    sub.status = "failed"
+    sub.result_desc = f"Card payment {payment_status}"
+    await db.commit()
+    logger.warning("[HOST SUB CARD] Payment %s: sub_id=%s", payment_status, sub.id)

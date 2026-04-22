@@ -1,7 +1,9 @@
 """
-Host subscription: M-Pesa checkout (Payhero STK) and current plan APIs.
+Host subscription: M-Pesa checkout (Payhero STK), Paystack card checkout, and current plan APIs.
 """
 import logging
+import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -14,6 +16,8 @@ from app.database import get_db
 from app.auth import get_current_host
 from app.models import Host, HostSubscriptionPayment
 from app.schemas import (
+    HostSubscriptionCardCheckoutRequest,
+    HostSubscriptionCardCheckoutResponse,
     HostSubscriptionCheckoutRequest,
     HostSubscriptionCheckoutResponse,
     HostSubscriptionMeResponse,
@@ -25,10 +29,12 @@ from app.schemas import (
 )
 from app.services.host_subscription_payment import (
     activate_free_trial,
+    activate_host_subscription_from_paystack,
     expire_stale_host_subscription_payments,
     free_trial_duration_days,
     get_active_pending_subscription_payment,
     get_paid_plan_details,
+    get_pending_paystack_host_subscription,
     get_subscription_plan_catalog,
     host_is_on_trial,
     host_paid_subscription_active,
@@ -36,6 +42,11 @@ from app.services.host_subscription_payment import (
     pending_subscription_seconds_remaining,
     stk_pending_window_seconds,
     sync_pending_host_subscription_from_payhero,
+    CARD_REF_PREFIX,
+)
+from app.services.paystack_payment import (
+    initialize_transaction as paystack_initialize,
+    verify_transaction as paystack_verify,
 )
 from app.services.mpesa_stk_push import sendStkPush
 from app.cache_utils import host_scoped_cache_key, invalidate_host_cache_namespaces
@@ -92,6 +103,7 @@ async def get_my_subscription(
     window_sec = stk_pending_window_seconds()
     pending = await get_active_pending_subscription_payment(db, host.id)
     pending_secs = pending_subscription_seconds_remaining(pending) if pending else None
+    pending_card = await get_pending_paystack_host_subscription(db, host.id)
 
     return HostSubscriptionMeResponse(
         plan=plan,
@@ -105,6 +117,7 @@ async def get_my_subscription(
         pending_checkout_request_id=(pending.checkout_request_id if pending else None),
         pending_seconds_remaining=pending_secs,
         stk_pending_window_seconds=window_sec,
+        pending_paystack_reference=(pending_card.paystack_reference if pending_card else None),
     )
 
 
@@ -293,3 +306,187 @@ async def host_subscription_payment_status(
     if st != HostSubscriptionPaymentStatusEnum.pending:
         await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
     return response
+
+
+@router.post(
+    "/host/subscription/checkout/card",
+    response_model=HostSubscriptionCardCheckoutResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def host_subscription_card_checkout(
+    body: HostSubscriptionCardCheckoutRequest,
+    current_host: Host = Depends(get_current_host),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Start a Paystack hosted card checkout for **starter** or **premium** subscription.
+
+    No card details are collected or stored by us — the host is redirected to Paystack's
+    secure hosted page.  After payment the host is returned to the host app via
+    `HOST_FRONTEND_URL` (configured in server env).
+
+    After calling this endpoint:
+    1. Open `authorization_url` in a browser / in-app WebView.
+    2. Poll `GET /host/subscription/card-status?paystack_reference=<ref>` until status is
+       `completed` or `failed`.
+    """
+    callback_base = os.getenv("PAYSTACK_CALLBACK_BASE_URL", "").rstrip("/")
+    if not callback_base:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Card payment is not configured on this server (PAYSTACK_CALLBACK_BASE_URL missing).",
+        )
+
+    plan = body.plan.value
+    try:
+        amount, duration_days = get_paid_plan_details(plan)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid plan price (check HOST_SUB_* env vars).")
+
+    result = await db.execute(select(Host).where(Host.id == current_host.id))
+    host = result.scalar_one_or_none()
+    if not host:
+        raise HTTPException(status_code=404, detail="Host not found")
+
+    # One pending card checkout at a time
+    existing = await get_pending_paystack_host_subscription(db, host.id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "A card checkout is already in progress. "
+                "Complete it or wait a moment, then try again."
+            ),
+        )
+
+    # Create the payment record first so we have an id for the reference
+    pending_ref = f"INIT-{secrets.token_hex(8)}"
+    rec = HostSubscriptionPayment(
+        host_id=host.id,
+        plan=plan,
+        amount_ksh=float(amount),
+        duration_days=duration_days,
+        payment_method="card",
+        external_reference=pending_ref,
+        status="pending",
+    )
+    db.add(rec)
+    await db.flush()
+
+    paystack_ref = f"{CARD_REF_PREFIX}{rec.id}-{secrets.token_hex(4)}"
+    rec.external_reference = paystack_ref
+    await db.commit()
+    await db.refresh(rec)
+
+    callback_url = f"{callback_base}/paystack/host-callback"
+    ps_result = paystack_initialize(
+        email=host.email,
+        amount_kes=float(amount),
+        reference=paystack_ref,
+        callback_url=callback_url,
+        metadata={
+            "host_id": host.id,
+            "plan": plan,
+            "sub_payment_id": rec.id,
+        },
+    )
+
+    if ps_result.get("status") != "success":
+        rec.status = "failed"
+        rec.result_desc = ps_result.get("message", "Paystack initialization failed")
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=ps_result.get("message", "Paystack initialization failed"),
+        )
+
+    rec.paystack_reference = ps_result["reference"]
+    await db.commit()
+    await invalidate_host_cache_namespaces(host.id, ["host-subscription-me"])
+
+    logger.info(
+        "[HOST SUB CARD] Initialized plan=%s amount=%s ref=%s host_id=%s",
+        plan, amount, rec.paystack_reference, host.id,
+    )
+
+    return HostSubscriptionCardCheckoutResponse(
+        message=(
+            "Open the authorization_url to complete payment. "
+            "Poll /host/subscription/card-status?paystack_reference=<ref> for status."
+        ),
+        plan=plan,
+        amount_kes=int(amount),
+        paystack_reference=rec.paystack_reference,
+        authorization_url=ps_result["authorization_url"],
+    )
+
+
+@router.get(
+    "/host/subscription/card-status",
+    response_model=HostSubscriptionPaymentStatusResponse,
+)
+async def host_subscription_card_status(
+    paystack_reference: str = Query(..., description="paystack_reference from card checkout response"),
+    current_host: Host = Depends(get_current_host),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Poll the status of a Paystack card subscription payment.
+
+    Returns `pending` while the host is on the Paystack page.
+    Returns `completed` once payment is confirmed via webhook.
+    Returns `failed` if the card was declined or the payment was abandoned.
+    """
+    result = await db.execute(
+        select(HostSubscriptionPayment)
+        .where(
+            HostSubscriptionPayment.host_id == current_host.id,
+            HostSubscriptionPayment.paystack_reference == paystack_reference.strip(),
+        )
+        .order_by(HostSubscriptionPayment.id.desc())
+    )
+    rec = result.scalars().first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="No card subscription payment found for this reference")
+
+    # Fallback: if still pending, verify directly with Paystack (handles missed webhooks)
+    if rec.status == "pending":
+        ps = paystack_verify(paystack_reference.strip())
+        if ps.get("status") == "success":
+            ps_payment_status = ps.get("payment_status", "")
+            if ps_payment_status == "success":
+                await activate_host_subscription_from_paystack(db, rec, ps)
+                await db.refresh(rec)
+            elif ps_payment_status in ("failed", "abandoned"):
+                rec.status = "failed"
+                rec.result_desc = f"Card payment {ps_payment_status}"
+                await db.commit()
+                await db.refresh(rec)
+
+    try:
+        st = HostSubscriptionPaymentStatusEnum(rec.status)
+    except ValueError:
+        st = HostSubscriptionPaymentStatusEnum.failed
+
+    msg = rec.result_desc
+    if st == HostSubscriptionPaymentStatusEnum.pending:
+        msg = msg or "Waiting for card payment confirmation…"
+
+    if st != HostSubscriptionPaymentStatusEnum.pending:
+        await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
+
+    return HostSubscriptionPaymentStatusResponse(
+        checkout_request_id=None,
+        external_reference=rec.external_reference,
+        plan=rec.plan,
+        amount_kes=rec.amount_ksh,
+        status=st,
+        message=msg,
+        mpesa_receipt_number=None,
+        paystack_reference=rec.paystack_reference,
+        paystack_card_last4=rec.paystack_card_last4,
+        paystack_card_brand=rec.paystack_card_brand,
+    )
