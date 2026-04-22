@@ -842,12 +842,13 @@ async def paystack_webhook(
     return {"status": "ok"}
 
 
-def _paystack_confirm_payment(reference: str) -> None:
+async def _paystack_confirm_payment(reference: str) -> None:
     """
-    Background task: verify a Paystack charge, then update the appropriate record.
+    Async background task: verify a Paystack charge, then update the appropriate record.
     Dispatches to host-subscription handler if reference starts with H-SUB-CARD-,
     otherwise handles client booking payments.
-    Uses its own DB session (called from a background thread).
+    FastAPI BackgroundTasks runs async functions directly on the event loop — no manual
+    loop wrangling needed, which avoids the "Future attached to a different loop" error.
     """
     from app.database import SessionLocal
     from app.services.host_subscription_payment import (
@@ -856,115 +857,103 @@ def _paystack_confirm_payment(reference: str) -> None:
         fail_host_subscription_from_paystack,
         HostSubscriptionPayment as _HSP,
     )
-    import asyncio as _asyncio
 
-    async def _run():
-        async with SessionLocal() as db:
-            try:
-                result = paystack_verify(reference)
-                if result.get("status") != "success":
-                    logger.warning("[PAYSTACK] Verify call failed: %s", result.get("message"))
-                    return
+    async with SessionLocal() as db:
+        try:
+            result = paystack_verify(reference)
+            if result.get("status") != "success":
+                logger.warning("[PAYSTACK] Verify call failed: %s", result.get("message"))
+                return
 
-                payment_status = result.get("payment_status", "")
+            payment_status = result.get("payment_status", "")
 
-                # --- Host subscription card payment ---
-                if reference.startswith(CARD_REF_PREFIX):
-                    res = await db.execute(
-                        select(_HSP).filter(
-                            _HSP.paystack_reference == reference,
-                            _HSP.status == "pending",
-                        )
-                    )
-                    sub = res.scalar_one_or_none()
-                    if not sub:
-                        logger.warning("[PAYSTACK HOST SUB] No pending subscription for ref=%s", reference)
-                        return
-                    if payment_status == "success":
-                        await activate_host_subscription_from_paystack(db, sub, result)
-                        logger.info("[PAYSTACK HOST SUB] Confirmed: ref=%s host_id=%s", reference, sub.host_id)
-                    elif payment_status in ("failed", "abandoned"):
-                        await fail_host_subscription_from_paystack(db, sub, payment_status)
-                    return
-
-                # --- Client booking payment ---
-                stmt = (
-                    select(Payment)
-                    .options(joinedload(Payment.booking))
-                    .filter(
-                        Payment.paystack_reference == reference,
-                        Payment.status == PaymentStatus.PENDING,
+            # --- Host subscription card payment ---
+            if reference.startswith(CARD_REF_PREFIX):
+                res = await db.execute(
+                    select(_HSP).filter(
+                        _HSP.paystack_reference == reference,
+                        _HSP.status == "pending",
                     )
                 )
-                res = await db.execute(stmt)
-                payment = res.scalar_one_or_none()
-                if not payment:
-                    logger.warning("[PAYSTACK] No pending payment for reference=%s", reference)
+                sub = res.scalar_one_or_none()
+                if not sub:
+                    logger.warning("[PAYSTACK HOST SUB] No pending subscription for ref=%s", reference)
                     return
-
                 if payment_status == "success":
-                    payment.status = PaymentStatus.COMPLETED
-                    payment.result_desc = "Card payment completed via Paystack"
-                    payment.paystack_authorization_code = result.get("authorization_code")
-                    payment.paystack_channel = result.get("channel")
-                    payment.paystack_card_last4 = result.get("card_last4")
-                    payment.paystack_card_brand = result.get("card_brand")
-
-                    booking = payment.booking
-                    if booking and booking.status == BookingStatus.PENDING:
-                        booking.status = BookingStatus.CONFIRMED
-                        booking.status_updated_at = datetime.now(timezone.utc)
-
-                    await db.commit()
-                    logger.info("[PAYSTACK] Payment confirmed: ref=%s", reference)
-
-                    if booking and payment.extension_request_id is None:
-                        import asyncio as _ai
-                        from app.services.booking_emails import (
-                            _async_send_booking_ticket_email,
-                            _async_send_rental_agreement_emails,
-                        )
-                        from app.services.push_notifications import (
-                            notify_booking_confirmed as _notify_confirmed,
-                            notify_host_payment_received as _notify_host,
-                        )
-                        _ai.ensure_future(_async_send_booking_ticket_email(booking.id))
-                        _ai.ensure_future(_async_send_rental_agreement_emails(booking.id))
-                        _pickup = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
-                        _ai.ensure_future(_notify_confirmed(
-                            booking.client_id, str(booking.booking_id), "your car", _pickup
-                        ))
-                        from app.models import Car as _Car
-                        _fb = await db.execute(
-                            select(Booking).options(joinedload(Booking.car)).where(Booking.id == booking.id)
-                        )
-                        _b = _fb.scalar_one_or_none()
-                        if _b and _b.car:
-                            _cn = f"{_b.car.name} {getattr(_b.car, 'model', '') or ''}".strip()
-                            _ai.ensure_future(_notify_host(
-                                _b.car.host_id, str(booking.booking_id), _cn, float(booking.total_price)
-                            ))
+                    await activate_host_subscription_from_paystack(db, sub, result)
+                    logger.info("[PAYSTACK HOST SUB] Confirmed: ref=%s host_id=%s", reference, sub.host_id)
                 elif payment_status in ("failed", "abandoned"):
-                    payment.status = PaymentStatus.FAILED
-                    payment.result_desc = f"Card payment {payment_status}"
-                    await db.commit()
-                    logger.warning("[PAYSTACK] Payment %s: ref=%s", payment_status, reference)
+                    await fail_host_subscription_from_paystack(db, sub, payment_status)
+                return
 
-            except Exception as e:
-                logger.exception("[PAYSTACK] _paystack_confirm_payment error: %s", e)
-                try:
-                    await db.rollback()
-                except Exception:
-                    pass
+            # --- Client booking payment ---
+            stmt = (
+                select(Payment)
+                .options(joinedload(Payment.booking))
+                .filter(
+                    Payment.paystack_reference == reference,
+                    Payment.status == PaymentStatus.PENDING,
+                )
+            )
+            res = await db.execute(stmt)
+            payment = res.scalar_one_or_none()
+            if not payment:
+                logger.warning("[PAYSTACK] No pending payment for reference=%s", reference)
+                return
 
-    try:
-        loop = _asyncio.get_event_loop()
-        if loop.is_running():
-            _asyncio.ensure_future(_run())
-        else:
-            loop.run_until_complete(_run())
-    except RuntimeError:
-        _asyncio.run(_run())
+            if payment_status == "success":
+                payment.status = PaymentStatus.COMPLETED
+                payment.result_desc = "Card payment completed via Paystack"
+                payment.paystack_authorization_code = result.get("authorization_code")
+                payment.paystack_channel = result.get("channel")
+                payment.paystack_card_last4 = result.get("card_last4")
+                payment.paystack_card_brand = result.get("card_brand")
+
+                booking = payment.booking
+                if booking and booking.status == BookingStatus.PENDING:
+                    booking.status = BookingStatus.CONFIRMED
+                    booking.status_updated_at = datetime.now(timezone.utc)
+
+                await db.commit()
+                logger.info("[PAYSTACK] Payment confirmed: ref=%s", reference)
+
+                if booking and payment.extension_request_id is None:
+                    import asyncio as _ai
+                    from app.services.booking_emails import (
+                        _async_send_booking_ticket_email,
+                        _async_send_rental_agreement_emails,
+                    )
+                    from app.services.push_notifications import (
+                        notify_booking_confirmed as _notify_confirmed,
+                        notify_host_payment_received as _notify_host,
+                    )
+                    _ai.ensure_future(_async_send_booking_ticket_email(booking.id))
+                    _ai.ensure_future(_async_send_rental_agreement_emails(booking.id))
+                    _pickup = booking.start_date.strftime("%b %d, %Y") if booking.start_date else ""
+                    _ai.ensure_future(_notify_confirmed(
+                        booking.client_id, str(booking.booking_id), "your car", _pickup
+                    ))
+                    _fb = await db.execute(
+                        select(Booking).options(joinedload(Booking.car)).where(Booking.id == booking.id)
+                    )
+                    _b = _fb.scalar_one_or_none()
+                    if _b and _b.car:
+                        _cn = f"{_b.car.name} {getattr(_b.car, 'model', '') or ''}".strip()
+                        _ai.ensure_future(_notify_host(
+                            _b.car.host_id, str(booking.booking_id), _cn, float(booking.total_price)
+                        ))
+            elif payment_status in ("failed", "abandoned"):
+                payment.status = PaymentStatus.FAILED
+                payment.result_desc = f"Card payment {payment_status}"
+                await db.commit()
+                logger.warning("[PAYSTACK] Payment %s: ref=%s", payment_status, reference)
+
+        except Exception as e:
+            logger.exception("[PAYSTACK] _paystack_confirm_payment error: %s", e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
 
 @router.get("/paystack/host-callback")
