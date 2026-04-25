@@ -174,15 +174,19 @@ def verify_webhook_signature(payload_bytes: bytes, signature: str) -> bool:
 
 def parse_webhook_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Normalise a Dojah EasyLookup webhook payload into a flat dict with keys:
-      reference_id, status, document_type, verified_name, verified_dob,
-      verified_gender, face_match_score, decision_reason
+    Normalise a Dojah EasyLookup webhook payload into a flat dict.
+
+    Dojah wraps the event inside a "data" key and delivers via Convoy:
+      { "data": { "referenceId": ..., "status": ..., "verifications": {...} }, "convoy": {...} }
+    We unwrap "data" first, then fall back to the root for older/direct payloads.
     """
-    reference_id = (body.get("referenceId") or body.get("reference_id") or "").strip()
-    raw_status = (body.get("status") or "").lower()
+    event = body.get("data") if isinstance(body.get("data"), dict) else body
+
+    reference_id = (event.get("referenceId") or event.get("reference_id") or "").strip()
+    raw_status = (event.get("status") or "").lower()
     status = "approved" if raw_status == "success" else ("declined" if raw_status in ("failed", "error") else "pending")
 
-    verifications = body.get("verifications") or {}
+    verifications = event.get("verifications") or {}
 
     # Government data
     gov = verifications.get("government_data") or {}
@@ -191,13 +195,14 @@ def parse_webhook_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     verified_gender = None
     if isinstance(gov, dict):
         first = (gov.get("first_name") or "").strip()
+        middle = (gov.get("middle_name") or "").strip()
         last = (gov.get("last_name") or "").strip()
         full = (gov.get("full_name") or "").strip()
-        verified_name = full or " ".join(filter(None, [first, last])) or None
+        verified_name = full or " ".join(filter(None, [first, middle, last])) or None
         raw_dob = gov.get("date_of_birth") or gov.get("dob")
         verified_dob = raw_dob.strip() if isinstance(raw_dob, str) else None
-        raw_gender = gov.get("gender") or ""
-        verified_gender = raw_gender.strip().lower() if raw_gender else None
+        raw_gender = (gov.get("gender") or "").strip().lower()
+        verified_gender = {"m": "male", "f": "female", "male": "male", "female": "female"}.get(raw_gender)
 
     # Face match confidence
     face = verifications.get("face_id") or {}
@@ -218,7 +223,7 @@ def parse_webhook_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     # Reason for failure
     decision_reason = None
     if status == "declined":
-        decision_reason = body.get("reason") or body.get("message")
+        decision_reason = event.get("reason") or event.get("message")
 
     return {
         "reference_id": reference_id,
