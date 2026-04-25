@@ -247,7 +247,7 @@ async def process_payment(
             import secrets as _secrets
             reference = f"{ref_safe}-{_secrets.token_hex(4)}"[:100]
 
-            result = paystack_initialize(
+            result = await paystack_initialize(
                 email=current_client.email,
                 amount_kes=float(booking.total_price),
                 reference=reference,
@@ -860,7 +860,7 @@ async def _paystack_confirm_payment(reference: str) -> None:
 
     async with SessionLocal() as db:
         try:
-            result = paystack_verify(reference)
+            result = await paystack_verify(reference)
             if result.get("status") != "success":
                 logger.warning("[PAYSTACK] Verify call failed: %s", result.get("message"))
                 return

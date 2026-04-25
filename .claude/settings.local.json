@@ -6,7 +6,8 @@
       "Bash(pip show:*)",
       "Bash(xargs grep *)",
       "Bash(xargs wc *)",
-      "Bash(xargs -I {} basename {})"
+      "Bash(xargs -I {} basename {})",
+      "Bash(awk *)"
     ]
   }
 }
