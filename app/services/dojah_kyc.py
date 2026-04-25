@@ -22,10 +22,20 @@ logger = logging.getLogger(__name__)
 
 SAFE_ERROR = "Identity verification is temporarily unavailable. Please try again later."
 
-ID_TYPE_PATHS: Dict[str, str] = {
+# Dojah endpoint paths per country+id_type.
+# Kenya has country-specific paths; fallback used for unlisted countries.
+_KE_PATHS: Dict[str, str] = {
+    "NATIONAL_ID":    "/api/v1/ke/kyc/id",
+    "PASSPORT":       "/api/v1/ke/kyc/passport",
+    "DRIVERS_LICENSE": "/api/v1/ke/kyc/dl",
+}
+_DEFAULT_PATHS: Dict[str, str] = {
     "NATIONAL_ID": "/api/v1/kyc/id",
-    "PASSPORT": "/api/v1/kyc/passport",
+    "PASSPORT":    "/api/v1/kyc/passport",
     "DRIVERS_LICENSE": "/api/v1/kyc/dl",
+}
+_COUNTRY_PATHS: Dict[str, Dict[str, str]] = {
+    "KE": _KE_PATHS,
 }
 
 
@@ -52,7 +62,11 @@ async def lookup_government_id(
     Returns dict with keys: verified_name, date_of_birth, gender, id_number, id_type, country.
     Raises ValueError with a user-safe message on any failure.
     """
-    path = ID_TYPE_PATHS.get(id_type.upper())
+    country_upper = country.upper()
+    id_type_upper = id_type.upper()
+
+    country_paths = _COUNTRY_PATHS.get(country_upper, _DEFAULT_PATHS)
+    path = country_paths.get(id_type_upper)
     if not path:
         raise ValueError(f"Unsupported id_type '{id_type}'. Use NATIONAL_ID, PASSPORT, or DRIVERS_LICENSE.")
 
@@ -61,16 +75,26 @@ async def lookup_government_id(
         raise ValueError(SAFE_ERROR)
 
     url = _base_url() + path
-    params = {"id": id_number.strip(), "country": country.upper()}
+    params = {"id": id_number.strip()}
+
+    logger.info("[Dojah] Lookup request: country=%s id_type=%s url=%s", country_upper, id_type_upper, url)
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
             resp = await client.get(url, params=params, headers=_dojah_headers())
 
+        if resp.status_code in (301, 302, 307, 308):
+            location = resp.headers.get("location", "(no location header)")
+            logger.error(
+                "[Dojah] Lookup redirected %s → %s  (url=%s) — check Dojah dashboard: "
+                "is this id_type enabled for country=%s on your app?",
+                resp.status_code, location, url, country_upper,
+            )
+            raise ValueError(SAFE_ERROR)
         if resp.status_code == 404:
             raise ValueError("No record found for the provided ID number. Please check and try again.")
         if resp.status_code in (401, 403):
-            logger.error("[Dojah] Auth error %s on lookup", resp.status_code)
+            logger.error("[Dojah] Auth error %s on lookup — check DOJAH_APP_ID / DOJAH_SECRET_KEY", resp.status_code)
             raise ValueError(SAFE_ERROR)
         if not resp.is_success:
             body = resp.text[:300]
@@ -96,10 +120,8 @@ async def lookup_government_id(
     raw_dob = entity.get("date_of_birth") or entity.get("dob")
     date_of_birth: Optional[str] = raw_dob.strip() if isinstance(raw_dob, str) else None
 
-    gender_raw = entity.get("gender") or ""
-    gender = gender_raw.strip().lower() if gender_raw else None
-    if gender and gender not in ("male", "female", "other"):
-        gender = gender if gender else None
+    gender_raw = (entity.get("gender") or "").strip().lower()
+    gender = {"m": "male", "f": "female", "male": "male", "female": "female"}.get(gender_raw)
 
     logger.info("[Dojah] Lookup success: id_type=%s country=%s name=%s", id_type, country, verified_name)
 
