@@ -81,15 +81,17 @@ async def _async_send_booking_ticket_email(booking_id: int) -> bool:
                 .filter(Booking.id == booking_id)
             )
             booking = result.scalar_one_or_none()
-            if not booking:
-                logger.warning("[BookingEmail] Ticket: booking_id=%s not found", booking_id)
-                return False
 
-            client = booking.client
-            if not client or not client.email:
-                logger.warning("[BookingEmail] Ticket: no client email for booking_id=%s", booking_id)
-                return False
+        if not booking:
+            logger.warning("[BookingEmail] Ticket: booking_id=%s not found", booking_id)
+            return False
 
+        client = booking.client
+        if not client or not client.email:
+            logger.warning("[BookingEmail] Ticket: no client email for booking_id=%s", booking_id)
+            return False
+
+        async with SessionLocal() as db:
             pay_result = await db.execute(
                 select(Payment)
                 .filter(Payment.booking_id == booking_id, Payment.status == PaymentStatus.COMPLETED)
