@@ -69,24 +69,24 @@ async def upload_client_avatar(
         filename=file.filename or "avatar.jpg"
     )
     
-    # Delete old avatar if exists
-    if current_client.avatar_url:
-        old_path = current_client.avatar_url.split('/')[-4:]  # Extract path from URL
-        await delete_file_from_storage(BUCKETS["client_profile"], "/".join(old_path))
-    
-    # Upload to Supabase Storage
+    old_avatar_url = current_client.avatar_url
+
+    # Upload new file first — commit the new URL before deleting the old file
     result = await upload_file_to_storage(
         bucket_name=BUCKETS["client_profile"],
         file_path=file_path,
         file_data=file_data,
         content_type=file.content_type
     )
-    
-    # Update database
+
     current_client.avatar_url = result["url"]
     await db.commit()
-    await db.refresh(current_client)
-    
+
+    # Only delete old file after new URL is safely committed
+    if old_avatar_url:
+        old_path = old_avatar_url.split('/')[-4:]
+        await delete_file_from_storage(BUCKETS["client_profile"], "/".join(old_path))
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
@@ -155,8 +155,7 @@ async def upload_client_document(
         current_client.license_document_url = result["url"]
     
     await db.commit()
-    await db.refresh(current_client)
-    
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
@@ -197,24 +196,22 @@ async def upload_host_avatar(
         filename=file.filename or "avatar.jpg"
     )
     
-    # Delete old avatar if exists
-    if current_host.avatar_url:
-        old_path = current_host.avatar_url.split('/')[-4:]  # Extract path from URL
-        await delete_file_from_storage(BUCKETS["host_profile"], "/".join(old_path))
-    
-    # Upload to Supabase Storage
+    old_avatar_url = current_host.avatar_url
+
     result = await upload_file_to_storage(
         bucket_name=BUCKETS["host_profile"],
         file_path=file_path,
         file_data=file_data,
         content_type=file.content_type
     )
-    
-    # Update database
+
     current_host.avatar_url = result["url"]
     await db.commit()
-    await db.refresh(current_host)
-    
+
+    if old_avatar_url:
+        old_path = old_avatar_url.split('/')[-4:]
+        await delete_file_from_storage(BUCKETS["host_profile"], "/".join(old_path))
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
@@ -253,24 +250,22 @@ async def upload_host_cover_image(
         filename=file.filename or "cover.jpg"
     )
     
-    # Delete old cover if exists
-    if current_host.cover_image_url:
-        old_path = current_host.cover_image_url.split('/')[-4:]  # Extract path from URL
-        await delete_file_from_storage(BUCKETS["host_profile"], "/".join(old_path))
-    
-    # Upload to Supabase Storage
+    old_cover_url = current_host.cover_image_url
+
     result = await upload_file_to_storage(
         bucket_name=BUCKETS["host_profile"],
         file_path=file_path,
         file_data=file_data,
         content_type=file.content_type
     )
-    
-    # Update database
+
     current_host.cover_image_url = result["url"]
     await db.commit()
-    await db.refresh(current_host)
-    
+
+    if old_cover_url:
+        old_path = old_cover_url.split('/')[-4:]
+        await delete_file_from_storage(BUCKETS["host_profile"], "/".join(old_path))
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
@@ -318,29 +313,26 @@ async def upload_host_document(
         filename=file.filename or f"{document_type}.jpg"
     )
     
-    # Delete old document if exists
     old_url = current_host.id_document_url if document_type == 'id' else current_host.license_document_url
-    if old_url:
-        old_path = old_url.split('/')[-4:]  # Extract path from URL
-        await delete_file_from_storage(BUCKETS["host_documents"], "/".join(old_path))
-    
-    # Upload to Supabase Storage
+
     result = await upload_file_to_storage(
         bucket_name=BUCKETS["host_documents"],
         file_path=file_path,
         file_data=file_data,
         content_type=file.content_type
     )
-    
-    # Update database
+
     if document_type == 'id':
         current_host.id_document_url = result["url"]
     else:
         current_host.license_document_url = result["url"]
-    
+
     await db.commit()
-    await db.refresh(current_host)
-    
+
+    if old_url:
+        old_path = old_url.split('/')[-4:]
+        await delete_file_from_storage(BUCKETS["host_documents"], "/".join(old_path))
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
@@ -418,8 +410,7 @@ async def upload_vehicle_images(
     car.car_images = json.dumps(uploaded_urls)  # New field for frontend
     car.cover_image = uploaded_urls[0] if uploaded_urls else None  # Set cover to first image
     await db.commit()
-    await db.refresh(car)
-    
+
     return MultipleMediaUploadResponse(
         success=True,
         urls=uploaded_urls,
@@ -473,25 +464,23 @@ async def upload_vehicle_video(
         filename=file.filename or "video.mp4"
     )
     
-    # Delete old video if exists
-    if car.video_url:
-        old_path = car.video_url.split('/')[-5:]  # Extract path from URL
-        await delete_file_from_storage(BUCKETS["vehicle_media"], "/".join(old_path))
-    
-    # Upload to Supabase Storage
+    old_video_url = car.video_url
+
     result = await upload_file_to_storage(
         bucket_name=BUCKETS["vehicle_media"],
         file_path=file_path,
         file_data=file_data,
         content_type=file.content_type
     )
-    
-    # Update database (both legacy and new fields)
+
     car.video_url = result["url"]  # Legacy field for backward compatibility
     car.car_video = result["url"]  # New field for frontend
     await db.commit()
-    await db.refresh(car)
-    
+
+    if old_video_url:
+        old_path = old_video_url.split('/')[-5:]
+        await delete_file_from_storage(BUCKETS["vehicle_media"], "/".join(old_path))
+
     return MediaUploadResponse(
         success=True,
         url=result["url"],
