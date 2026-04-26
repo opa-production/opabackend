@@ -153,8 +153,8 @@ async def get_client_kyc_status(
     )
     latest = result.scalars().first()
 
-    # Treat a stale pending row (no webhook in 1 hour) as not_started so the user can retry
-    PENDING_EXPIRY = timedelta(hours=1)
+    # Treat a stale pending row (no webhook in 15 min) as not_started so the user can retry
+    PENDING_EXPIRY = timedelta(minutes=15)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:
