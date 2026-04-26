@@ -28,11 +28,8 @@ class Settings(BaseSettings):
     SUPABASE_URL: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     
-    # SendGrid API configuration
-    SENDGRID_API_KEY: Optional[str] = None
-    
-    # Email from address (verified sender in SendGrid, e.g. hello@ardena.xyz)
-    SENDGRID_FROM_EMAIL: Optional[str] = "Ardena Group Team <hello@ardena.xyz>"
+    # Resend email API
+    RESEND_API_KEY: Optional[str] = None
     
     # Google Auth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -134,13 +131,13 @@ else:
     logger.warning(f".env file not found at: {env_file_path}")
 
 
-if settings.SENDGRID_API_KEY:
-    logger.info(f"SENDGRID_API_KEY loaded successfully (length: {len(settings.SENDGRID_API_KEY)})")
+if settings.RESEND_API_KEY:
+    logger.info(f"RESEND_API_KEY loaded successfully (length: {len(settings.RESEND_API_KEY)})")
 else:
-    logger.warning("SENDGRID_API_KEY not found in settings, trying os.environ...")
-    env_key = os.getenv("SENDGRID_API_KEY")
+    logger.warning("RESEND_API_KEY not found in settings, trying os.environ...")
+    env_key = os.getenv("RESEND_API_KEY")
     if env_key:
-        settings.SENDGRID_API_KEY = env_key
-        logger.info(f"SENDGRID_API_KEY loaded from os.environ (length: {len(env_key)})")
+        settings.RESEND_API_KEY = env_key
+        logger.info(f"RESEND_API_KEY loaded from os.environ (length: {len(env_key)})")
     else:
-        logger.error("SENDGRID_API_KEY not found in .env file or environment variables")
+        logger.error("RESEND_API_KEY not found in .env file or environment variables")

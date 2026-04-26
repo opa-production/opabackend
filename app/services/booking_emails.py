@@ -201,7 +201,7 @@ async def _async_send_rental_agreement_emails(booking_id: int) -> bool:
                  Keep it for your records — it contains all rental details, vehicle rules,
                  and your rights and obligations as a renter.</p>
               <p>Questions before pickup? Contact us at
-                 <a href="mailto:hello@ardena.xyz">hello@ardena.xyz</a>.</p>
+                 <a href="mailto:hello@ardena.co.ke">hello@ardena.co.ke</a>.</p>
               <p style="margin-top: 24px;">Safe travels,<br><strong>The Ardena Group Team</strong></p>
             </div>
             """
@@ -230,7 +230,7 @@ async def _async_send_rental_agreement_emails(booking_id: int) -> bool:
                  renter's details, rental period, financial terms, and platform rules.
                  Keep this document for your records.</p>
               <p>Concerns about the booking? Contact us at
-                 <a href="mailto:hello@ardena.xyz">hello@ardena.xyz</a>.</p>
+                 <a href="mailto:hello@ardena.co.ke">hello@ardena.co.ke</a>.</p>
               <p style="margin-top: 24px;">Thank you for hosting on Ardena,<br><strong>The Ardena Group Team</strong></p>
             </div>
             """

@@ -1,57 +1,54 @@
 """
-Email sending via SendGrid: welcome emails and generic send for password reset etc.
+Email sending via Resend: welcome emails, password reset, and generic send.
+Domain verified: ardena.co.ke  — all mail comes from hello@ardena.co.ke
 """
+import asyncio
 import base64
 import logging
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+
+import resend
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-FROM_NAME = "Ardena Group Team"
-DEFAULT_FROM = "Ardena Group Team <hello@ardena.xyz>"
+FROM_ADDRESS = "Ardena Group Team <hello@ardena.co.ke>"
 
 # Global thread pool for email sending
 email_executor = ThreadPoolExecutor(max_workers=3)
 
-def _get_from_email() -> str:
-    return settings.SENDGRID_FROM_EMAIL or DEFAULT_FROM
+
+def _configured() -> bool:
+    if not settings.RESEND_API_KEY:
+        logger.warning("[Email] RESEND_API_KEY not set; skipping send")
+        return False
+    resend.api_key = settings.RESEND_API_KEY
+    return True
 
 
 def _send_email_sync(to: str, subject: str, html: str) -> bool:
-    """Synchronous internal function for sending email."""
-    if not settings.SENDGRID_API_KEY:
-        logger.warning("[Email] SENDGRID_API_KEY not set; skipping send")
+    if not _configured():
         return False
-    from_email = _get_from_email()
     try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
-
-        message = Mail(
-            from_email=from_email,
-            to_emails=to,
-            subject=subject,
-            html_content=html,
-        )
-        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
-        sg.send(message)
-        logger.info(f"[Email] Sent to {to}: {subject}")
+        resend.Emails.send({
+            "from": FROM_ADDRESS,
+            "to": [to],
+            "subject": subject,
+            "html": html,
+        })
+        logger.info("[Email] Sent to %s: %s", to, subject)
         return True
     except Exception as e:
-        logger.exception(f"[Email] Failed to send to {to}: {e}")
+        logger.exception("[Email] Failed to send to %s: %s", to, e)
         return False
 
 
 async def send_email(to: str, subject: str, html: str) -> bool:
     """
-    Send one email via SendGrid (no attachments).
-    Returns True on success, False on failure (logs error).
-    Use this for welcome emails, password reset, etc.
-    This is non-blocking (runs in a thread pool).
+    Send one email via Resend (no attachments).
+    Non-blocking — runs in a thread pool.
     """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(email_executor, _send_email_sync, to, subject, html)
@@ -66,49 +63,23 @@ def _send_email_with_attachment_sync(
     mime_type: str,
     attachment_disposition: str,
 ) -> bool:
-    """Synchronous internal function for sending email with attachment."""
-    if not settings.SENDGRID_API_KEY:
-        logger.warning("[Email] SENDGRID_API_KEY not set; skipping send with attachment")
+    if not _configured():
         return False
-
-    from_email = _get_from_email()
-
     try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import (
-            Mail,
-            Attachment,
-            FileContent,
-            FileName,
-            FileType,
-            Disposition,
-        )
-
-        encoded_file = base64.b64encode(attachment_bytes).decode("utf-8")
-
-        attachment = Attachment(
-            FileContent(encoded_file),
-            FileName(filename),
-            FileType(mime_type),
-            Disposition(attachment_disposition),
-        )
-
-        message = Mail(
-            from_email=from_email,
-            to_emails=to,
-            subject=subject,
-            html_content=html,
-        )
-        message.attachment = attachment
-
-        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
-        sg.send(message)
-        logger.info(f"[Email] Sent with attachment to {to}: {subject} ({filename})")
+        resend.Emails.send({
+            "from": FROM_ADDRESS,
+            "to": [to],
+            "subject": subject,
+            "html": html,
+            "attachments": [{
+                "filename": filename,
+                "content": base64.b64encode(attachment_bytes).decode("utf-8"),
+            }],
+        })
+        logger.info("[Email] Sent with attachment to %s: %s (%s)", to, subject, filename)
         return True
     except Exception as e:
-        logger.exception(
-            f"[Email] Failed to send with attachment to {to} ({filename}): {e}"
-        )
+        logger.exception("[Email] Failed to send with attachment to %s (%s): %s", to, filename, e)
         return False
 
 
@@ -122,9 +93,8 @@ async def send_email_with_attachment(
     attachment_disposition: str = "attachment",
 ) -> bool:
     """
-    Send one email via SendGrid with a single attachment.
-    Intended for things like data export PDFs or receipts.
-    This is non-blocking (runs in a thread pool).
+    Send one email via Resend with a single attachment.
+    Non-blocking — runs in a thread pool.
     """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
@@ -141,9 +111,6 @@ async def send_email_with_attachment(
 
 
 async def send_welcome_email_client(to_email: str, full_name: str) -> bool:
-    """
-    Send welcome email to a new client (car renter).
-    """
     subject = "Welcome to Ardena — Your journey starts here"
     first_name = full_name.split()[0] if full_name else "there"
     html = f"""
@@ -161,9 +128,6 @@ async def send_welcome_email_client(to_email: str, full_name: str) -> bool:
 
 
 async def send_welcome_email_host(to_email: str, full_name: str) -> bool:
-    """
-    Send welcome email to a new host (car owner).
-    """
     subject = "Welcome to Ardena — Your car, your impact"
     first_name = full_name.split()[0] if full_name else "there"
     html = f"""
@@ -178,10 +142,8 @@ async def send_welcome_email_host(to_email: str, full_name: str) -> bool:
     """
     return await send_email(to_email, subject, html)
 
+
 async def send_forgotpassword_email(to_email: str, full_name: str, reset_link: str) -> bool:
-    """
-    Send password reset email to a user (host or client).
-    """
     subject = "Ardena Password Reset Request"
     first_name = full_name.split()[0] if full_name else "there"
     html = f"""
