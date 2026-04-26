@@ -281,6 +281,23 @@ app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Booking
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
 
+
+# =============================================================================
+# RESEND WEBHOOK
+# =============================================================================
+
+@app.post("/api/v1/resend/webhook", tags=["Email Webhooks"])
+async def resend_webhook(request: Request):
+    """Acknowledge Resend email delivery events (sent, delivered, bounced, etc.)."""
+    try:
+        payload = await request.json()
+        event_type = payload.get("type", "unknown") if isinstance(payload, dict) else "unknown"
+        logging.info("[Resend webhook] event=%s", event_type)
+    except Exception:
+        pass
+    return Response(status_code=200)
+
+
 # =============================================================================
 # STARTUP
 # =============================================================================

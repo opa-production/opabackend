@@ -54,11 +54,12 @@ engine_kwargs = {
 }
 
 # Add SSL context for production database connections
+# statement_cache_size=0 required for Neon/PgBouncer pooler (no prepared statement support)
 if "postgresql+asyncpg://" in SQLALCHEMY_DATABASE_URL:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = True
     ssl_context.verify_mode = ssl.CERT_REQUIRED
-    engine_kwargs["connect_args"] = {"ssl": ssl_context}
+    engine_kwargs["connect_args"] = {"ssl": ssl_context, "statement_cache_size": 0}
 
 engine = create_async_engine(SQLALCHEMY_DATABASE_URL, **engine_kwargs)
 
