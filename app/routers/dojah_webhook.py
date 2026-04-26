@@ -64,12 +64,15 @@ async def dojah_webhook(request: Request) -> Response:
         logger.warning("[Dojah webhook] Invalid signature — rejected")
         return Response(status_code=status.HTTP_401_UNAUTHORIZED)
 
+    # Log raw body so we can see exactly what Dojah sends
+    logger.info("[Dojah webhook] raw body: %s", body_bytes[:800].decode("utf-8", errors="replace"))
+
     parsed = parse_webhook_payload(body)
     reference_id = parsed["reference_id"]
 
     if not reference_id:
         data_val = body.get("data")
-        data_preview = list(data_val.keys()) if isinstance(data_val, dict) else repr(data_val)[:120]
+        data_preview = list(data_val.keys()) if isinstance(data_val, dict) else repr(data_val)[:300]
         logger.warning("[Dojah webhook] Missing referenceId — top-level keys: %s, data: %s",
                        list(body.keys()), data_preview)
         return Response(status_code=status.HTTP_200_OK)
