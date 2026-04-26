@@ -91,8 +91,11 @@ async def _post_to_expo(client: httpx.AsyncClient, messages: list[dict], tokens:
                     ticket = (single_resp.json().get("data") or [{}])[0]
                     if ticket.get("status") == "error":
                         err = (ticket.get("details") or {}).get("error", "")
+                        logger.warning("[Push] Individual ticket error for token %s — %s: %s", token[:30], err, ticket)
                         if err == "DeviceNotRegistered":
                             stale.append(token)
+                    else:
+                        logger.info("[Push] Individual send accepted for token %s: %s", token[:30], ticket)
             return ok, stale
         logger.error("[Push] Expo API error %s: %s", resp.status_code, resp.text[:300])
         return False, stale
