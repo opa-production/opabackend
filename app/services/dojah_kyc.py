@@ -174,71 +174,68 @@ def verify_webhook_signature(payload_bytes: bytes, signature: str) -> bool:
 
 def parse_webhook_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Normalise a Dojah EasyLookup webhook payload into a flat dict.
+    Normalise a Dojah EasyLookup webhook payload.
 
-    Dojah delivers via Convoy with the event in a "data" key.
-    "data" may be a nested dict or a JSON-encoded string — both are handled.
-    Falls back to root body for direct/legacy payloads.
+    Actual Dojah payload (array element) structure:
+    {
+      "reference_id": "<uuid>",
+      "status": true,                        # boolean
+      "verification_status": "Completed",    # string
+      "id_type": "KE-ID",
+      "message": "Successfully completed...",
+      "data": {
+        "user_data": { "data": { "first_name": "...", "last_name": "...", "dob": "..." } },
+        "selfie":    { "data": { "match_score": ..., "liveness_score": ... } },
+        ...
+      }
+    }
     """
-    raw_data = body.get("data")
-    if isinstance(raw_data, dict):
-        event = raw_data
-    elif isinstance(raw_data, str):
-        try:
-            import json as _json
-            parsed = _json.loads(raw_data)
-            event = parsed if isinstance(parsed, dict) else body
-        except Exception:
-            event = body
+    # reference_id at root
+    reference_id = (body.get("reference_id") or body.get("referenceId") or "").strip()
+
+    # Status: verification_status string takes priority over status boolean
+    verification_status = (body.get("verification_status") or "").lower()
+    status_bool = body.get("status")
+    if verification_status in ("completed", "verified", "success") or status_bool is True:
+        kyc_status = "approved"
+    elif verification_status in ("failed", "rejected", "error", "declined") or status_bool is False:
+        kyc_status = "declined"
     else:
-        event = body
+        kyc_status = "pending"
 
-    reference_id = (event.get("referenceId") or event.get("reference_id") or "").strip()
-    raw_status = (event.get("status") or "").lower()
-    status = "approved" if raw_status == "success" else ("declined" if raw_status in ("failed", "error") else "pending")
+    # Name and DOB from data.user_data.data
+    inner_data = body.get("data") or {}
+    user_data = (inner_data.get("user_data") or {}).get("data") or {}
+    first = (user_data.get("first_name") or "").strip()
+    middle = (user_data.get("middle_name") or "").strip()
+    last = (user_data.get("last_name") or "").strip()
+    verified_name = " ".join(filter(None, [first, middle, last])) or None
 
-    verifications = event.get("verifications") or {}
+    raw_dob = user_data.get("dob") or user_data.get("date_of_birth")
+    verified_dob = raw_dob.strip() if isinstance(raw_dob, str) else None
 
-    # Government data
-    gov = verifications.get("government_data") or {}
-    verified_name = None
-    verified_dob = None
+    # Gender not typically provided by Dojah for KE-ID
     verified_gender = None
-    if isinstance(gov, dict):
-        first = (gov.get("first_name") or "").strip()
-        middle = (gov.get("middle_name") or "").strip()
-        last = (gov.get("last_name") or "").strip()
-        full = (gov.get("full_name") or "").strip()
-        verified_name = full or " ".join(filter(None, [first, middle, last])) or None
-        raw_dob = gov.get("date_of_birth") or gov.get("dob")
-        verified_dob = raw_dob.strip() if isinstance(raw_dob, str) else None
-        raw_gender = (gov.get("gender") or "").strip().lower()
-        verified_gender = {"m": "male", "f": "female", "male": "male", "female": "female"}.get(raw_gender)
 
-    # Face match confidence
-    face = verifications.get("face_id") or {}
+    # Face/liveness score from data.selfie.data
+    selfie_data = (inner_data.get("selfie") or {}).get("data") or {}
     face_match_score: Optional[float] = None
-    if isinstance(face, dict):
-        conf = face.get("confidence") or face.get("score")
-        try:
-            face_match_score = float(conf) if conf is not None else None
-        except (TypeError, ValueError):
-            pass
+    try:
+        score = selfie_data.get("match_score") or selfie_data.get("liveness_score")
+        face_match_score = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        pass
 
-    # Document type
-    id_check = verifications.get("id") or {}
-    document_type = None
-    if isinstance(id_check, dict):
-        document_type = (id_check.get("id_type") or id_check.get("document_type") or "").lower() or None
+    # Document type from id_type or verification_type
+    document_type = (body.get("id_type") or body.get("verification_type") or "").lower() or None
 
-    # Reason for failure
     decision_reason = None
-    if status == "declined":
-        decision_reason = event.get("reason") or event.get("message")
+    if kyc_status == "declined":
+        decision_reason = body.get("message")
 
     return {
         "reference_id": reference_id,
-        "status": status,
+        "status": kyc_status,
         "document_type": document_type,
         "verified_name": verified_name,
         "verified_dob": verified_dob,

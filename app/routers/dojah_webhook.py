@@ -49,13 +49,18 @@ async def dojah_webhook(request: Request) -> Response:
     body_bytes = await request.body()
 
     try:
-        body = json.loads(body_bytes) if body_bytes else {}
+        raw = json.loads(body_bytes) if body_bytes else {}
     except Exception as exc:
         logger.warning("[Dojah webhook] Invalid JSON: %s", exc)
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
-    if not isinstance(body, dict):
-        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+    # Dojah sends a JSON array with one event object
+    if isinstance(raw, list):
+        body = raw[0] if raw else {}
+    elif isinstance(raw, dict):
+        body = raw
+    else:
+        return Response(status_code=status.HTTP_200_OK)
 
     sig_header = (
         request.headers.get("X-Dojah-Signature")
