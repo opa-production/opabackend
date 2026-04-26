@@ -34,6 +34,7 @@ import app.migrations.m006_normalize_payment_method_type_case  # noqa: F401
 import app.migrations.m007_schema_patches                      # noqa: F401
 import app.migrations.m008_free_trial                          # noqa: F401
 import app.migrations.m009_host_sub_paystack                   # noqa: F401
+import app.migrations.m010_client_storage_uuid                  # noqa: F401
 
 from app.migrations.runner import run_pending
 

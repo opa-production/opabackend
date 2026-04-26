@@ -81,7 +81,7 @@ def _check_supabase_client():
         )
 
 
-def generate_file_path(user_id: int, category: str, subcategory: str, filename: str) -> str:
+def generate_file_path(user_id, category: str, subcategory: str, filename: str) -> str:
     """
     Generate a unique file path for Supabase Storage.
     
@@ -227,6 +227,25 @@ def get_public_url(bucket_name: str, file_path: str) -> str:
     """
     _check_supabase_client()
     return supabase.storage.from_(bucket_name).get_public_url(file_path)
+
+
+async def delete_user_storage_folder(bucket_name: str, folder: str) -> int:
+    """
+    Delete every file under folder/ in the given bucket.
+    Returns the number of files deleted. Logs and swallows errors so caller is never blocked.
+    """
+    if supabase is None or not folder:
+        return 0
+    try:
+        paths = collect_storage_file_paths_http(bucket_name, folder)
+        if not paths:
+            return 0
+        supabase.storage.from_(bucket_name).remove(paths)
+        logger.info("Deleted %d storage file(s) from %s/%s", len(paths), bucket_name, folder)
+        return len(paths)
+    except Exception as e:
+        logger.warning("Storage cleanup failed for %s/%s: %s", bucket_name, folder, e)
+        return 0
 
 
 def extract_path_from_url(url: str, bucket_name: str) -> Optional[str]:

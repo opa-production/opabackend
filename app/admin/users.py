@@ -712,7 +712,14 @@ async def delete_client(
             detail="Client not found"
         )
     
+    storage_uuid = client.storage_uuid
+    client_id_val = client.id
     await db.delete(client)
     await db.commit()
-    
+
+    from app.storage import delete_user_storage_folder, BUCKETS
+    for folder in filter(None, [str(client_id_val), storage_uuid]):
+        await delete_user_storage_folder(BUCKETS["client_profile"], folder)
+        await delete_user_storage_folder(BUCKETS["client_documents"], folder)
+
     return {"message": "Client account deleted successfully"}

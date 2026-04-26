@@ -5,6 +5,7 @@ from sqlalchemy.sql import func
 from app.database import Base
 import enum
 import datetime
+import uuid as _uuid
 
 
 class PaymentMethodType(str, enum.Enum):
@@ -404,6 +405,9 @@ class Client(Base):
     date_of_birth = mapped_column(Date, nullable=True)  # Required for updates, but nullable for existing clients
     gender: Mapped[str] = mapped_column(String(20), nullable=True)  # Required for updates, but nullable for existing clients - e.g., "male", "female", "other"
     
+    # Stable folder name for Supabase Storage (never reused even after account deletion)
+    storage_uuid: Mapped[Optional[str]] = mapped_column(String(36), unique=True, nullable=True, default=lambda: str(_uuid.uuid4()))
+
     # Media URLs (stored in Supabase Storage)
     avatar_url: Mapped[str] = mapped_column(String(500), nullable=True)
     id_document_url: Mapped[str] = mapped_column(String(500), nullable=True)

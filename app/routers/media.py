@@ -61,9 +61,9 @@ async def upload_client_avatar(
     # Read file data
     file_data = await file.read()
     
-    # Generate file path
+    # Generate file path — use storage_uuid so the folder is never recycled to a new user
     file_path = generate_file_path(
-        user_id=current_client.id,
+        user_id=current_client.storage_uuid or str(current_client.id),
         category="profile",
         subcategory="avatar",
         filename=file.filename or "avatar.jpg"
@@ -126,9 +126,9 @@ async def upload_client_document(
     # Read file data
     file_data = await file.read()
     
-    # Generate file path
+    # Generate file path — use storage_uuid so the folder is never recycled to a new user
     file_path = generate_file_path(
-        user_id=current_client.id,
+        user_id=current_client.storage_uuid or str(current_client.id),
         category="documents",
         subcategory=document_type,
         filename=file.filename or f"{document_type}.jpg"

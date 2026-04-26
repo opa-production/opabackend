@@ -738,8 +738,15 @@ async def delete_own_account(
     ))
 
     # Delete the client (cascades: bookings, payments, payment_methods, driving_license, client_kycs, biometric_tokens, host_ratings, client_ratings)
+    storage_uuid = current_client.storage_uuid
     await db.delete(current_client)
     await db.commit()
+
+    # Clean up Supabase storage so recycled IDs never inherit old files
+    from app.storage import delete_user_storage_folder, BUCKETS
+    for folder in filter(None, [str(client_id), storage_uuid]):
+        await delete_user_storage_folder(BUCKETS["client_profile"], folder)
+        await delete_user_storage_folder(BUCKETS["client_documents"], folder)
 
     return {"message": "Your account has been permanently deleted."}
 
