@@ -68,8 +68,10 @@ async def dojah_webhook(request: Request) -> Response:
     reference_id = parsed["reference_id"]
 
     if not reference_id:
-        logger.warning("[Dojah webhook] Missing referenceId — top-level keys: %s, data keys: %s",
-                       list(body.keys()), list((body.get("data") or {}).keys()))
+        data_val = body.get("data")
+        data_preview = list(data_val.keys()) if isinstance(data_val, dict) else repr(data_val)[:120]
+        logger.warning("[Dojah webhook] Missing referenceId — top-level keys: %s, data: %s",
+                       list(body.keys()), data_preview)
         return Response(status_code=status.HTTP_200_OK)
 
     logger.info(

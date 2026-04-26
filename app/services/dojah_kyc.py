@@ -176,11 +176,22 @@ def parse_webhook_payload(body: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalise a Dojah EasyLookup webhook payload into a flat dict.
 
-    Dojah wraps the event inside a "data" key and delivers via Convoy:
-      { "data": { "referenceId": ..., "status": ..., "verifications": {...} }, "convoy": {...} }
-    We unwrap "data" first, then fall back to the root for older/direct payloads.
+    Dojah delivers via Convoy with the event in a "data" key.
+    "data" may be a nested dict or a JSON-encoded string — both are handled.
+    Falls back to root body for direct/legacy payloads.
     """
-    event = body.get("data") if isinstance(body.get("data"), dict) else body
+    raw_data = body.get("data")
+    if isinstance(raw_data, dict):
+        event = raw_data
+    elif isinstance(raw_data, str):
+        try:
+            import json as _json
+            parsed = _json.loads(raw_data)
+            event = parsed if isinstance(parsed, dict) else body
+        except Exception:
+            event = body
+    else:
+        event = body
 
     reference_id = (event.get("referenceId") or event.get("reference_id") or "").strip()
     raw_status = (event.get("status") or "").lower()
