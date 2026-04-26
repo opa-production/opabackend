@@ -60,6 +60,54 @@ async def _delete_stale_tokens(stale: list[str]) -> None:
     logger.info("[Push] Deleted %d stale DeviceNotRegistered token(s): %s", len(stale), stale)
 
 
+async def _post_to_expo(client: httpx.AsyncClient, messages: list[dict], tokens: list[str]) -> tuple[bool, list[str]]:
+    """
+    POST a batch of messages to Expo. Returns (success, stale_tokens).
+    If Expo rejects due to mixed experience IDs (PUSH_TOO_MANY_EXPERIENCE_IDS),
+    retries each token individually so delivery still works.
+    """
+    stale: list[str] = []
+    resp = await client.post(
+        EXPO_PUSH_URL,
+        json=messages,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    if resp.status_code != 200:
+        errors = (resp.json().get("errors") or []) if resp.headers.get("content-type", "").startswith("application/json") else []
+        mixed = any(e.get("code") == "PUSH_TOO_MANY_EXPERIENCE_IDS" for e in errors)
+        if mixed:
+            logger.warning("[Push] Mixed experience IDs in batch — retrying %d token(s) individually", len(tokens))
+            ok = True
+            for token, msg in zip(tokens, messages):
+                single_resp = await client.post(
+                    EXPO_PUSH_URL,
+                    json=[msg],
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                )
+                if single_resp.status_code != 200:
+                    logger.error("[Push] Individual send failed for token %s: %s", token[:30], single_resp.text[:200])
+                    ok = False
+                else:
+                    ticket = (single_resp.json().get("data") or [{}])[0]
+                    if ticket.get("status") == "error":
+                        err = (ticket.get("details") or {}).get("error", "")
+                        if err == "DeviceNotRegistered":
+                            stale.append(token)
+            return ok, stale
+        logger.error("[Push] Expo API error %s: %s", resp.status_code, resp.text[:300])
+        return False, stale
+
+    logger.info("[Push] Expo accepted batch of %d message(s)", len(messages))
+    tickets = resp.json().get("data", [])
+    for token, ticket in zip(tokens, tickets):
+        if ticket.get("status") == "error":
+            err = (ticket.get("details") or {}).get("error", "")
+            logger.warning("[Push] Ticket error for token %s: %s", token[:30], ticket)
+            if err == "DeviceNotRegistered":
+                stale.append(token)
+    return True, stale
+
+
 async def _send_to_tokens(tokens: list[str], title: str, body: str, data: dict, channel: str, badge: int) -> bool:
     """Send one notification to a list of Expo push tokens (batched, max 100 each)."""
     valid = [t for t in tokens if t and t.startswith("ExponentPushToken")]
@@ -75,23 +123,10 @@ async def _send_to_tokens(tokens: list[str], title: str, body: str, data: dict, 
             for i in range(0, len(messages), 100):
                 batch_tokens = valid[i:i + 100]
                 batch_msgs = messages[i:i + 100]
-                resp = await client.post(
-                    EXPO_PUSH_URL,
-                    json=batch_msgs,
-                    headers={"Accept": "application/json", "Content-Type": "application/json"},
-                )
-                if resp.status_code != 200:
-                    logger.error("[Push] Expo API error %s: %s", resp.status_code, resp.text[:300])
+                batch_ok, batch_stale = await _post_to_expo(client, batch_msgs, batch_tokens)
+                if not batch_ok:
                     ok = False
-                else:
-                    logger.info("[Push] Expo accepted batch of %d message(s)", len(batch_msgs))
-                    tickets = resp.json().get("data", [])
-                    for token, ticket in zip(batch_tokens, tickets):
-                        if ticket.get("status") == "error":
-                            err = (ticket.get("details") or {}).get("error", "")
-                            logger.warning("[Push] Ticket error for token %s: %s", token[:30], ticket)
-                            if err == "DeviceNotRegistered":
-                                stale_tokens.append(token)
+                stale_tokens.extend(batch_stale)
     except Exception as e:
         logger.exception("[Push] Failed to send push notification: %s", e)
         return False
