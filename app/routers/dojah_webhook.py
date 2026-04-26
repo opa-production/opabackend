@@ -179,10 +179,50 @@ async def dojah_client_callback(
     Configure this URL in the Dojah dashboard widget settings:
       https://api.ardena.xyz/api/v1/dojah/client-callback
 
-    We redirect the user to the client app deep link so the app can
-    resume and start polling /client/kyc/status.
+    We do an optimistic DB update immediately (so the app sees the result
+    on its first poll, not after waiting for the async webhook), then
+    redirect the user to the client app deep link.
     """
     frontend_url = (settings.FRONTEND_URL or "").rstrip("/")
+
+    logger.info("[Dojah callback] ref=%s status=%s", reference_id, status_param)
+
+    # Optimistic status update — the webhook will follow with full details.
+    # This ensures the app sees the result immediately instead of waiting.
+    if reference_id:
+        status_lower = (status_param or "").lower()
+        if status_lower in ("success", "completed", "verified", "true", "1"):
+            optimistic_status = "approved"
+        elif status_lower in ("failed", "declined", "error", "rejected", "false", "0"):
+            optimistic_status = "declined"
+        else:
+            optimistic_status = None
+
+        if optimistic_status:
+            try:
+                async with SessionLocal() as db:
+                    now = datetime.now(timezone.utc)
+                    client_result = await db.execute(
+                        select(ClientKyc).filter(ClientKyc.dojah_reference_id == reference_id)
+                    )
+                    client_kyc = client_result.scalar_one_or_none()
+                    if client_kyc and client_kyc.status == "pending":
+                        client_kyc.status = optimistic_status
+                        client_kyc.verified_at = now
+                        await db.commit()
+                        logger.info("[Dojah callback] Optimistic update: ref=%s → %s", reference_id, optimistic_status)
+                    else:
+                        host_result = await db.execute(
+                            select(HostKyc).filter(HostKyc.dojah_reference_id == reference_id)
+                        )
+                        host_kyc = host_result.scalar_one_or_none()
+                        if host_kyc and host_kyc.status == "pending":
+                            host_kyc.status = optimistic_status
+                            host_kyc.verified_at = now
+                            await db.commit()
+                            logger.info("[Dojah callback] Optimistic update (host): ref=%s → %s", reference_id, optimistic_status)
+            except Exception as exc:
+                logger.warning("[Dojah callback] Optimistic update failed (webhook will still arrive): %s", exc)
 
     if not frontend_url:
         logger.warning("[Dojah callback] FRONTEND_URL not set — cannot redirect to client app")

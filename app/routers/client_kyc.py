@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import delete as sa_delete
+
 from app.auth import get_current_client
 from app.config import settings
 from app.database import get_db
@@ -80,7 +82,6 @@ async def client_kyc_lookup(
     current_client.id_number = result["id_number"]
 
     await db.commit()
-    await db.refresh(current_client)
 
     logger.info("[KYC] client_id=%s lookup success: %s %s", current_client.id, body.id_type, body.country)
 
@@ -116,6 +117,14 @@ async def client_kyc_initialize(
         creds = dojah.generate_widget_credentials()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+
+    # Delete any abandoned pending rows so the user gets a clean fresh verification.
+    # Approved/declined rows are preserved.
+    await db.execute(
+        sa_delete(ClientKyc)
+        .where(ClientKyc.client_id == current_client.id)
+        .where(ClientKyc.status == "pending")
+    )
 
     kyc = ClientKyc(
         client_id=current_client.id,
@@ -153,8 +162,9 @@ async def get_client_kyc_status(
     )
     latest = result.scalars().first()
 
-    # Treat a stale pending row (no webhook in 15 min) as not_started so the user can retry
-    PENDING_EXPIRY = timedelta(minutes=15)
+    # Treat a stale pending row as not_started so the user can restart.
+    # 3 minutes is enough for a genuine webhook to arrive after completion.
+    PENDING_EXPIRY = timedelta(minutes=3)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:
