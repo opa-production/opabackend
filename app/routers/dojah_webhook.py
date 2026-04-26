@@ -16,9 +16,11 @@ import logging
 from datetime import date as date_type, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import ClientKyc, HostKyc, Client, Host
 from app.services.dojah_kyc import verify_webhook_signature, parse_webhook_payload
@@ -160,3 +162,37 @@ async def dojah_webhook(request: Request) -> Response:
             return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response(status_code=status.HTTP_200_OK)
+
+
+@router.get("/dojah/client-callback")
+async def dojah_client_callback(
+    reference_id: str = Query(default=""),
+    status_param: str = Query(default="", alias="status"),
+) -> Response:
+    """
+    Dojah redirects the user here after the widget completes.
+    Configure this URL in the Dojah dashboard widget settings:
+      https://api.ardena.xyz/api/v1/dojah/client-callback
+
+    We redirect the user to the client app deep link so the app can
+    resume and start polling /client/kyc/status.
+    """
+    frontend_url = (settings.FRONTEND_URL or "").rstrip("/")
+
+    if not frontend_url:
+        logger.warning("[Dojah callback] FRONTEND_URL not set — cannot redirect to client app")
+        return HTMLResponse(content="""
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verification Complete</title>
+<style>body{font-family:sans-serif;text-align:center;padding:60px 20px;background:#f9f9f9}
+h2{color:#1a1a1a}p{color:#555}</style></head>
+<body><h2>Verification Submitted</h2>
+<p>Your identity verification has been submitted.<br>
+Please return to the Ardena app to continue.</p>
+<script>setTimeout(function(){window.close()},3000);</script>
+</body></html>""")
+
+    deep_link = f"{frontend_url}/kyc/result?reference_id={reference_id}"
+    logger.info("[Dojah callback] Redirecting to %s", deep_link)
+    return RedirectResponse(url=deep_link, status_code=302)
