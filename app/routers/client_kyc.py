@@ -146,7 +146,11 @@ async def get_client_kyc_status(
     result = await db.execute(
         select(ClientKyc)
         .filter(ClientKyc.client_id == current_client.id)
-        .order_by(ClientKyc.created_at.desc())
+        .order_by(
+            # Approved rows first, then most recently created
+            (ClientKyc.status == "approved").desc(),
+            ClientKyc.created_at.desc(),
+        )
     )
     latest = result.scalars().first()
 

@@ -119,7 +119,10 @@ async def get_host_kyc_status(
     result = await db.execute(
         select(HostKyc)
         .filter(HostKyc.host_id == current_host.id)
-        .order_by(HostKyc.created_at.desc())
+        .order_by(
+            (HostKyc.status == "approved").desc(),
+            HostKyc.created_at.desc(),
+        )
     )
     latest = result.scalars().first()
 
