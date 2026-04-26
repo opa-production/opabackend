@@ -17,7 +17,7 @@ Step 3  GET /client/kyc/status
         widget completes (Dojah webhook updates the row asynchronously).
 """
 import logging
-from datetime import date as date_type, datetime, timezone
+from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -147,12 +147,18 @@ async def get_client_kyc_status(
         select(ClientKyc)
         .filter(ClientKyc.client_id == current_client.id)
         .order_by(
-            # Approved rows first, then most recently created
             (ClientKyc.status == "approved").desc(),
             ClientKyc.created_at.desc(),
         )
     )
     latest = result.scalars().first()
+
+    # Treat a stale pending row (no webhook in 1 hour) as not_started so the user can retry
+    PENDING_EXPIRY = timedelta(hours=1)
+    if latest and latest.status == "pending":
+        age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
+        if age > PENDING_EXPIRY:
+            latest = None
 
     if not latest:
         return ClientKycStatusResponse(

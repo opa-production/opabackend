@@ -6,7 +6,7 @@ Step 2  POST /host/kyc/initialize   — Launch Dojah widget
 Step 3  GET  /host/kyc/status       — Poll verification result
 """
 import logging
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -125,6 +125,12 @@ async def get_host_kyc_status(
         )
     )
     latest = result.scalars().first()
+
+    PENDING_EXPIRY = timedelta(hours=1)
+    if latest and latest.status == "pending":
+        age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
+        if age > PENDING_EXPIRY:
+            latest = None
 
     if not latest:
         return HostKycStatusResponse(
