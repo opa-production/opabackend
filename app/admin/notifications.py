@@ -298,7 +298,7 @@ async def broadcast_to_clients_respecting_preferences(
             # Email notification
             if (
                 getattr(client, "email_notifications_enabled", True)
-                and settings.SENDGRID_API_KEY
+                and settings.RESEND_API_KEY
             ):
                 try:
                     if request.email_body_html:

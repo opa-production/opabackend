@@ -150,11 +150,11 @@ async def send_newsletter(
     Send a newsletter email to all currently subscribed addresses.
     Uses SendGrid; failures are logged per-recipient but do not fail the request.
     """
-    if not settings.SENDGRID_API_KEY:
+    if not settings.RESEND_API_KEY:
         from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service is not configured. Set SENDGRID_API_KEY.",
+            detail="Email service is not configured.",
         )
         
     stmt = select(Subscriber).filter(Subscriber.is_subscribed.is_(True))

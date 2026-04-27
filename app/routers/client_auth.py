@@ -255,7 +255,7 @@ async def forgot_password(
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
 
-    if not settings.SENDGRID_API_KEY:
+    if not settings.RESEND_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service is not configured. Please try again later.",
@@ -507,7 +507,7 @@ async def update_email_notifications(
     await db.refresh(current_client)
 
     # Only send a confirmation email when toggled from OFF to ON
-    if request.enabled and not previous and settings.SENDGRID_API_KEY:
+    if request.enabled and not previous and settings.RESEND_API_KEY:
         first_name = (
             current_client.full_name.split()[0] if current_client.full_name else "there"
         )
@@ -580,7 +580,7 @@ async def export_client_data(
     The PDF is generated on the server and sent as an email attachment from
     the standard Ardena Group team address.
     """
-    if not settings.SENDGRID_API_KEY:
+    if not settings.RESEND_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service is not configured. Please try again later.",

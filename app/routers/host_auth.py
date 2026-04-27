@@ -401,7 +401,7 @@ async def forgot_password(
         # Don't reveal if email exists - same response for both cases
         return {"message": "If an account exists with this email, you will receive a password reset link."}
 
-    if not settings.SENDGRID_API_KEY:
+    if not settings.RESEND_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service is not configured. Please try again later.",
