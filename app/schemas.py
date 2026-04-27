@@ -2639,3 +2639,28 @@ class HostSubscriptionCardCheckoutResponse(BaseModel):
     paystack_reference: str = Field(..., description="Poll card-status with this reference.")
     authorization_url: str = Field(..., description="Open this URL in the browser / WebView for payment.")
 
+
+# ==================== SECONDARY CONTACT SCHEMAS ====================
+
+class SecondaryContactInfoRequest(BaseModel):
+    """Step 1 — save secondary contact phone + entered names."""
+    phone: str = Field(..., min_length=7, max_length=50)
+    names: str = Field(..., min_length=2, max_length=255, description="Full names as the client knows them")
+
+
+class SecondaryContactVerifyRequest(BaseModel):
+    """Step 2 — submit secondary contact ID number for Gava Connect lookup."""
+    id_number: str = Field(..., min_length=5, max_length=100)
+
+
+class SecondaryContactStatusResponse(BaseModel):
+    """Current state of the secondary contact verification."""
+    status: str  # not_started | pending | verified | failed
+    phone: Optional[str] = None
+    names: Optional[str] = None
+    official_name: Optional[str] = None
+    kra_pin: Optional[str] = None
+    matched_names: Optional[int] = None
+    verified_at: Optional[datetime] = None
+    message: Optional[str] = None
+

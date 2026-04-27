@@ -112,6 +112,11 @@ class Settings(BaseSettings):
 
     KYC_ALLOWED_RETURN_PREFIXES: str = "ardenahost://,ardena://,oparides://"
 
+    # Gava Connect (Kenya e-Government PIN checker)
+    GAVACONNECT_CONSUMER_KEY: Optional[str] = None
+    GAVACONNECT_CONSUMER_SECRET: Optional[str] = None
+    GAVACONNECT_BASE_URL: str = "https://developer.go.ke"  # UAT: https://uat.developer.go.ke
+
     class Config:
     
         env_file = str(BASE_DIR / ".env")

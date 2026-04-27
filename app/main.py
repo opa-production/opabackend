@@ -145,6 +145,7 @@ from app.routers import (
     client_refunds as client_refunds_router,
     client_emergency as client_emergency_router,
     wishlist as wishlist_router,
+    secondary_contact as secondary_contact_router,
 )
 from app.admin import (
     auth as admin_auth,
@@ -254,6 +255,7 @@ app.include_router(bookings.router, prefix="/api/v1", tags=["Bookings"])
 app.include_router(client_refunds_router.router, prefix="/api/v1", tags=["Client Refunds"])
 app.include_router(client_emergency_router.router, prefix="/api/v1", tags=["Client Emergency"])
 app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishlist"])
+app.include_router(secondary_contact_router.router, prefix="/api/v1", tags=["Secondary Contact"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
 app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
