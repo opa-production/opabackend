@@ -280,6 +280,7 @@ app.include_router(admin_support.router, prefix="/api/v1", tags=["Admin Support"
 app.include_router(admin_bookings.router, prefix="/api/v1", tags=["Admin Bookings"])
 app.include_router(admin_withdrawals.router, prefix="/api/v1", tags=["Admin Withdrawals"])
 app.include_router(admin_subscribers.router, prefix="/api/v1", tags=["Admin Subscribers"])
+app.include_router(admin_refunds.router, prefix="/api/v1", tags=["Admin Refunds"])
 
 
 # =============================================================================
