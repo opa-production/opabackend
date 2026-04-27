@@ -479,8 +479,11 @@ async def get_my_bookings(
     
     stmt = select(Booking).options(
         joinedload(Booking.car).joinedload(Car.host)
-    ).filter(Booking.client_id == current_client.id)
-    
+    ).filter(
+        Booking.client_id == current_client.id,
+        Booking.client_deleted_at == None,
+    )
+
     # Filter by status if provided
     if status:
         try:
@@ -808,6 +811,24 @@ async def cancel_booking(
     _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
     _booking_ref = getattr(booking, "booking_id", str(booking.id))
     _cancel_reason = request.reason if request else None
+
+    # Auto-create a Refund record so finance/admin can track and process it
+    if refund_eligible and refund_amount and refund_amount > 0:
+        completed_payment = next(
+            (p for p in (booking.payments or []) if p.status and p.status.value == "completed"),
+            None,
+        )
+        refund_record = Refund(
+            booking_id=booking.id,
+            payment_id=completed_payment.id if completed_payment else None,
+            client_id=booking.client_id,
+            amount_original=float(completed_payment.amount) if completed_payment else float(booking.total_price or 0),
+            amount_refund=refund_amount,
+            percentage=refund_percentage,
+            status=RefundStatus.PENDING,
+            reason=refund_policy_reason,
+        )
+        db.add(refund_record)
 
     await db.commit()
     await db.refresh(booking)
@@ -1657,6 +1678,23 @@ async def delete_completed_booking(
     if booking.client_deleted_at is not None:
         # Already hidden; treat as success
         return None
+
+    # Block deletion while a refund is still being processed
+    active_refund_result = await db.execute(
+        select(Refund).filter(
+            Refund.booking_id == booking.id,
+            Refund.status.in_([RefundStatus.PENDING, RefundStatus.PROCESSING]),
+        ).limit(1)
+    )
+    active_refund = active_refund_result.scalar_one_or_none()
+    if active_refund:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This booking has a refund that is currently being processed. "
+                "You can remove it from your history once the refund is completed."
+            ),
+        )
 
     booking.client_deleted_at = datetime.utcnow()
     await db.commit()
