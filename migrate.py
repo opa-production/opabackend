@@ -37,6 +37,7 @@ import app.migrations.m009_host_sub_paystack                   # noqa: F401
 import app.migrations.m010_client_storage_uuid                  # noqa: F401
 import app.migrations.m011_client_support                       # noqa: F401
 import app.migrations.m012_secondary_contact                    # noqa: F401
+import app.migrations.m013_secondary_contact_otp                # noqa: F401
 
 from app.migrations.runner import run_pending
 

@@ -2,9 +2,9 @@
 
 ## Overview
 
-The client must verify a secondary contact (e.g. next of kin) in two steps:
-1. Enter the secondary contact's **phone number** and **full names** (as the client knows them).
-2. Enter the secondary contact's **national ID number** — the backend calls Gava Connect (KRA), gets the officially registered name, compares it with the entered names, and marks the contact as **verified** or **failed**.
+The client verifies a secondary contact (e.g. next of kin) by sending a one-time SMS code to the secondary contact's phone. The secondary contact reads the code back to the client, who enters it in the app.
+
+**OTP:** 5 digits, expires in 2 minutes.
 
 ---
 
@@ -36,26 +36,44 @@ All endpoints require the client's JWT in the `Authorization: Bearer <token>` he
   "status": "not_started",
   "phone": "0712345678",
   "names": "Jane Achieng Otieno",
-  "official_name": null,
-  "kra_pin": null,
-  "matched_names": null,
   "verified_at": null,
-  "message": "Secondary contact info saved. Please proceed to ID verification."
+  "message": "Info saved. Tap 'Send OTP' to verify the number."
 }
 ```
 
-**UI action:** On success, navigate to the ID number entry screen (Step 2).
+**UI action:** On success navigate to OTP screen. Show the phone number so the client can confirm it before sending.
 
 ---
 
-## Step 2 — Verify National ID
+## Step 2 — Send OTP
+
+**Endpoint:** `POST /client/secondary-contact/send-otp`
+
+No request body — uses the phone saved in Step 1.
+
+**Success response (200):**
+```json
+{
+  "status": "otp_sent",
+  "phone": "0712345678",
+  "names": "Jane Achieng Otieno",
+  "verified_at": null,
+  "message": "OTP sent. Ask your secondary contact to share the code. Valid for 2 minutes."
+}
+```
+
+**UI action:** Show a 5-digit OTP input field and a 2-minute countdown timer. Show a "Resend OTP" button that re-calls this endpoint (enabled after timer expires).
+
+---
+
+## Step 3 — Verify OTP
 
 **Endpoint:** `POST /client/secondary-contact/verify`
 
 **Request body:**
 ```json
 {
-  "id_number": "41789723"
+  "otp": "48271"
 }
 ```
 
@@ -65,104 +83,90 @@ All endpoints require the client's JWT in the `Authorization: Bearer <token>` he
   "status": "verified",
   "phone": "0712345678",
   "names": "Jane Achieng Otieno",
-  "official_name": "JANE ACHIENG OTIENO",
-  "kra_pin": "A012345678B",
-  "matched_names": 3,
   "verified_at": "2026-04-27T10:00:00Z",
   "message": "Secondary contact verified successfully."
 }
 ```
 
-**Failure — name mismatch (200):**
+**Error — wrong OTP (400):**
 ```json
 {
-  "status": "failed",
-  "phone": "0712345678",
-  "names": "Jane Achieng Otieno",
-  "official_name": "JOHN KAMAU MWANGI",
-  "kra_pin": "A098765432Z",
-  "matched_names": 0,
-  "verified_at": null,
-  "message": "Name verification failed — only 0 name(s) matched the official record (2 required). Please check the names and try again."
+  "detail": "Incorrect OTP. Please try again."
 }
 ```
 
-**Error — ID not found / invalid (422):**
+**Error — expired OTP (400):**
 ```json
 {
-  "detail": "Gava Connect: Invalid ID"
+  "detail": "OTP has expired. Please request a new one."
 }
 ```
 
-**Error — info not saved yet (400):**
+**Error — no OTP requested (400):**
 ```json
 {
-  "detail": "Please save secondary contact info (phone + names) first."
+  "detail": "No OTP active. Please request a new one."
 }
 ```
-
-### UI logic on response:
-- `status === "verified"` → show success screen, done
-- `status === "failed"` → show `message` and offer two options:
-  - **Try again** — go back to Step 1 (re-enter names, then re-enter ID)
-  - **Skip for now** — dismiss (if verification is optional)
-- `422` error → show the `detail` message (invalid ID), let user re-enter ID number
 
 ---
 
-## Check Current Status (optional)
+## Check Current Status
 
-Use this on screen load to resume or skip already-completed steps.
+Use on screen load to skip already-completed steps.
 
 **Endpoint:** `GET /client/secondary-contact/status`
 
 **Response:** Same shape as above.
 
-| `status` value | Meaning |
+| `status` | Meaning |
 |---|---|
-| `not_started` | Client has not started yet |
-| `pending` | ID submitted, lookup in progress (transient — resolves in the same request) |
-| `verified` | Successfully verified |
-| `failed` | Name match failed — client may retry |
+| `not_started` | No info saved yet |
+| `otp_sent` | OTP has been sent, waiting for input |
+| `verified` | Phone verified ✓ |
 
 ---
 
-## Recommended Screen Flow
+## Screen Flow
 
 ```
-[Secondary Contact Screen]
+[Secondary Contact Entry Screen]
         |
         v
 [Screen 1: Enter Phone & Names]
   - Phone number input
-  - Full names input (as client knows them)
+  - Full names input
   - "Continue" → POST /client/secondary-contact/info
         |
         v (on success)
-[Screen 2: Enter National ID Number]
-  - ID number input
+[Screen 2: OTP Verification]
+  - Shows: "OTP sent to 0712 xxx xxx"
+  - "Send OTP" button → POST /client/secondary-contact/send-otp
+  - 5-digit OTP input (appears after send-otp succeeds)
+  - 2-minute countdown timer
   - "Verify" → POST /client/secondary-contact/verify
+  - "Resend OTP" (enabled when timer hits 0)
         |
         +--- status: verified --→ [Success Screen ✓]
         |
-        +--- status: failed ---→ [Failed Screen]
-                                    show message from API
-                                    [Try Again] → back to Screen 1
+        +--- wrong/expired ---→ show error inline, allow retry
 ```
 
 ---
 
 ## Re-entry Behaviour
 
-Calling `POST /client/secondary-contact/info` **resets** all prior verification data. If the user goes back and enters different names, the previous `verified` status is cleared and they must re-enter the ID number.
+Calling `POST /info` again resets all prior verification. The client must re-send and re-verify the OTP.
 
 ---
 
 ## Testing Checklist
 
-- [ ] Enter valid phone + names → `status: not_started`, navigate to ID screen
-- [ ] Enter matching ID number → `status: verified`, show success
-- [ ] Enter ID whose registered name doesn't match entered names → `status: failed`, show message with retry
-- [ ] Enter non-existent/invalid ID → 422 error with detail message
-- [ ] Load status screen when already verified → skip verification screens
-- [ ] Go back and re-enter info → status resets to `not_started`, must re-verify
+- [ ] Save phone + names → `status: not_started`, navigate to OTP screen
+- [ ] Tap Send OTP → `status: otp_sent`, SMS arrives with 5-digit code
+- [ ] Enter correct OTP within 2 minutes → `status: verified`
+- [ ] Enter wrong OTP → 400 "Incorrect OTP"
+- [ ] Wait 2 minutes then enter OTP → 400 "OTP has expired"
+- [ ] Tap Resend OTP after expiry → new OTP sent, timer resets
+- [ ] Load screen when already verified → skip to success state
+- [ ] Change phone number (re-enter info) → status resets to `not_started`

@@ -112,11 +112,10 @@ class Settings(BaseSettings):
 
     KYC_ALLOWED_RETURN_PREFIXES: str = "ardenahost://,ardena://,oparides://"
 
-    # Gava Connect (Kenya e-Government PIN checker)
-    GAVACONNECT_CONSUMER_KEY: Optional[str] = None
-    GAVACONNECT_CONSUMER_SECRET: Optional[str] = None
-    # Sandbox: https://sbx.kra.go.ke  |  Production: https://api.kra.go.ke
-    GAVACONNECT_BASE_URL: str = "https://sbx.kra.go.ke"
+    # Africa's Talking SMS (OTP + booking notifications)
+    AFRICASTALKING_API_KEY: Optional[str] = None
+    # Set to your AT account username in production; "sandbox" for testing
+    AFRICASTALKING_USERNAME: str = "sandbox"
 
     class Config:
     

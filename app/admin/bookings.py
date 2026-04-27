@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, desc, select, update, delete
 
+import asyncio
 from app.database import get_db
+from app.services import sms as sms_service
 from app.models import (
     Booking, BookingStatus, Client, Car, Host, Admin,
     Payment, Refund, StellarPaymentTransaction,
@@ -351,6 +353,15 @@ async def confirm_booking(
     result = await db.execute(load_stmt)
     booking = result.scalar_one_or_none()
     
+    # SMS: booking confirmed (2 of 4)
+    client = booking.client
+    if client and client.mobile_number:
+        _car_label = f"{booking.car.name} {getattr(booking.car, 'model', '') or ''}".strip() if booking.car else "car"
+        _start = booking.start_date.strftime("%d %b %Y") if booking.start_date else ""
+        asyncio.ensure_future(sms_service.send_booking_confirmed(
+            client.mobile_number, _car_label, _start
+        ))
+
     return {
         "message": "Booking confirmed successfully",
         "booking": booking_to_response(booking)

@@ -15,6 +15,7 @@ import uuid
 from fastapi_cache.decorator import cache
 
 from app.database import get_db
+from app.services import sms as sms_service
 from app.models import (
     Car,
     Client,
@@ -448,6 +449,12 @@ async def create_booking(
         car.host_id, booking_id, _client_name, _car_label, _start
     ))
 
+    # SMS: booking received (1 of 4)
+    if current_client.mobile_number:
+        asyncio.ensure_future(sms_service.send_booking_created(
+            current_client.mobile_number, _car_label, _start
+        ))
+
     # Load relationships for response
     result = await db.execute(
         select(Booking).options(
@@ -855,6 +862,12 @@ async def cancel_booking(
     asyncio.ensure_future(notify_host_booking_cancelled(
         host_id, _booking_ref, _car_label, _cancel_reason
     ))
+
+    # SMS: booking cancelled (counts as 1 of 4 — replaces pickup/dropoff if cancelled)
+    if current_client.mobile_number:
+        asyncio.ensure_future(sms_service.send_booking_cancelled(
+            current_client.mobile_number, _car_label, refund_amount
+        ))
 
     return booking_to_response(booking)
 

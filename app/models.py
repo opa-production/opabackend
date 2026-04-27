@@ -422,14 +422,12 @@ class Client(Base):
     sms_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     in_app_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    # Secondary contact verification (Gava Connect)
+    # Secondary contact verification (SMS OTP)
     secondary_contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     secondary_contact_names: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    secondary_contact_id_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     secondary_contact_status: Mapped[str] = mapped_column(String(20), nullable=True, default="not_started")
-    secondary_contact_official_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    secondary_contact_kra_pin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    secondary_contact_matched_names: Mapped[Optional[int]] = mapped_column(nullable=True, default=0)
+    secondary_contact_otp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    secondary_contact_otp_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     secondary_contact_verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

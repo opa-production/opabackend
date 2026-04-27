@@ -2643,24 +2643,21 @@ class HostSubscriptionCardCheckoutResponse(BaseModel):
 # ==================== SECONDARY CONTACT SCHEMAS ====================
 
 class SecondaryContactInfoRequest(BaseModel):
-    """Step 1 — save secondary contact phone + entered names."""
+    """Step 1 — save secondary contact phone + names."""
     phone: str = Field(..., min_length=7, max_length=50)
-    names: str = Field(..., min_length=2, max_length=255, description="Full names as the client knows them")
+    names: str = Field(..., min_length=2, max_length=255)
 
 
-class SecondaryContactVerifyRequest(BaseModel):
-    """Step 2 — submit secondary contact national ID number for Gava Connect lookup."""
-    id_number: str = Field(..., min_length=5, max_length=100, description="National ID number")
+class SecondaryContactVerifyOTPRequest(BaseModel):
+    """Step 3 — submit the 5-digit OTP received on the secondary contact's phone."""
+    otp: str = Field(..., min_length=5, max_length=5, description="5-digit OTP")
 
 
 class SecondaryContactStatusResponse(BaseModel):
     """Current state of the secondary contact verification."""
-    status: str  # not_started | pending | verified | failed
+    status: str  # not_started | otp_sent | verified
     phone: Optional[str] = None
     names: Optional[str] = None
-    official_name: Optional[str] = None
-    kra_pin: Optional[str] = None
-    matched_names: Optional[int] = None
     verified_at: Optional[datetime] = None
     message: Optional[str] = None
 
