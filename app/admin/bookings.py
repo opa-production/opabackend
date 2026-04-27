@@ -388,8 +388,27 @@ async def delete_booking(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot delete booking with status: {booking.status.value}"
         )
-    
+
     bid = booking.id
+
+    # Block deletion if a refund is still being processed
+    from app.models import RefundStatus
+    active_refund_result = await db.execute(
+        select(Refund).filter(
+            Refund.booking_id == bid,
+            Refund.status.in_([RefundStatus.PENDING, RefundStatus.PROCESSING]),
+        ).limit(1)
+    )
+    active_refund = active_refund_result.scalar_one_or_none()
+    if active_refund:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot delete booking {booking_id} — it has a pending refund of "
+                f"{active_refund.amount_refund} that has not been processed yet. "
+                "Mark the refund as completed, failed, or cancelled first."
+            ),
+        )
 
     # Null out nullable FK columns that point at this booking
     await db.execute(update(HostRating).where(HostRating.booking_id == bid).values(booking_id=None))

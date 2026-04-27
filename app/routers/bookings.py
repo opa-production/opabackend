@@ -815,7 +815,7 @@ async def cancel_booking(
     # Auto-create a Refund record so finance/admin can track and process it
     if refund_eligible and refund_amount and refund_amount > 0:
         completed_payment = next(
-            (p for p in (booking.payments or []) if p.status and p.status.value == "completed"),
+            (p for p in (booking.payments or []) if p.status == PaymentStatus.COMPLETED and p.extension_request_id is None),
             None,
         )
         refund_record = Refund(
@@ -829,6 +829,15 @@ async def cancel_booking(
             reason=refund_policy_reason,
         )
         db.add(refund_record)
+        logger.info(
+            "[cancel_booking] Refund record created for booking %s: amount=%.2f policy=%s",
+            _booking_ref, refund_amount, refund_policy_code,
+        )
+    else:
+        logger.info(
+            "[cancel_booking] No refund for booking %s: eligible=%s amount=%s policy=%s",
+            _booking_ref, refund_eligible, refund_amount, refund_policy_code,
+        )
 
     await db.commit()
     await db.refresh(booking)
