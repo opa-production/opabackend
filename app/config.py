@@ -115,7 +115,8 @@ class Settings(BaseSettings):
     # Gava Connect (Kenya e-Government PIN checker)
     GAVACONNECT_CONSUMER_KEY: Optional[str] = None
     GAVACONNECT_CONSUMER_SECRET: Optional[str] = None
-    GAVACONNECT_BASE_URL: str = "https://developer.go.ke"  # UAT: https://uat.developer.go.ke
+    # Sandbox: https://sbx.kra.go.ke  |  Production: https://api.kra.go.ke
+    GAVACONNECT_BASE_URL: str = "https://sbx.kra.go.ke"
 
     class Config:
     

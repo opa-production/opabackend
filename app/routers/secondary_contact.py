@@ -84,11 +84,11 @@ async def verify_secondary_contact(
         )
 
     client.secondary_contact_status = "pending"
-    client.secondary_contact_id_number = body.id_number.strip()
+    client.secondary_contact_id_number = body.kra_pin.strip().upper()
     await db.commit()
 
     try:
-        gc_result = await gava_connect.check_pin(body.id_number)
+        gc_result = await gava_connect.check_pin(body.kra_pin)
     except ValueError as exc:
         logger.warning(
             "[secondary_contact] Gava Connect error for client %s: %s", current_client.id, exc
@@ -129,9 +129,9 @@ async def verify_secondary_contact(
     await db.commit()
 
     logger.warning(
-        "[secondary_contact] client=%s id_number=%.4s… official=%r entered=%r matched=%d status=%s",
+        "[secondary_contact] client=%s kra_pin=%.4s… official=%r entered=%r matched=%d status=%s",
         current_client.id,
-        body.id_number,
+        body.kra_pin,
         official_name,
         client.secondary_contact_names,
         matched_count,

@@ -2649,8 +2649,8 @@ class SecondaryContactInfoRequest(BaseModel):
 
 
 class SecondaryContactVerifyRequest(BaseModel):
-    """Step 2 — submit secondary contact ID number for Gava Connect lookup."""
-    id_number: str = Field(..., min_length=5, max_length=100)
+    """Step 2 — submit secondary contact KRA PIN for Gava Connect lookup."""
+    kra_pin: str = Field(..., min_length=5, max_length=20, description="KRA PIN, e.g. A012345678B")
 
 
 class SecondaryContactStatusResponse(BaseModel):
