@@ -829,12 +829,12 @@ async def cancel_booking(
             reason=refund_policy_reason,
         )
         db.add(refund_record)
-        logger.info(
+        logger.warning(
             "[cancel_booking] Refund record created for booking %s: amount=%.2f policy=%s",
             _booking_ref, refund_amount, refund_policy_code,
         )
     else:
-        logger.info(
+        logger.warning(
             "[cancel_booking] No refund for booking %s: eligible=%s amount=%s policy=%s",
             _booking_ref, refund_eligible, refund_amount, refund_policy_code,
         )
