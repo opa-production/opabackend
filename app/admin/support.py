@@ -6,7 +6,7 @@ from sqlalchemy import or_, func, select
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models import SupportConversation, SupportMessage, Host, Admin
+from app.models import SupportConversation, SupportMessage, Host, Client, Admin
 from app.schemas import (
     SupportConversationResponse,
     SupportMessageResponse,
@@ -18,14 +18,20 @@ from app.auth import get_current_admin
 router = APIRouter()
 
 
-def _message_to_response(db_message: SupportMessage, host: Host = None, admin: Admin = None) -> SupportMessageResponse:
-    """Helper function to convert SupportMessage model to SupportMessageResponse"""
+def _message_to_response(
+    db_message: SupportMessage,
+    host: Host = None,
+    client: Client = None,
+    admin: Admin = None,
+) -> SupportMessageResponse:
     sender_name = None
     if db_message.sender_type == "host" and host:
         sender_name = host.full_name
+    elif db_message.sender_type == "client" and client:
+        sender_name = client.full_name
     elif db_message.sender_type == "admin" and admin:
         sender_name = admin.full_name
-    
+
     return SupportMessageResponse(
         id=db_message.id,
         conversation_id=db_message.conversation_id,
@@ -34,7 +40,7 @@ def _message_to_response(db_message: SupportMessage, host: Host = None, admin: A
         sender_name=sender_name,
         message=db_message.message,
         is_read=db_message.is_read,
-        created_at=db_message.created_at
+        created_at=db_message.created_at,
     )
 
 
@@ -54,8 +60,9 @@ async def list_support_conversations(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     host_id: Optional[int] = Query(None, description="Filter by host ID"),
+    client_id: Optional[int] = Query(None, description="Filter by client ID"),
     status_filter: Optional[str] = Query(None, description="Filter by status (open, closed)"),
-    search: Optional[str] = Query(None, description="Search by host name or email"),
+    search: Optional[str] = Query(None, description="Search by host or client name/email"),
     sort_by: Optional[str] = Query("last_message_at", description="Sort field (id, created_at, last_message_at)"),
     order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order"),
     current_admin = Depends(get_current_admin),
@@ -72,59 +79,63 @@ async def list_support_conversations(
     - **sort_by**: Field to sort by
     - **order**: Sort order (asc or desc)
     """
-    # Build base statement
-    stmt = select(SupportConversation).options(joinedload(SupportConversation.host))
-    
-    # Apply filters
+    stmt = select(SupportConversation).options(
+        joinedload(SupportConversation.host),
+        joinedload(SupportConversation.client),
+    )
+
     if host_id:
         stmt = stmt.filter(SupportConversation.host_id == host_id)
-    
+
+    if client_id:
+        stmt = stmt.filter(SupportConversation.client_id == client_id)
+
     if status_filter:
         stmt = stmt.filter(SupportConversation.status == status_filter)
-    
+
     if search:
         search_filter = or_(
             Host.full_name.ilike(f"%{search}%"),
-            Host.email.ilike(f"%{search}%")
+            Host.email.ilike(f"%{search}%"),
+            Client.full_name.ilike(f"%{search}%"),
+            Client.email.ilike(f"%{search}%"),
         )
-        stmt = stmt.join(Host).filter(search_filter)
-    
-    # Get total count
+        stmt = (
+            stmt
+            .outerjoin(Host, SupportConversation.host_id == Host.id)
+            .outerjoin(Client, SupportConversation.client_id == Client.id)
+            .filter(search_filter)
+        )
+
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
-    # Get unread count
+
     unread_stmt = select(func.count(SupportConversation.id)).filter(
         SupportConversation.is_read_by_admin == False
     )
     unread_result = await db.execute(unread_stmt)
     unread_count = unread_result.scalar() or 0
-    
-    # Apply sorting
+
     sort_field = getattr(SupportConversation, sort_by, SupportConversation.last_message_at)
     if order == "asc":
         stmt = stmt.order_by(sort_field.asc())
     else:
         stmt = stmt.order_by(sort_field.desc())
-    
-    # Apply pagination
+
     skip = (page - 1) * limit
     stmt = stmt.offset(skip).limit(limit)
     result = await db.execute(stmt)
     conversations = result.scalars().unique().all()
-    
-    # Build response with messages
+
     conversation_list = []
     for conv in conversations:
-        # Get all messages for this conversation
         msg_stmt = select(SupportMessage).filter(
             SupportMessage.conversation_id == conv.id
         ).order_by(SupportMessage.created_at.asc())
         msg_result = await db.execute(msg_stmt)
         messages = msg_result.scalars().all()
-        
-        # Build message responses
+
         message_list = []
         for msg in messages:
             admin = None
@@ -132,21 +143,26 @@ async def list_support_conversations(
                 admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
                 admin_result = await db.execute(admin_stmt)
                 admin = admin_result.scalar_one_or_none()
-            
-            message_list.append(_message_to_response(msg, host=conv.host, admin=admin))
-        
+
+            message_list.append(
+                _message_to_response(msg, host=conv.host, client=conv.client, admin=admin)
+            )
+
         conversation_list.append(SupportConversationResponse(
             id=conv.id,
             host_id=conv.host_id,
             host_name=conv.host.full_name if conv.host else None,
             host_email=conv.host.email if conv.host else None,
+            client_id=conv.client_id,
+            client_name=conv.client.full_name if conv.client else None,
+            client_email=conv.client.email if conv.client else None,
             status=conv.status,
             is_read_by_host=conv.is_read_by_host,
             is_read_by_admin=conv.is_read_by_admin,
             messages=message_list,
             created_at=conv.created_at,
             updated_at=conv.updated_at,
-            last_message_at=conv.last_message_at
+            last_message_at=conv.last_message_at,
         ))
     
     pagination = calculate_pagination(page, limit, total)
@@ -170,35 +186,32 @@ async def get_support_conversation_details(
     Includes all messages in chronological order.
     Marks the conversation as read by admin.
     """
-    stmt = select(SupportConversation).options(joinedload(SupportConversation.host)).filter(
-        SupportConversation.id == conversation_id
-    )
+    stmt = select(SupportConversation).options(
+        joinedload(SupportConversation.host),
+        joinedload(SupportConversation.client),
+    ).filter(SupportConversation.id == conversation_id)
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
-    
+
     if not conversation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Support conversation not found"
+            detail="Support conversation not found",
         )
-    
-    # Get all messages in the conversation
+
     msg_stmt = select(SupportMessage).filter(
         SupportMessage.conversation_id == conversation.id
     ).order_by(SupportMessage.created_at.asc())
     msg_result = await db.execute(msg_stmt)
     messages = msg_result.scalars().all()
-    
-    # Mark host messages as read by admin (since they're viewing the conversation)
+
     for msg in messages:
-        if msg.sender_type == "host" and not msg.is_read:
+        if msg.sender_type in ("host", "client") and not msg.is_read:
             msg.is_read = True
-    
-    # Mark conversation as read by admin
+
     conversation.is_read_by_admin = True
     await db.commit()
-    
-    # Build message responses
+
     message_list = []
     for msg in messages:
         admin = None
@@ -206,21 +219,26 @@ async def get_support_conversation_details(
             admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
             admin_result = await db.execute(admin_stmt)
             admin = admin_result.scalar_one_or_none()
-        
-        message_list.append(_message_to_response(msg, host=conversation.host, admin=admin))
-    
+
+        message_list.append(
+            _message_to_response(msg, host=conversation.host, client=conversation.client, admin=admin)
+        )
+
     return SupportConversationResponse(
         id=conversation.id,
         host_id=conversation.host_id,
         host_name=conversation.host.full_name if conversation.host else None,
         host_email=conversation.host.email if conversation.host else None,
+        client_id=conversation.client_id,
+        client_name=conversation.client.full_name if conversation.client else None,
+        client_email=conversation.client.email if conversation.client else None,
         status=conversation.status,
         is_read_by_host=conversation.is_read_by_host,
         is_read_by_admin=conversation.is_read_by_admin,
         messages=message_list,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
-        last_message_at=conversation.last_message_at
+        last_message_at=conversation.last_message_at,
     )
 
 
@@ -238,45 +256,45 @@ async def respond_to_support_conversation(
     
     Admins can respond to support conversations. The response will be visible to the host.
     """
-    stmt = select(SupportConversation).filter(
-        SupportConversation.id == conversation_id
-    )
+    stmt = select(SupportConversation).options(
+        joinedload(SupportConversation.host),
+        joinedload(SupportConversation.client),
+    ).filter(SupportConversation.id == conversation_id)
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
-    
+
     if not conversation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Support conversation not found"
+            detail="Support conversation not found",
         )
-    
+
     if conversation.status == "closed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot respond to a closed conversation"
+            detail="Cannot respond to a closed conversation",
         )
-    
-    # Create new message
+
     support_message = SupportMessage(
         conversation_id=conversation.id,
         sender_type="admin",
         sender_id=current_admin.id,
         message=request.message,
-        is_read=False  # Host hasn't read it yet
+        is_read=False,
     )
-    
     db.add(support_message)
-    
-    # Update conversation
-    conversation.is_read_by_host = False  # Host needs to read the response
-    conversation.is_read_by_admin = True  # Admin just sent it
+
+    conversation.is_read_by_host = False
+    conversation.is_read_by_admin = True
     conversation.last_message_at = datetime.now(timezone.utc)
     conversation.updated_at = datetime.now(timezone.utc)
-    
+
     await db.commit()
     await db.refresh(support_message)
-    
-    return _message_to_response(support_message, host=conversation.host, admin=current_admin)
+
+    return _message_to_response(
+        support_message, host=conversation.host, client=conversation.client, admin=current_admin
+    )
 
 
 @router.put("/admin/support/conversations/{conversation_id}/close")

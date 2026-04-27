@@ -1,29 +1,34 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models import SupportConversation, SupportMessage, Host
+from app.models import SupportConversation, SupportMessage, Host, Client
 from app.schemas import (
     SupportMessageRequest,
     SupportConversationResponse,
     SupportMessageResponse
 )
-from app.auth import get_current_host
+from app.auth import get_current_host, get_current_client
 
 router = APIRouter()
 
 
-def _message_to_response(db_message: SupportMessage, host: Host = None, admin_name: str = None) -> SupportMessageResponse:
-    """Helper function to convert SupportMessage model to SupportMessageResponse"""
+def _message_to_response(
+    db_message: SupportMessage,
+    host: Host = None,
+    client: Client = None,
+    admin_name: str = None,
+) -> SupportMessageResponse:
     sender_name = None
     if db_message.sender_type == "host" and host:
         sender_name = host.full_name
+    elif db_message.sender_type == "client" and client:
+        sender_name = client.full_name
     elif db_message.sender_type == "admin" and admin_name:
         sender_name = admin_name
-    
+
     return SupportMessageResponse(
         id=db_message.id,
         conversation_id=db_message.conversation_id,
@@ -32,7 +37,7 @@ def _message_to_response(db_message: SupportMessage, host: Host = None, admin_na
         sender_name=sender_name,
         message=db_message.message,
         is_read=db_message.is_read,
-        created_at=db_message.created_at
+        created_at=db_message.created_at,
     )
 
 
@@ -58,12 +63,11 @@ async def send_support_message(
     conversation = result.scalar_one_or_none()
     
     if not conversation:
-        # Create new conversation
         conversation = SupportConversation(
             host_id=current_host.id,
             status="open",
             is_read_by_host=False,
-            is_read_by_admin=False
+            is_read_by_admin=False,
         )
         db.add(conversation)
         await db.commit()
@@ -173,5 +177,134 @@ async def get_support_conversation(
         messages=message_list,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
-        last_message_at=conversation.last_message_at
+        last_message_at=conversation.last_message_at,
+    )
+
+
+# ==================== CLIENT SUPPORT ====================
+
+@router.post("/client/support/messages", response_model=SupportMessageResponse, status_code=status.HTTP_201_CREATED)
+async def client_send_support_message(
+    request: SupportMessageRequest,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Send a support message.
+
+    Creates a conversation thread if one does not exist yet.
+    Each client has a single continuous conversation with the support team.
+    """
+    stmt = select(SupportConversation).filter(
+        SupportConversation.client_id == current_client.id
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
+
+    if not conversation:
+        conversation = SupportConversation(
+            client_id=current_client.id,
+            status="open",
+            is_read_by_host=False,
+            is_read_by_admin=False,
+        )
+        db.add(conversation)
+        await db.commit()
+        await db.refresh(conversation)
+
+    if conversation.status == "closed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot send messages to a closed conversation. Please contact support to reopen.",
+        )
+
+    support_message = SupportMessage(
+        conversation_id=conversation.id,
+        sender_type="client",
+        sender_id=current_client.id,
+        message=request.message,
+        is_read=False,
+    )
+    db.add(support_message)
+
+    conversation.is_read_by_admin = False
+    conversation.is_read_by_host = True
+    conversation.last_message_at = datetime.now(timezone.utc)
+    conversation.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(support_message)
+
+    return _message_to_response(support_message, client=current_client)
+
+
+@router.get("/client/support/conversation", response_model=SupportConversationResponse)
+async def client_get_support_conversation(
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get the support conversation for the authenticated client.
+
+    Returns all messages in chronological order.
+    If no conversation exists yet, returns an empty conversation response.
+    """
+    stmt = select(SupportConversation).filter(
+        SupportConversation.client_id == current_client.id
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
+
+    if not conversation:
+        return SupportConversationResponse(
+            id=0,
+            client_id=current_client.id,
+            client_name=current_client.full_name,
+            client_email=current_client.email,
+            status="open",
+            is_read_by_host=True,
+            is_read_by_admin=True,
+            messages=[],
+            created_at=datetime.now(timezone.utc),
+            updated_at=None,
+            last_message_at=None,
+        )
+
+    msg_stmt = select(SupportMessage).filter(
+        SupportMessage.conversation_id == conversation.id
+    ).order_by(SupportMessage.created_at.asc())
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
+
+    for msg in messages:
+        if msg.sender_type == "admin" and not msg.is_read:
+            msg.is_read = True
+
+    conversation.is_read_by_host = True
+    await db.commit()
+
+    message_list = []
+    for msg in messages:
+        admin_name = None
+        if msg.sender_type == "admin":
+            from app.models import Admin
+            admin_stmt = select(Admin).filter(Admin.id == msg.sender_id)
+            admin_result = await db.execute(admin_stmt)
+            admin = admin_result.scalar_one_or_none()
+            admin_name = admin.full_name if admin else None
+
+        message_list.append(_message_to_response(msg, client=current_client, admin_name=admin_name))
+
+    return SupportConversationResponse(
+        id=conversation.id,
+        client_id=conversation.client_id,
+        client_name=current_client.full_name,
+        client_email=current_client.email,
+        status=conversation.status,
+        is_read_by_host=conversation.is_read_by_host,
+        is_read_by_admin=conversation.is_read_by_admin,
+        messages=message_list,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+        last_message_at=conversation.last_message_at,
     )

@@ -997,24 +997,26 @@ class Notification(Base):
 
 
 class SupportConversation(Base):
-    """Support conversation thread - one per host"""
+    """Support conversation thread - one per host or one per client"""
     __tablename__ = "support_conversations"
 
     id = mapped_column(Integer, primary_key=True, index=True)
-    host_id = mapped_column(Integer, ForeignKey("hosts.id"), nullable=False, unique=True, index=True)  # One conversation per host
-    
+    host_id = mapped_column(Integer, ForeignKey("hosts.id"), nullable=True, index=True)
+    client_id = mapped_column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+
     # Status
     status = mapped_column(String(20), default="open", nullable=False, index=True)  # open, closed
-    is_read_by_host = mapped_column(Boolean, default=False, nullable=False)  # Host has read latest admin message
-    is_read_by_admin = mapped_column(Boolean, default=False, nullable=False)  # Admin has read latest host message
-    
+    is_read_by_host = mapped_column(Boolean, default=False, nullable=False)
+    is_read_by_admin = mapped_column(Boolean, default=False, nullable=False)
+
     # Metadata
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
-    last_message_at = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)  # Last message timestamp
-    
+    last_message_at = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
     # Relationships
     host = relationship("Host", foreign_keys=[host_id])
+    client = relationship("Client", foreign_keys=[client_id])
     messages = relationship("SupportMessage", back_populates="conversation", cascade="all, delete-orphan")
 
 

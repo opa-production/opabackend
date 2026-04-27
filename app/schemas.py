@@ -897,9 +897,12 @@ class SupportMessageResponse(BaseModel):
 class SupportConversationResponse(BaseModel):
     """Support conversation with messages"""
     id: int
-    host_id: int
+    host_id: Optional[int] = None
     host_name: Optional[str] = None
     host_email: Optional[str] = None
+    client_id: Optional[int] = None
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
     status: str  # open, closed
     is_read_by_host: bool
     is_read_by_admin: bool
