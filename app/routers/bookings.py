@@ -519,16 +519,17 @@ async def get_my_bookings(
 async def _client_booking_query(db: AsyncSession, booking_id_param: str, client_id: int):
     """Resolve booking by either numeric id or string booking_id (e.g. BK-ABC12345). Returns booking with client filter."""
     stmt = select(Booking).options(
-        joinedload(Booking.car).joinedload(Car.host)
+        joinedload(Booking.car).joinedload(Car.host),
+        joinedload(Booking.payments),
     ).filter(Booking.client_id == client_id)
-    
+
     if booking_id_param.isdigit():
         stmt = stmt.filter(Booking.id == int(booking_id_param))
     else:
         stmt = stmt.filter(Booking.booking_id == booking_id_param)
-        
+
     result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.unique().scalar_one_or_none()
 
 
 async def _client_booking_for_receipt(db: AsyncSession, booking_id_param: str, client_id: int):
