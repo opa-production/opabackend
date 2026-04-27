@@ -4,9 +4,7 @@
 
 The client must verify a secondary contact (e.g. next of kin) in two steps:
 1. Enter the secondary contact's **phone number** and **full names** (as the client knows them).
-2. Enter the secondary contact's **KRA PIN** — the backend calls Gava Connect (KRA), compares the returned registered name with the entered names, and marks the contact as **verified** or **failed**.
-
-> **KRA PIN format:** Starts with `A` or `P`, followed by 9 digits, ends with any letter. Example: `A012345678B`
+2. Enter the secondary contact's **national ID number** — the backend calls Gava Connect (KRA), gets the officially registered name, compares it with the entered names, and marks the contact as **verified** or **failed**.
 
 ---
 
@@ -46,18 +44,18 @@ All endpoints require the client's JWT in the `Authorization: Bearer <token>` he
 }
 ```
 
-**UI action:** On success, navigate to the KRA PIN entry screen (Step 2).
+**UI action:** On success, navigate to the ID number entry screen (Step 2).
 
 ---
 
-## Step 2 — Verify KRA PIN
+## Step 2 — Verify National ID
 
 **Endpoint:** `POST /client/secondary-contact/verify`
 
 **Request body:**
 ```json
 {
-  "kra_pin": "A012345678B"
+  "id_number": "41789723"
 }
 ```
 
@@ -89,10 +87,10 @@ All endpoints require the client's JWT in the `Authorization: Bearer <token>` he
 }
 ```
 
-**Error — KRA PIN not found / inactive (422):**
+**Error — ID not found / invalid (422):**
 ```json
 {
-  "detail": "Gava Connect: KRA PIN not found."
+  "detail": "Gava Connect: Invalid ID"
 }
 ```
 
@@ -106,9 +104,9 @@ All endpoints require the client's JWT in the `Authorization: Bearer <token>` he
 ### UI logic on response:
 - `status === "verified"` → show success screen, done
 - `status === "failed"` → show `message` and offer two options:
-  - **Try again** — go back to Step 1 (re-enter names, then re-enter KRA PIN)
+  - **Try again** — go back to Step 1 (re-enter names, then re-enter ID)
   - **Skip for now** — dismiss (if verification is optional)
-- `422` error → show the `detail` message (PIN not found), let user re-enter KRA PIN
+- `422` error → show the `detail` message (invalid ID), let user re-enter ID number
 
 ---
 
@@ -123,7 +121,7 @@ Use this on screen load to resume or skip already-completed steps.
 | `status` value | Meaning |
 |---|---|
 | `not_started` | Client has not started yet |
-| `pending` | KRA PIN submitted, lookup in progress (transient — resolves in the same request) |
+| `pending` | ID submitted, lookup in progress (transient — resolves in the same request) |
 | `verified` | Successfully verified |
 | `failed` | Name match failed — client may retry |
 
@@ -141,8 +139,8 @@ Use this on screen load to resume or skip already-completed steps.
   - "Continue" → POST /client/secondary-contact/info
         |
         v (on success)
-[Screen 2: Enter KRA PIN]
-  - KRA PIN input  (hint: e.g. A012345678B)
+[Screen 2: Enter National ID Number]
+  - ID number input
   - "Verify" → POST /client/secondary-contact/verify
         |
         +--- status: verified --→ [Success Screen ✓]
@@ -156,15 +154,15 @@ Use this on screen load to resume or skip already-completed steps.
 
 ## Re-entry Behaviour
 
-Calling `POST /client/secondary-contact/info` **resets** all prior verification data. If the user goes back and enters different names, the previous `verified` status is cleared and they must re-enter the KRA PIN.
+Calling `POST /client/secondary-contact/info` **resets** all prior verification data. If the user goes back and enters different names, the previous `verified` status is cleared and they must re-enter the ID number.
 
 ---
 
 ## Testing Checklist
 
-- [ ] Enter valid phone + names → `status: not_started`, navigate to KRA PIN screen
-- [ ] Enter matching KRA PIN → `status: verified`, show success
-- [ ] Enter KRA PIN whose registered name doesn't match entered names → `status: failed`, show message with retry
-- [ ] Enter non-existent KRA PIN → 422 error with detail message
+- [ ] Enter valid phone + names → `status: not_started`, navigate to ID screen
+- [ ] Enter matching ID number → `status: verified`, show success
+- [ ] Enter ID whose registered name doesn't match entered names → `status: failed`, show message with retry
+- [ ] Enter non-existent/invalid ID → 422 error with detail message
 - [ ] Load status screen when already verified → skip verification screens
 - [ ] Go back and re-enter info → status resets to `not_started`, must re-verify

@@ -1,19 +1,19 @@
 """
-Gava Connect / KRA PIN checker service.
+Gava Connect / KRA PIN checker by ID service.
 
-Fetches an OAuth 2.0 access token (GET with Basic Auth + query param), then
-calls POST /checker/v1/pinbypin with the KRA PIN to retrieve the registered
-name and PIN status.
+Flow:
+  1. GET /v1/token/generate?grant_type=client_credentials  (Basic Auth)
+  2. POST /checker/v1/pin  with {"TaxpayerType": "KE", "TaxpayerID": "<id_number>"}
+     Returns {"TaxpayerPIN": "A000000000I", "TaxpayerName": "JANE ACHIENG OTIENO"}
 
 Environment variables required:
     GAVACONNECT_CONSUMER_KEY
     GAVACONNECT_CONSUMER_SECRET
-    GAVACONNECT_BASE_URL   (default: https://sbx.kra.go.ke  — sandbox)
+    GAVACONNECT_BASE_URL   (default: https://sbx.kra.go.ke — sandbox)
                             production: https://api.kra.go.ke
 """
 import base64
 import logging
-from typing import Optional
 
 import httpx
 
@@ -22,7 +22,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _TOKEN_PATH = "/v1/token/generate"
-_PIN_CHECK_PATH = "/checker/v1/pinbypin"
+_PIN_CHECK_PATH = "/checker/v1/pin"
 
 
 def _require_config() -> None:
@@ -43,7 +43,8 @@ async def _fetch_token(client: httpx.AsyncClient) -> str:
     )
 
     if resp.status_code == 401:
-        raise ValueError("Gava Connect: invalid consumer credentials (401).")
+        data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+        raise ValueError(f"Gava Connect: invalid credentials — {data.get('errorMessage', '401')}")
 
     resp.raise_for_status()
 
@@ -56,17 +57,16 @@ async def _fetch_token(client: httpx.AsyncClient) -> str:
     return token
 
 
-async def check_pin(kra_pin: str) -> dict:
+async def check_id(id_number: str, taxpayer_type: str = "KE") -> dict:
     """
-    Validate a KRA PIN via the Gava Connect PIN checker.
+    Look up a national ID via the Gava Connect PIN Checker by ID.
 
-    Returns a dict with at minimum:
-        name     str  — taxpayer name as registered with KRA
-        kra_pin  str  — the KRA PIN (echoed back)
-        status   str  — e.g. "Active"
+    Returns a dict with:
+        name     str  — TaxpayerName from KRA
+        kra_pin  str  — TaxpayerPIN from KRA
         raw      dict — full API response
 
-    Raises ValueError on API / auth / not-found errors.
+    Raises ValueError on auth / not-found / validation errors.
     """
     _require_config()
 
@@ -79,35 +79,35 @@ async def check_pin(kra_pin: str) -> dict:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            json={"KRAPIN": kra_pin.strip().upper()},
+            json={"TaxpayerType": taxpayer_type, "TaxpayerID": id_number.strip()},
         )
 
-        logger.info(
-            "[GavaConnect] /checker/v1/pinbypin status=%s pin=%s…",
+        logger.warning(
+            "[GavaConnect] /checker/v1/pin status=%s id=%.4s…",
             resp.status_code,
-            kra_pin[:4],
+            id_number,
         )
 
         data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
 
         if resp.status_code == 401:
-            raise ValueError("Gava Connect: token rejected (401). Check credentials.")
+            raise ValueError("Gava Connect: token rejected (401).")
 
-        if resp.status_code == 404 or (data.get("ResponseCode") and data["ResponseCode"] != "23000"):
-            msg = data.get("Message") or data.get("errorMessage") or "KRA PIN not found."
+        # Error responses use ErrorCode / errorCode
+        error_code = data.get("ErrorCode") or data.get("errorCode")
+        if error_code:
+            msg = data.get("ErrorMessage") or data.get("errorMessage") or f"Error {error_code}"
             raise ValueError(f"Gava Connect: {msg}")
 
         resp.raise_for_status()
 
-        pin_data = data.get("PINDATA") or {}
-        name = (pin_data.get("Name") or "").strip()
-        returned_pin = (pin_data.get("KRAPIN") or kra_pin).strip()
-        pin_status = (pin_data.get("StatusOfPIN") or "").strip()
+        name = (data.get("TaxpayerName") or "").strip()
+        kra_pin = (data.get("TaxpayerPIN") or "").strip()
 
         if not name:
-            raise ValueError("Gava Connect returned no name for this KRA PIN.")
+            raise ValueError("Gava Connect returned no name for this ID number.")
 
-        return {"name": name, "kra_pin": returned_pin, "pin_status": pin_status, "raw": data}
+        return {"name": name, "kra_pin": kra_pin, "raw": data}
 
 
 def _name_tokens(name: str) -> set[str]:
