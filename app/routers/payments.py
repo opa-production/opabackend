@@ -24,8 +24,8 @@ from app.models import (
     Withdrawal,
     WithdrawalStatus,
     BookingExtensionRequest,
-    ClientWallet,
-    StellarPaymentTransaction,
+    # ClientWallet,           # Ardena Pay — disabled, replaced by KuvarPay
+    # StellarPaymentTransaction,  # Ardena Pay — disabled, replaced by KuvarPay
 )
 from app.auth import get_current_client
 from app.schemas import (
@@ -49,16 +49,18 @@ from app.services.paystack_payment import (
     async_verify_transaction as paystack_verify,
     verify_webhook_signature as paystack_verify_sig,
 )
-from app.services.stellar_wallet import (
-    get_balances,
-    parse_balances_for_response,
-    send_usdc_payment,
-    send_xlm_payment,
-    ksh_to_usdc,
-    ksh_to_xlm,
-    ksh_to_usd_float,
-    _get_platform_public_key,
-)
+# NOTE: Ardena Pay (Stellar) imports disabled — replaced by KuvarPay crypto payments.
+# Re-enable when building own crypto infrastructure.
+# from app.services.stellar_wallet import (
+#     get_balances,
+#     parse_balances_for_response,
+#     send_usdc_payment,
+#     send_xlm_payment,
+#     ksh_to_usdc,
+#     ksh_to_xlm,
+#     ksh_to_usd_float,
+#     _get_platform_public_key,
+# )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -355,7 +357,9 @@ async def process_payment(
         )
 
 
-@router.post("/client/payments/process-ardena-pay", response_model=ArdenaPayPaymentResponse, status_code=status.HTTP_200_OK)
+# NOTE: Ardena Pay (Stellar USDC/XLM) endpoint disabled — replaced by KuvarPay crypto payments.
+# Re-enable when building own crypto infrastructure.
+# @router.post("/client/payments/process-ardena-pay", response_model=ArdenaPayPaymentResponse, status_code=status.HTTP_200_OK)
 async def process_ardena_pay(
     background_tasks: BackgroundTasks,
     request: ArdenaPayPaymentRequest,
@@ -683,7 +687,8 @@ async def get_kuvarpay_status(
     )
 
 
-@router.get("/client/payments/transactions", response_model=List[StellarTransactionResponse])
+# NOTE: Ardena Pay transactions endpoint disabled — replaced by KuvarPay crypto payments.
+# @router.get("/client/payments/transactions", response_model=List[StellarTransactionResponse])
 async def list_ardena_pay_transactions(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),

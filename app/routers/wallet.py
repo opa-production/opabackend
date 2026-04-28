@@ -72,7 +72,9 @@ def _wallet_to_response(
     )
 
 
-@router.get("/client/wallet", response_model=WalletResponse)
+# NOTE: Ardena Pay wallet endpoints disabled — replaced by KuvarPay crypto payments.
+# Re-enable when building own crypto infrastructure.
+# @router.get("/client/wallet", response_model=WalletResponse)
 async def get_wallet(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
@@ -97,7 +99,7 @@ async def get_wallet(
     return _wallet_to_response(wallet, balance_xlm=balance_xlm, balance_usdc=balance_usdc, include_secret=include_secret)
 
 
-@router.post("/client/wallet", response_model=WalletResponse, status_code=status.HTTP_201_CREATED)
+# @router.post("/client/wallet", response_model=WalletResponse, status_code=status.HTTP_201_CREATED)
 async def create_wallet(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
@@ -140,7 +142,7 @@ async def create_wallet(
     return _wallet_to_response(wallet, balance_xlm=balance_xlm, balance_usdc=balance_usdc, include_secret=include_secret)
 
 
-@router.get("/client/wallet/transactions", response_model=List[StellarTransactionResponse])
+# @router.get("/client/wallet/transactions", response_model=List[StellarTransactionResponse])
 async def list_wallet_transactions(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
@@ -177,7 +179,7 @@ async def list_wallet_transactions(
     ]
 
 
-@router.get("/client/wallet/incoming", response_model=List[IncomingWalletPaymentResponse])
+# @router.get("/client/wallet/incoming", response_model=List[IncomingWalletPaymentResponse])
 async def list_incoming_wallet_payments(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
