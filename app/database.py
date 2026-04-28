@@ -50,7 +50,9 @@ engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
     "pool_size": 20,
-    "max_overflow": 10
+    "max_overflow": 10,
+    "pool_recycle": 60,       # recycle connections every 60s — Neon closes idle connections at 300s
+    "pool_timeout": 30,
 }
 
 # Add SSL context for production database connections
