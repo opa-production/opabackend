@@ -582,19 +582,19 @@ async def create_kuvarpay_session(
             detail=f"Booking is not in pending state. Current status: {booking.status}",
         )
 
-    # Prevent duplicate pending KuvarPay sessions for the same booking
-    existing = await db.execute(
+    # If there's already a pending KuvarPay session, supersede it so the user can retry
+    existing_result = await db.execute(
         select(Payment).filter(
             Payment.booking_id == booking.id,
             Payment.status == PaymentStatus.PENDING,
             Payment.kuvarpay_session_id.isnot(None),
         )
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A KuvarPay checkout session is already pending for this booking.",
-        )
+    existing_payment = existing_result.scalar_one_or_none()
+    if existing_payment:
+        existing_payment.status = PaymentStatus.FAILED
+        existing_payment.result_desc = "Superseded by new checkout session"
+        await db.commit()
 
     try:
         session_data = await create_checkout_session(

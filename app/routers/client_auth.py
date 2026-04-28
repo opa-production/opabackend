@@ -457,6 +457,7 @@ async def update_client_profile(
     current_client.gender = request.gender
     
     await db.commit()
+    await db.refresh(current_client)
     return current_client
 
 
