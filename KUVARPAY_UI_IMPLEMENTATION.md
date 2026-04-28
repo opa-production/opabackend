@@ -67,14 +67,18 @@ Content-Type: application/json
 **Response 201:**
 ```json
 {
-  "session_id": "cs_xxxxxxxxxxxxxxxx",
-  "publishable_key": "pk_live_...",
-  "business_id": "biz_...",
+  "session_id": "cs_112fa537568040d5a282b525a32692ff",
+  "auth_token": "eyJhbGci...",
+  "publishable_key": "rsp_live_...",
+  "business_id": "102a8387-...",
   "booking_id": "BK-ABC12345",
   "amount_ksh": 4500.00,
   "message": "KuvarPay session created. Initialize the checkout widget with session_id."
 }
 ```
+
+> **Important:** Pass **both** `session_id` and `auth_token` to `KuvarPay.openPayment()`.
+> The `auth_token` is a short-lived JWT KuvarPay uses to authenticate the widget session.
 
 ### Poll payment status
 
@@ -220,7 +224,7 @@ If you are using React Native and the KuvarPay SDK is web-only, embed it in a
 ```jsx
 import { WebView } from 'react-native-webview';
 
-function KuvarPayWebView({ sessionId, publishableKey, businessId, onSuccess, onFailed }) {
+function KuvarPayWebView({ sessionId, authToken, publishableKey, businessId, onSuccess, onFailed }) {
   const html = `
     <!DOCTYPE html>
     <html>
@@ -239,7 +243,7 @@ function KuvarPayWebView({ sessionId, publishableKey, businessId, onSuccess, onF
       <script>
         window.addEventListener('load', function () {
           KuvarPay.openPayment(
-            { sessionId: '${sessionId}' },
+            { sessionId: '${sessionId}', authToken: '${authToken}' },
             {
               onSuccess: function (sid) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'success', sessionId: sid }));
