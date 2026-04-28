@@ -146,21 +146,23 @@ async function initKuvarPayCheckout(bookingId, authToken) {
     return;
   }
 
-  const { session_id, amount_ksh } = await res.json();
+  const { session_id, auth_token, amount_ksh } = await res.json();
 
   document.getElementById('crypto-amount').textContent =
     `KES ${amount_ksh.toLocaleString()}`;
 
-  // 2. Mount the inline widget
+  // 2. Open the KuvarPay payment widget with the session
   //    KuvarPay SDK exposes window.KuvarPay after the script loads.
   //    The SDK auto-initialised with your publishable key via the <script> data- attrs.
-  window.KuvarPay.mount({
-    sessionId: session_id,
-    containerId: 'kuvarpay-container',   // id of the mount target div
-    onSuccess: () => onPaymentSuccess(session_id, authToken),
-    onFailure: (err) => onPaymentFailure(err),
-    onExpired: () => onPaymentFailure({ message: 'Session expired. Please try again.' }),
-  });
+  window.KuvarPay.openPayment(
+    { sessionId: session_id, authToken: auth_token },
+    {
+      onSuccess: (sid) => onPaymentSuccess(sid || session_id, authToken),
+      onCancel:  () => onPaymentFailure({ message: 'Payment cancelled.' }),
+      onError:   (err) => onPaymentFailure(err),
+    },
+    { theme: 'light' }   // or 'dark'
+  );
 
   // 3. Start polling as a backup (webhook updates DB; polling catches UI)
   _pollInterval = setInterval(() => pollStatus(session_id, authToken), 4000);
@@ -236,19 +238,21 @@ function KuvarPayWebView({ sessionId, publishableKey, businessId, onSuccess, onF
       <div id="kuvarpay-container"></div>
       <script>
         window.addEventListener('load', function () {
-          KuvarPay.mount({
-            sessionId: '${sessionId}',
-            containerId: 'kuvarpay-container',
-            onSuccess: function () {
-              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'success' }));
+          KuvarPay.openPayment(
+            { sessionId: '${sessionId}' },
+            {
+              onSuccess: function (sid) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'success', sessionId: sid }));
+              },
+              onCancel: function () {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'cancel' }));
+              },
+              onError: function (err) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', error: err }));
+              },
             },
-            onFailure: function (err) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'failure', error: err }));
-            },
-            onExpired: function () {
-              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'expired' }));
-            },
-          });
+            { theme: 'light' }
+          );
         });
       </script>
     </body>

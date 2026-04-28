@@ -2492,10 +2492,11 @@ class KuvarPaySessionRequest(BaseModel):
 class KuvarPaySessionResponse(BaseModel):
     """
     Response from session creation.
-    The frontend uses session_id, publishable_key, and business_id
-    to initialize the KuvarPay inline checkout widget.
+    The frontend passes session_id + auth_token to KuvarPay.openPayment().
+    publishable_key and business_id are used in the SDK script tag.
     """
     session_id: str
+    auth_token: str
     publishable_key: str
     business_id: str
     booking_id: str

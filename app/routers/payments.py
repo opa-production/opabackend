@@ -606,11 +606,11 @@ async def create_kuvarpay_session(
             detail="Failed to create KuvarPay checkout session. Please try again.",
         )
 
-    session_id = (
-        session_data.get("sessionId")
-        or session_data.get("session_id")
-        or session_data.get("id")
-    )
+    # KuvarPay wraps the session inside a `data` key
+    _data = session_data.get("data") or session_data
+    session_id = _data.get("sessionId") or _data.get("session_id") or _data.get("id")
+    auth_token = _data.get("authToken") or _data.get("auth_token") or ""
+
     if not session_id:
         logger.error("[KUVARPAY] Session response missing id: %s", session_data)
         raise HTTPException(
@@ -624,7 +624,7 @@ async def create_kuvarpay_session(
         amount=float(booking.total_price),
         status=PaymentStatus.PENDING,
         kuvarpay_session_id=str(session_id),
-        kuvarpay_reference=session_data.get("reference") or f"ARDENA-{booking.booking_id}",
+        kuvarpay_reference=_data.get("reference") or f"ARDENA-{booking.booking_id}",
         result_desc="KuvarPay session created",
     )
     db.add(payment)
@@ -638,6 +638,7 @@ async def create_kuvarpay_session(
 
     return KuvarPaySessionResponse(
         session_id=str(session_id),
+        auth_token=auth_token,
         publishable_key=_cfg.KUVARPAY_PUBLISHABLE_KEY,
         business_id=_cfg.KUVARPAY_BUSINESS_ID,
         booking_id=str(booking.booking_id),
