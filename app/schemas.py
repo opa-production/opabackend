@@ -2482,6 +2482,37 @@ class PaymentStatusResponse(BaseModel):
         from_attributes = True
 
 
+class KuvarPaySessionRequest(BaseModel):
+    """Request to create a KuvarPay crypto checkout session for a booking."""
+    booking_id: Union[str, int] = Field(..., description="Booking ID (e.g. 'BK-ABC12345') or numeric id", alias="bookingId")
+
+    model_config = {"populate_by_name": True}
+
+
+class KuvarPaySessionResponse(BaseModel):
+    """
+    Response from session creation.
+    The frontend uses session_id, publishable_key, and business_id
+    to initialize the KuvarPay inline checkout widget.
+    """
+    session_id: str
+    publishable_key: str
+    business_id: str
+    booking_id: str
+    amount_ksh: float
+    message: str = "KuvarPay session created. Initialize the checkout widget with session_id."
+
+
+class KuvarPayStatusResponse(BaseModel):
+    """Poll the status of a KuvarPay payment by session_id."""
+    session_id: str
+    booking_id: str
+    status: PaymentStatusEnum
+    amount_ksh: float
+    message: Optional[str] = None
+    paid_at: Optional[datetime] = None
+
+
 class MpesaStkPushRequest(BaseModel):
     """Internal schema for M-Pesa STK Push request"""
     BusinessShortCode: str

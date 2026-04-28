@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     PAYSTACK_SECRET_KEY: Optional[str] = None
     PAYSTACK_CALLBACK_BASE_URL: Optional[str] = None   # e.g. https://api.ardena.xyz/api/v1
 
+    # KuvarPay crypto payments
+    KUVARPAY_SECRET_KEY: Optional[str] = None          # Private key — backend only
+    KUVARPAY_PUBLISHABLE_KEY: Optional[str] = None     # Publishable key — safe to send to frontend
+    KUVARPAY_BUSINESS_ID: Optional[str] = None         # Business ID from KuvarPay dashboard
+    KUVARPAY_WEBHOOK_SECRET: Optional[str] = None      # Webhook signing secret from KuvarPay dashboard
+
     # Dojah KYC (host + client verification)
     DOJAH_APP_ID: Optional[str] = None           # App ID (used as AppId header)
     DOJAH_SECRET_KEY: Optional[str] = None       # Secret key (Authorization header)

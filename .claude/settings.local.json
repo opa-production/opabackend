@@ -7,7 +7,9 @@
       "Bash(xargs grep *)",
       "Bash(xargs wc *)",
       "Bash(xargs -I {} basename {})",
-      "Bash(awk *)"
+      "Bash(awk *)",
+      "WebFetch(domain:developers.kuvarpay.com)",
+      "Bash(python -c ' *)"
     ]
   }
 }

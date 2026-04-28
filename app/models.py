@@ -95,6 +95,9 @@ class Payment(Base):
     paystack_card_brand: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "visa", "mastercard"
     # Ardena Pay: Stellar transaction hash when payment was made via USDC
     stellar_tx_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # KuvarPay: crypto payment via KuvarPay checkout
+    kuvarpay_session_id: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    kuvarpay_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)

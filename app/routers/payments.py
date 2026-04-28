@@ -37,6 +37,9 @@ from app.schemas import (
     ArdenaPayPaymentRequest,
     ArdenaPayPaymentResponse,
     StellarTransactionResponse,
+    KuvarPaySessionRequest,
+    KuvarPaySessionResponse,
+    KuvarPayStatusResponse,
 )
 from app.services.mpesa_stk_push import sendStkPush
 from app.services.host_subscription_payment import process_host_subscription_mpesa_callback
@@ -522,6 +525,156 @@ async def process_ardena_pay(
         message="Payment successful. Your booking is now confirmed.",
         paid_at=datetime.now(timezone.utc),
         booking=BookingResponse(**booking_to_response(final_booking)),
+    )
+
+
+@router.post(
+    "/client/payments/kuvarpay/create-session",
+    response_model=KuvarPaySessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_kuvarpay_session(
+    request: KuvarPaySessionRequest,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a KuvarPay crypto checkout session for a pending booking.
+
+    Returns `session_id`, `publishable_key`, and `business_id` so the frontend
+    can mount the KuvarPay inline checkout widget.  Payment confirmation is
+    handled asynchronously via the KuvarPay webhook
+    (`POST /api/v1/kuvarpay/webhook`).
+    """
+    from app.config import settings as _cfg
+    from app.services.kuvarpay import create_checkout_session
+
+    if not _cfg.KUVARPAY_SECRET_KEY or not _cfg.KUVARPAY_PUBLISHABLE_KEY or not _cfg.KUVARPAY_BUSINESS_ID:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="KuvarPay is not configured. Contact support.",
+        )
+
+    # Resolve booking
+    if isinstance(request.booking_id, int) or (
+        isinstance(request.booking_id, str) and request.booking_id.isdigit()
+    ):
+        b_stmt = select(Booking).filter(
+            Booking.client_id == current_client.id,
+            Booking.id == int(request.booking_id),
+        )
+    else:
+        b_stmt = select(Booking).filter(
+            Booking.client_id == current_client.id,
+            Booking.booking_id == request.booking_id,
+        )
+    b_result = await db.execute(b_stmt)
+    booking = b_result.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    if booking.status != BookingStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Booking is not in pending state. Current status: {booking.status}",
+        )
+
+    # Prevent duplicate pending KuvarPay sessions for the same booking
+    existing = await db.execute(
+        select(Payment).filter(
+            Payment.booking_id == booking.id,
+            Payment.status == PaymentStatus.PENDING,
+            Payment.kuvarpay_session_id.isnot(None),
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A KuvarPay checkout session is already pending for this booking.",
+        )
+
+    try:
+        session_data = await create_checkout_session(
+            amount_ksh=float(booking.total_price),
+            booking_id=str(booking.booking_id),
+            client_email=current_client.email,
+            client_name=current_client.full_name,
+        )
+    except Exception as exc:
+        logger.exception("[KUVARPAY] Failed to create session for booking=%s: %s", booking.booking_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create KuvarPay checkout session. Please try again.",
+        )
+
+    session_id = session_data.get("id") or session_data.get("session_id") or session_data.get("sessionId")
+    if not session_id:
+        logger.error("[KUVARPAY] Session response missing id: %s", session_data)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Invalid response from KuvarPay. Please try again.",
+        )
+
+    payment = Payment(
+        booking_id=booking.id,
+        client_id=current_client.id,
+        amount=float(booking.total_price),
+        status=PaymentStatus.PENDING,
+        kuvarpay_session_id=str(session_id),
+        kuvarpay_reference=session_data.get("reference") or f"ARDENA-{booking.booking_id}",
+        result_desc="KuvarPay session created",
+    )
+    db.add(payment)
+    await db.commit()
+
+    logger.info(
+        "[KUVARPAY] Session created booking=%s session_id=%s",
+        booking.booking_id,
+        session_id,
+    )
+
+    return KuvarPaySessionResponse(
+        session_id=str(session_id),
+        publishable_key=_cfg.KUVARPAY_PUBLISHABLE_KEY,
+        business_id=_cfg.KUVARPAY_BUSINESS_ID,
+        booking_id=str(booking.booking_id),
+        amount_ksh=float(booking.total_price),
+    )
+
+
+@router.get(
+    "/client/payments/kuvarpay/status/{session_id}",
+    response_model=KuvarPayStatusResponse,
+)
+async def get_kuvarpay_status(
+    session_id: str,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Poll the status of a KuvarPay payment session.
+    The frontend can call this every few seconds after the user has submitted
+    payment in the inline widget, until status is `completed` or `failed`.
+    """
+    result = await db.execute(
+        select(Payment)
+        .options(joinedload(Payment.booking))
+        .filter(
+            Payment.kuvarpay_session_id == session_id,
+            Payment.client_id == current_client.id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    paid_at = payment.updated_at if payment.status == PaymentStatus.COMPLETED else None
+    return KuvarPayStatusResponse(
+        session_id=session_id,
+        booking_id=str(payment.booking.booking_id) if payment.booking else "",
+        status=PaymentStatusEnum(payment.status),
+        amount_ksh=payment.amount,
+        message=payment.result_desc,
+        paid_at=paid_at,
     )
 
 

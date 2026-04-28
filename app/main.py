@@ -146,6 +146,7 @@ from app.routers import (
     client_emergency as client_emergency_router,
     wishlist as wishlist_router,
     secondary_contact as secondary_contact_router,
+    kuvarpay_webhook as kuvarpay_webhook_router,
 )
 from app.admin import (
     auth as admin_auth,
@@ -257,6 +258,7 @@ app.include_router(client_emergency_router.router, prefix="/api/v1", tags=["Clie
 app.include_router(wishlist_router.router, prefix="/api/v1", tags=["Client Wishlist"])
 app.include_router(secondary_contact_router.router, prefix="/api/v1", tags=["Secondary Contact"])
 app.include_router(payments.router, prefix="/api/v1", tags=["Payments"])
+app.include_router(kuvarpay_webhook_router.router, prefix="/api/v1", tags=["KuvarPay Webhook"])
 app.include_router(wallet_router.router, prefix="/api/v1", tags=["Ardena Pay"])
 app.include_router(media.router, prefix="/api/v1", tags=["Media Upload"])
 app.include_router(car_ratings.router, prefix="/api/v1", tags=["Car Ratings"])
