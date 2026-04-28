@@ -13,7 +13,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-KUVARPAY_BASE_URL = "https://pay.kuvarpay.com"
+KUVARPAY_BASE_URL = "https://payment.kuvarpay.com"
 
 
 async def create_checkout_session(
@@ -24,12 +24,13 @@ async def create_checkout_session(
 ) -> dict:
     """
     Create a KuvarPay checkout session via the KuvarPay REST API.
-    Returns the full session object (must contain at least `id`).
+    Returns the full session object (contains sessionId, status, authToken).
     """
     payload: dict = {
         "amount": round(amount_ksh, 2),
         "currency": "KES",
-        "reference": f"ARDENA-{booking_id}",
+        "description": f"Ardena car booking {booking_id}",
+        "callbackUrl": f"https://api.ardena.xyz/api/v1/kuvarpay/webhook",
         "metadata": {
             "booking_id": booking_id,
             "platform": "ardena",
@@ -41,11 +42,12 @@ async def create_checkout_session(
     headers = {
         "Authorization": f"Bearer {settings.KUVARPAY_SECRET_KEY}",
         "Content-Type": "application/json",
+        "X-Business-Id": settings.KUVARPAY_BUSINESS_ID or "",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
-            f"{KUVARPAY_BASE_URL}/api/v1/checkout/sessions",
+            f"{KUVARPAY_BASE_URL}/api/v1/checkout-sessions",
             json=payload,
             headers=headers,
         )
@@ -55,10 +57,13 @@ async def create_checkout_session(
 
 async def get_checkout_session(session_id: str) -> dict:
     """Fetch the current state of a KuvarPay checkout session."""
-    headers = {"Authorization": f"Bearer {settings.KUVARPAY_SECRET_KEY}"}
+    headers = {
+        "Authorization": f"Bearer {settings.KUVARPAY_SECRET_KEY}",
+        "X-Business-Id": settings.KUVARPAY_BUSINESS_ID or "",
+    }
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
-            f"{KUVARPAY_BASE_URL}/api/v1/checkout/sessions/{session_id}",
+            f"{KUVARPAY_BASE_URL}/api/v1/checkout-sessions/{session_id}",
             headers=headers,
         )
         resp.raise_for_status()

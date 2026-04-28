@@ -9,7 +9,12 @@
       "Bash(xargs -I {} basename {})",
       "Bash(awk *)",
       "WebFetch(domain:developers.kuvarpay.com)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:unpkg.com)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "WebSearch"
     ]
   }
 }

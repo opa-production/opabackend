@@ -164,11 +164,13 @@ async def _get_pending_payment(db: AsyncSession, session_id: str) -> Payment | N
 
 def _extract_session_id(payload: dict) -> str | None:
     """Extract the session ID from various KuvarPay payload shapes."""
-    # Try common locations KuvarPay may use
     return (
-        payload.get("id")
+        payload.get("sessionId")
         or payload.get("session_id")
+        or payload.get("id")
+        or (payload.get("checkout_session") or {}).get("sessionId")
         or (payload.get("checkout_session") or {}).get("id")
+        or (payload.get("data") or {}).get("sessionId")
         or (payload.get("data") or {}).get("id")
     )
 

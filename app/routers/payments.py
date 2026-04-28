@@ -606,7 +606,11 @@ async def create_kuvarpay_session(
             detail="Failed to create KuvarPay checkout session. Please try again.",
         )
 
-    session_id = session_data.get("id") or session_data.get("session_id") or session_data.get("sessionId")
+    session_id = (
+        session_data.get("sessionId")
+        or session_data.get("session_id")
+        or session_data.get("id")
+    )
     if not session_id:
         logger.error("[KUVARPAY] Session response missing id: %s", session_data)
         raise HTTPException(
