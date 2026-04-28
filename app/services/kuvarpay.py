@@ -51,6 +51,13 @@ async def create_checkout_session(
             json=payload,
             headers=headers,
         )
+        if not resp.is_success:
+            logger.error(
+                "[KUVARPAY] %s %s — response body: %s",
+                resp.status_code,
+                resp.url,
+                resp.text,
+            )
         resp.raise_for_status()
         return resp.json()
 
