@@ -455,13 +455,8 @@ async def create_booking(
             current_client.mobile_number, _car_label, _start
         ))
 
-    # Load relationships for response
-    result = await db.execute(
-        select(Booking).options(
-            joinedload(Booking.car).joinedload(Car.host)
-        ).filter(Booking.id == booking.id)
-    )
-    booking = result.scalar_one_or_none()
+    # Attach already-loaded car (with host) so no extra round-trip is needed
+    booking.car = car
 
     return booking_to_response(booking)
 

@@ -1,9 +1,13 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
+from sqlalchemy import event
 from app.config import settings
 import os
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import ssl
+import logging
+
+_db_logger = logging.getLogger(__name__)
 
 # PostgreSQL database URL configuration
 # Priority: TEST_DATABASE_URL (if TEST_MODE) > DATABASE_URL
@@ -65,6 +69,14 @@ if "postgresql+asyncpg://" in SQLALCHEMY_DATABASE_URL:
 
 engine = create_async_engine(SQLALCHEMY_DATABASE_URL, **engine_kwargs)
 
+
+@event.listens_for(engine.sync_engine, "handle_error")
+def _handle_db_error(context):
+    # Mark the connection as needing replacement on any asyncpg disconnect error
+    if context.is_disconnect:
+        _db_logger.warning("DB disconnect detected — invalidating connection")
+
+
 # Create a configured "Session" class
 SessionLocal = async_sessionmaker(
     bind=engine,
@@ -73,6 +85,7 @@ SessionLocal = async_sessionmaker(
 )
 
 Base = declarative_base()
+
 
 async def get_db():
     """Dependency to get database session"""
