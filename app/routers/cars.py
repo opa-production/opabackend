@@ -501,6 +501,17 @@ async def create_car_basics(
             )
         current_host.city = selected_city
     
+    # 10 Car Limit for all hosts (Launch Phase)
+    car_count_result = await db.execute(
+        select(func.count(Car.id)).where(Car.host_id == current_host.id)
+    )
+    car_count = car_count_result.scalar() or 0
+    if car_count >= 10:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You have reached the limit of 10 car listings. Please contact support to increase your limit.",
+        )
+
     # Create new car record
     db_car = Car(
         host_id=current_host.id,

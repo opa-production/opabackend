@@ -121,46 +121,27 @@ async def get_my_subscription(
     )
 
 
-@router.post(
-    "/host/subscription/trial",
-    response_model=HostTrialActivateResponse,
-    status_code=status.HTTP_200_OK,
-)
-async def activate_host_free_trial(
-    current_host: Host = Depends(get_current_host),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Activate the one-time 30-day free trial of the **starter** plan.
-
-    - Only available to hosts who have never used the trial before.
-    - Only available when currently on the **free** plan.
-    - No payment required — activates immediately.
-    - After the trial expires the host returns to the free plan unless they subscribe.
-    """
-    result = await db.execute(select(Host).where(Host.id == current_host.id))
-    host = result.scalar_one_or_none()
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
-
-    try:
-        expires_at, days = await activate_free_trial(db, host)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
-
-    return HostTrialActivateResponse(
-        message=f"Your {days}-day free trial of the Starter plan is now active. Enjoy!",
-        plan="starter",
-        expires_at=expires_at,
-        days_granted=days,
-    )
+# @router.post(
+#     "/host/subscription/trial",
+#     response_model=HostTrialActivateResponse,
+#     status_code=status.HTTP_200_OK,
+# )
+# async def activate_host_free_trial(
+#     current_host: Host = Depends(get_current_host),
+#     db: AsyncSession = Depends(get_db),
+# ):
+#     """
+#     Activate the one-time 30-day free trial of the **starter** plan.
+#     """
+#     raise HTTPException(
+#         status_code=status.HTTP_403_FORBIDDEN,
+#         detail="The free trial is currently disabled."
+#     )
 
 
 @router.post(
     "/host/subscription/checkout",
-    response_model=HostSubscriptionCheckoutResponse,
+    # response_model=HostSubscriptionCheckoutResponse,
     status_code=status.HTTP_200_OK,
 )
 async def host_subscription_checkout(
@@ -169,92 +150,14 @@ async def host_subscription_checkout(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Start M-Pesa STK Push for **starter** or **premium** subscription (Payhero, same as bookings).
-
-    After success, poll:
-    `GET /api/v1/host/subscription/payment-status?checkout_request_id=<CheckoutRequestID>`
+    Start M-Pesa STK Push for **starter** or **premium** subscription.
+    Paid plans are currently disabled for the launch phase.
     """
-    plan = body.plan.value
-    try:
-        amount, duration_days = get_paid_plan_details(plan)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if amount <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid plan price (check HOST_SUB_* env vars).",
-        )
-
-    # One in-window pending STK per host (server auto-expires after HOST_SUB_STK_PENDING_WINDOW_SECONDS)
-    existing = await get_active_pending_subscription_payment(db, current_host.id)
-    if existing:
-        sec = pending_subscription_seconds_remaining(existing)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "A subscription payment is already in progress. Approve on your phone, "
-                f"or wait about {sec} second(s) to try again."
-            ),
-        )
-
-    pending_ref = f"PENDING-{uuid.uuid4().hex}"
-    rec = HostSubscriptionPayment(
-        host_id=current_host.id,
-        plan=plan,
-        amount_ksh=float(amount),
-        duration_days=duration_days,
-        external_reference=pending_ref,
-        status="pending",
-    )
-    db.add(rec)
-    await db.flush()
-    rec.external_reference = f"H-SUB-{rec.id}"
-    await db.commit()
-    await db.refresh(rec)
-
-    phone = _normalize_mpesa_phone(body.phone_number)
-    amount_str = str(int(amount))
-
-    logger.info(
-        "[HOST SUB STK] host_id=%s plan=%s amount=%s ref=%s phone=%s",
-        current_host.id,
-        plan,
-        amount_str,
-        rec.external_reference,
-        phone[:5] + "***",
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Paid subscription plans are currently disabled."
     )
 
-    mpesa_response = await sendStkPush(
-        amount=amount_str,
-        PhoneNumber=phone,
-        AccountReference=rec.external_reference,
-    )
-
-    if mpesa_response is None or mpesa_response.get("ResponseCode") != "0":
-        rec.status = "failed"
-        rec.result_desc = (
-            (mpesa_response or {}).get("ResponseDescription", "STK failed")
-            if mpesa_response
-            else "No response from M-Pesa"
-        )
-        await db.commit()
-        err = rec.result_desc or "M-Pesa STK failed"
-        raise HTTPException(status_code=400, detail=err)
-
-    checkout_id = mpesa_response.get("CheckoutRequestID")
-    rec.checkout_request_id = checkout_id
-    await db.commit()
-    await invalidate_host_cache_namespaces(current_host.id, ["host-subscription-me"])
-
-    return HostSubscriptionCheckoutResponse(
-        message="M-Pesa STK Push sent. Approve on your phone to activate your subscription.",
-        plan=plan,
-        amount_kes=int(amount),
-        checkout_request_id=checkout_id,
-        external_reference=rec.external_reference,
-        stk_pending_window_seconds=stk_pending_window_seconds(),
-    )
 
 
 @router.get("/host/subscription/payment-status", response_model=HostSubscriptionPaymentStatusResponse)
@@ -310,7 +213,7 @@ async def host_subscription_payment_status(
 
 @router.post(
     "/host/subscription/checkout/card",
-    response_model=HostSubscriptionCardCheckoutResponse,
+    # response_model=HostSubscriptionCardCheckoutResponse,
     status_code=status.HTTP_200_OK,
 )
 async def host_subscription_card_checkout(
@@ -320,108 +223,13 @@ async def host_subscription_card_checkout(
 ):
     """
     Start a Paystack hosted card checkout for **starter** or **premium** subscription.
-
-    No card details are collected or stored by us — the host is redirected to Paystack's
-    secure hosted page.  After payment the host is returned to the host app via
-    `HOST_FRONTEND_URL` (configured in server env).
-
-    After calling this endpoint:
-    1. Open `authorization_url` in a browser / in-app WebView.
-    2. Poll `GET /host/subscription/card-status?paystack_reference=<ref>` until status is
-       `completed` or `failed`.
+    Paid plans are currently disabled for the launch phase.
     """
-    callback_base = os.getenv("PAYSTACK_CALLBACK_BASE_URL", "").rstrip("/")
-    if not callback_base:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Card payment is not configured on this server (PAYSTACK_CALLBACK_BASE_URL missing).",
-        )
-
-    plan = body.plan.value
-    try:
-        amount, duration_days = get_paid_plan_details(plan)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid plan price (check HOST_SUB_* env vars).")
-
-    result = await db.execute(select(Host).where(Host.id == current_host.id))
-    host = result.scalar_one_or_none()
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
-
-    # One pending card checkout at a time
-    existing = await get_pending_paystack_host_subscription(db, host.id)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "A card checkout is already in progress. "
-                "Complete it or wait a moment, then try again."
-            ),
-        )
-
-    # Create the payment record first so we have an id for the reference
-    pending_ref = f"INIT-{secrets.token_hex(8)}"
-    rec = HostSubscriptionPayment(
-        host_id=host.id,
-        plan=plan,
-        amount_ksh=float(amount),
-        duration_days=duration_days,
-        payment_method="card",
-        external_reference=pending_ref,
-        status="pending",
-    )
-    db.add(rec)
-    await db.flush()
-
-    paystack_ref = f"{CARD_REF_PREFIX}{rec.id}-{secrets.token_hex(4)}"
-    rec.external_reference = paystack_ref
-    await db.commit()
-    await db.refresh(rec)
-
-    callback_url = f"{callback_base}/paystack/host-callback"
-    ps_result = paystack_initialize(
-        email=host.email,
-        amount_kes=float(amount),
-        reference=paystack_ref,
-        callback_url=callback_url,
-        metadata={
-            "host_id": host.id,
-            "plan": plan,
-            "sub_payment_id": rec.id,
-        },
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Paid subscription plans are currently disabled."
     )
 
-    if ps_result.get("status") != "success":
-        rec.status = "failed"
-        rec.result_desc = ps_result.get("message", "Paystack initialization failed")
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=ps_result.get("message", "Paystack initialization failed"),
-        )
-
-    rec.paystack_reference = ps_result["reference"]
-    await db.commit()
-    await invalidate_host_cache_namespaces(host.id, ["host-subscription-me"])
-
-    logger.info(
-        "[HOST SUB CARD] Initialized plan=%s amount=%s ref=%s host_id=%s",
-        plan, amount, rec.paystack_reference, host.id,
-    )
-
-    return HostSubscriptionCardCheckoutResponse(
-        message=(
-            "Open the authorization_url to complete payment. "
-            "Poll /host/subscription/card-status?paystack_reference=<ref> for status."
-        ),
-        plan=plan,
-        amount_kes=int(amount),
-        paystack_reference=rec.paystack_reference,
-        authorization_url=ps_result["authorization_url"],
-    )
 
 
 @router.get(

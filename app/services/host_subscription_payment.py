@@ -42,46 +42,47 @@ def _ensure_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def get_subscription_plan_catalog() -> list[dict[str, Any]]:
-    """Public catalog: free + paid tiers (prices from env)."""
-    starter_price = _int_env("HOST_SUB_STARTER_PRICE_KES", 3500)
-    premium_price = _int_env("HOST_SUB_PREMIUM_PRICE_KES", 6500)
-    starter_days = _int_env("HOST_SUB_STARTER_DURATION_DAYS", 30)
-    premium_days = _int_env("HOST_SUB_PREMIUM_DURATION_DAYS", 30)
+    """Public catalog: free tier only for launch phase."""
+    # starter_price = _int_env("HOST_SUB_STARTER_PRICE_KES", 3500)
+    # premium_price = _int_env("HOST_SUB_PREMIUM_PRICE_KES", 6500)
+    # starter_days = _int_env("HOST_SUB_STARTER_DURATION_DAYS", 30)
+    # premium_days = _int_env("HOST_SUB_PREMIUM_DURATION_DAYS", 30)
 
     return [
         {
             "code": "free",
             "name": "Free",
-            "description": "Default plan — list and operate with standard limits.",
+            "description": "Default plan — list up to 10 cars and operate with standard limits.",
             "price_kes": 0,
             "duration_days": 0,
             "features": [
                 "No monthly fee",
                 "Standard host features",
+                "List up to 10 cars",
             ],
         },
-        {
-            "code": "starter",
-            "name": "Starter",
-            "description": "Paid starter tier for growing hosts.",
-            "price_kes": starter_price,
-            "duration_days": starter_days,
-            "features": [
-                f"KES {starter_price:,} per {starter_days} days",
-                "Unlock starter benefits in app",
-            ],
-        },
-        {
-            "code": "premium",
-            "name": "Premium",
-            "description": "Full premium host subscription.",
-            "price_kes": premium_price,
-            "duration_days": premium_days,
-            "features": [
-                f"KES {premium_price:,} per {premium_days} days",
-                "Unlock premium benefits in app",
-            ],
-        },
+        # {
+        #     "code": "starter",
+        #     "name": "Starter",
+        #     "description": "Paid starter tier for growing hosts.",
+        #     "price_kes": starter_price,
+        #     "duration_days": starter_days,
+        #     "features": [
+        #         f"KES {starter_price:,} per {starter_days} days",
+        #         "Unlock starter benefits in app",
+        #     ],
+        # },
+        # {
+        #     "code": "premium",
+        #     "name": "Premium",
+        #     "description": "Full premium host subscription.",
+        #     "price_kes": premium_price,
+        #     "duration_days": premium_days,
+        #     "features": [
+        #         f"KES {premium_price:,} per {premium_days} days",
+        #         "Unlock premium benefits in app",
+        #     ],
+        # },
     ]
 
 
@@ -157,18 +158,20 @@ def pending_subscription_seconds_remaining(payment: HostSubscriptionPayment) -> 
 
 def get_paid_plan_details(plan: str) -> Tuple[int, int]:
     """Return (price_kes, duration_days) for starter or premium."""
-    plan = (plan or "").lower().strip()
-    if plan == "starter":
-        return (
-            _int_env("HOST_SUB_STARTER_PRICE_KES", 3500),
-            _int_env("HOST_SUB_STARTER_DURATION_DAYS", 30),
-        )
-    if plan == "premium":
-        return (
-            _int_env("HOST_SUB_PREMIUM_PRICE_KES", 6500),
-            _int_env("HOST_SUB_PREMIUM_DURATION_DAYS", 30),
-        )
-    raise ValueError(f"Unknown paid plan: {plan}")
+    # Paid plans disabled for launch phase
+    raise ValueError("Paid plans are currently disabled.")
+    # plan = (plan or "").lower().strip()
+    # if plan == "starter":
+    #     return (
+    #         _int_env("HOST_SUB_STARTER_PRICE_KES", 3500),
+    #         _int_env("HOST_SUB_STARTER_DURATION_DAYS", 30),
+    #     )
+    # if plan == "premium":
+    #     return (
+    #         _int_env("HOST_SUB_PREMIUM_PRICE_KES", 6500),
+    #         _int_env("HOST_SUB_PREMIUM_DURATION_DAYS", 30),
+    #     )
+    # raise ValueError(f"Unknown paid plan: {plan}")
 
 
 def _parse_h_sub_ref(external_reference: Optional[str]) -> Optional[int]:
@@ -184,32 +187,24 @@ def _parse_h_sub_ref(external_reference: Optional[str]) -> Optional[int]:
 
 
 def host_paid_subscription_active(host: Host, now: Optional[datetime] = None) -> bool:
-    now = now or datetime.now(timezone.utc)
-    if (host.subscription_plan or "free").lower() == "free":
-        return False
-    exp = _ensure_aware_utc(host.subscription_expires_at)
-    if not exp:
-        return False
-    return exp > now
+    return False # Paid plans disabled
+    # now = now or datetime.now(timezone.utc)
+    # if (host.subscription_plan or "free").lower() == "free":
+    #     return False
+    # exp = _ensure_aware_utc(host.subscription_expires_at)
+    # if not exp:
+    #     return False
+    # return exp > now
 
 
 def host_trial_available(host: Host) -> bool:
-    """True if the host has never activated a trial and is currently on the free plan."""
-    if getattr(host, "free_trial_activated_at", None) is not None:
-        return False
-    return (host.subscription_plan or "free").lower() == "free"
+    """Free trial disabled for launch phase."""
+    return False
 
 
 def host_is_on_trial(host: Host, now: Optional[datetime] = None) -> bool:
-    """True if the host is currently in an active free-trial period."""
-    trial_at = getattr(host, "free_trial_activated_at", None)
-    if not trial_at:
-        return False
-    now = now or datetime.now(timezone.utc)
-    exp = _ensure_aware_utc(host.subscription_expires_at)
-    if not exp or exp <= now:
-        return False
-    return (host.subscription_plan or "free").lower() != "free"
+    """Free trial disabled for launch phase."""
+    return False
 
 
 def free_trial_duration_days() -> int:
@@ -217,39 +212,9 @@ def free_trial_duration_days() -> int:
 
 
 async def activate_free_trial(db: AsyncSession, host: Host) -> Tuple[datetime, int]:
-    """
-    Grant the host a one-time free trial of the starter plan.
-    Returns (expires_at, days_granted).
-    Raises ValueError if the trial has already been used or if the host is on a paid plan.
-    """
-    if getattr(host, "free_trial_activated_at", None) is not None:
-        raise ValueError("Your free trial has already been used.")
+    """Free trial disabled for launch phase."""
+    raise ValueError("The free trial is currently disabled.")
 
-    now = datetime.now(timezone.utc)
-    plan = (host.subscription_plan or "free").lower()
-    if plan != "free":
-        exp = _ensure_aware_utc(host.subscription_expires_at)
-        if exp and exp > now:
-            raise ValueError(
-                f"You already have an active {plan} plan. "
-                "The free trial is only available to hosts on the free plan."
-            )
-
-    days = free_trial_duration_days()
-    expires_at = now + timedelta(days=days)
-
-    host.subscription_plan = "starter"
-    host.subscription_expires_at = expires_at
-    host.free_trial_activated_at = now
-    await db.commit()
-    await db.refresh(host)
-
-    logger.info(
-        "[HOST TRIAL] host_id=%s activated free trial — starter until %s",
-        host.id,
-        expires_at.isoformat(),
-    )
-    return expires_at, days
 
 
 def _payhero_subscription_sync_enabled() -> bool:
