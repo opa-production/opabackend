@@ -35,8 +35,8 @@ from app.services import dojah_kyc as dojah
 
 
 def _require_dojah_config() -> None:
-    """Raise 503 if Dojah API keys are not yet configured."""
-    if not settings.DOJAH_APP_ID or not settings.DOJAH_SECRET_KEY:
+    """Raise 503 if Dojah client KYC keys are not yet configured."""
+    if not settings.DOJAH_CLIENT_APP_ID or not settings.DOJAH_CLIENT_WIDGET_ID or not settings.DOJAH_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Identity verification is not yet available. Please try again later.",
@@ -65,7 +65,9 @@ async def client_kyc_lookup(
     """
     _require_dojah_config()
     try:
-        result = await dojah.lookup_government_id(body.id_type, body.id_number, body.country)
+        result = await dojah.lookup_government_id(
+            body.id_type, body.id_number, body.country, app_id=settings.DOJAH_CLIENT_APP_ID
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -114,7 +116,7 @@ async def client_kyc_initialize(
     """
     _require_dojah_config()
     try:
-        creds = dojah.generate_widget_credentials()
+        creds = dojah.generate_widget_credentials(user_type="client")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 

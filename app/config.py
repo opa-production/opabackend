@@ -109,10 +109,12 @@ class Settings(BaseSettings):
     KUVARPAY_WEBHOOK_SECRET: Optional[str] = None      # Webhook signing secret from KuvarPay dashboard
 
     # Dojah KYC (host + client verification)
-    DOJAH_APP_ID: Optional[str] = None           # App ID (used as AppId header)
-    DOJAH_SECRET_KEY: Optional[str] = None       # Secret key (Authorization header)
-    DOJAH_PUBLIC_KEY: Optional[str] = None       # Public/publishable key (sent to frontend for widget)
-    DOJAH_WIDGET_ID: Optional[str] = None        # Pre-configured widget ID from Dojah dashboard
+    DOJAH_APP_ID: Optional[str] = None           # Host app ID (AppId header)
+    DOJAH_SECRET_KEY: Optional[str] = None       # Shared secret key (Authorization header)
+    DOJAH_PUBLIC_KEY: Optional[str] = None       # Shared public/publishable key (sent to frontend for widget)
+    DOJAH_WIDGET_ID: Optional[str] = None        # Host widget ID from Dojah dashboard
+    DOJAH_CLIENT_APP_ID: Optional[str] = None    # Client app ID (AppId header)
+    DOJAH_CLIENT_WIDGET_ID: Optional[str] = None # Client widget ID from Dojah dashboard
     DOJAH_BASE_URL: str = "https://api.dojah.io"
     DOJAH_WEBHOOK_SECRET: Optional[str] = None   # HMAC-SHA512 secret for webhook validation
 

@@ -241,3 +241,63 @@ Please return to the Ardena app to continue.</p>
     deep_link = f"{frontend_url}/kyc/result?reference_id={reference_id}"
     logger.info("[Dojah callback] Redirecting to %s", deep_link)
     return RedirectResponse(url=deep_link, status_code=302)
+
+
+@router.get("/dojah/host-callback")
+async def dojah_host_callback(
+    reference_id: str = Query(default=""),
+    status_param: str = Query(default="", alias="status"),
+) -> Response:
+    """
+    Dojah redirects the host here after the widget completes.
+    Configure this URL in the Dojah dashboard for the host widget:
+      https://api.ardena.xyz/api/v1/dojah/host-callback
+
+    Performs an optimistic DB update then redirects to HOST_FRONTEND_URL deep link.
+    """
+    host_frontend_url = (settings.HOST_FRONTEND_URL or "").rstrip("/")
+
+    logger.info("[Dojah host-callback] ref=%s status=%s", reference_id, status_param)
+
+    if reference_id:
+        status_lower = (status_param or "").lower()
+        if status_lower in ("success", "completed", "verified", "true", "1"):
+            optimistic_status = "approved"
+        elif status_lower in ("failed", "declined", "error", "rejected", "false", "0"):
+            optimistic_status = "declined"
+        else:
+            optimistic_status = None
+
+        if optimistic_status:
+            try:
+                async with SessionLocal() as db:
+                    now = datetime.now(timezone.utc)
+                    host_result = await db.execute(
+                        select(HostKyc).filter(HostKyc.dojah_reference_id == reference_id)
+                    )
+                    host_kyc = host_result.scalar_one_or_none()
+                    if host_kyc and host_kyc.status == "pending":
+                        host_kyc.status = optimistic_status
+                        host_kyc.verified_at = now
+                        await db.commit()
+                        logger.info("[Dojah host-callback] Optimistic update: ref=%s → %s", reference_id, optimistic_status)
+            except Exception as exc:
+                logger.warning("[Dojah host-callback] Optimistic update failed (webhook will still arrive): %s", exc)
+
+    if not host_frontend_url:
+        logger.warning("[Dojah host-callback] HOST_FRONTEND_URL not set — cannot redirect to host app")
+        return HTMLResponse(content="""
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verification Complete</title>
+<style>body{font-family:sans-serif;text-align:center;padding:60px 20px;background:#f9f9f9}
+h2{color:#1a1a1a}p{color:#555}</style></head>
+<body><h2>Verification Submitted</h2>
+<p>Your identity verification has been submitted.<br>
+Please return to the Ardena Host app to continue.</p>
+<script>setTimeout(function(){window.close()},3000);</script>
+</body></html>""")
+
+    deep_link = f"{host_frontend_url}/kyc/result?reference_id={reference_id}"
+    logger.info("[Dojah host-callback] Redirecting to %s", deep_link)
+    return RedirectResponse(url=deep_link, status_code=302)

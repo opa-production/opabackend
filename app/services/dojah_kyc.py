@@ -39,9 +39,9 @@ _COUNTRY_PATHS: Dict[str, Dict[str, str]] = {
 }
 
 
-def _dojah_headers() -> Dict[str, str]:
+def _dojah_headers(app_id: Optional[str] = None) -> Dict[str, str]:
     return {
-        "AppId": settings.DOJAH_APP_ID or "",
+        "AppId": app_id or settings.DOJAH_APP_ID or "",
         "Authorization": settings.DOJAH_SECRET_KEY or "",
         "Content-Type": "application/json",
     }
@@ -55,6 +55,7 @@ async def lookup_government_id(
     id_type: str,
     id_number: str,
     country: str = "KE",
+    app_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Call Dojah's identity lookup API and return normalised identity data.
@@ -81,7 +82,7 @@ async def lookup_government_id(
 
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-            resp = await client.get(url, params=params, headers=_dojah_headers())
+            resp = await client.get(url, params=params, headers=_dojah_headers(app_id=app_id))
 
         if resp.status_code in (301, 302, 307, 308):
             location = resp.headers.get("location", "(no location header)")
@@ -136,21 +137,29 @@ async def lookup_government_id(
     }
 
 
-def generate_widget_credentials() -> Dict[str, str]:
+def generate_widget_credentials(user_type: str = "host") -> Dict[str, str]:
     """
-    Generate a unique reference_id and return the widget credentials the mobile app
-    needs to launch the Dojah EasyLookup widget.
+    Generate a unique reference_id and return widget credentials for the mobile app.
+    user_type: "host" uses DOJAH_APP_ID + DOJAH_WIDGET_ID;
+               "client" uses DOJAH_CLIENT_APP_ID + DOJAH_CLIENT_WIDGET_ID.
     """
-    if not settings.DOJAH_APP_ID or not settings.DOJAH_PUBLIC_KEY or not settings.DOJAH_WIDGET_ID:
-        logger.error("[Dojah] Widget credentials not fully configured")
+    if user_type == "client":
+        app_id = settings.DOJAH_CLIENT_APP_ID
+        widget_id = settings.DOJAH_CLIENT_WIDGET_ID
+    else:
+        app_id = settings.DOJAH_APP_ID
+        widget_id = settings.DOJAH_WIDGET_ID
+
+    if not app_id or not settings.DOJAH_PUBLIC_KEY or not widget_id:
+        logger.error("[Dojah] Widget credentials not fully configured for user_type=%s", user_type)
         raise ValueError(SAFE_ERROR)
 
     reference_id = str(uuid.uuid4())
     return {
         "reference_id": reference_id,
-        "app_id": settings.DOJAH_APP_ID,
+        "app_id": app_id,
         "p_key": settings.DOJAH_PUBLIC_KEY,
-        "widget_id": settings.DOJAH_WIDGET_ID,
+        "widget_id": widget_id,
     }
 
 
