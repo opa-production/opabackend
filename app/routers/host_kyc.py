@@ -93,6 +93,14 @@ async def host_kyc_initialize(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
+    # Delete any abandoned pending rows so the user gets a clean fresh verification.
+    from sqlalchemy import delete as sa_delete
+    await db.execute(
+        sa_delete(HostKyc)
+        .where(HostKyc.host_id == current_host.id)
+        .where(HostKyc.status == "pending")
+    )
+
     kyc = HostKyc(
         host_id=current_host.id,
         dojah_reference_id=creds["reference_id"],
@@ -126,7 +134,7 @@ async def get_host_kyc_status(
     )
     latest = result.scalars().first()
 
-    PENDING_EXPIRY = timedelta(minutes=15)
+    PENDING_EXPIRY = timedelta(minutes=3)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:
