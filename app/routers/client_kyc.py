@@ -164,7 +164,7 @@ async def get_client_kyc_status(
 
     # Treat a stale pending row as not_started so the user can restart.
     # 3 minutes is enough for a genuine webhook to arrive after completion.
-    PENDING_EXPIRY = timedelta(minutes=3)
+    PENDING_EXPIRY = timedelta(minutes=1)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:

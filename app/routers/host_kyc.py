@@ -134,7 +134,7 @@ async def get_host_kyc_status(
     )
     latest = result.scalars().first()
 
-    PENDING_EXPIRY = timedelta(minutes=3)
+    PENDING_EXPIRY = timedelta(minutes=1)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:
