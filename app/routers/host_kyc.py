@@ -135,7 +135,9 @@ async def get_host_kyc_status(
     )
     latest = result.scalars().first()
 
-    PENDING_EXPIRY = timedelta(minutes=1)
+    # Treat a stale pending row as not_started so the user can restart.
+    # 30 minutes is plenty of time for a user to complete the widget flow.
+    PENDING_EXPIRY = timedelta(minutes=30)
     if latest and latest.status == "pending":
         age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
         if age > PENDING_EXPIRY:
