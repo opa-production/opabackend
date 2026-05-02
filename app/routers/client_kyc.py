@@ -20,11 +20,12 @@ import logging
 from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import delete as sa_delete
+from fastapi.responses import RedirectResponse
 
 from app.auth import get_current_client
 from app.config import settings
@@ -84,6 +85,7 @@ async def client_kyc_lookup(
     current_client.id_number = result["id_number"]
 
     await db.commit()
+    await db.refresh(current_client)
 
     logger.info("[KYC] client_id=%s lookup success: %s %s", current_client.id, body.id_type, body.country)
 
@@ -196,3 +198,18 @@ async def get_client_kyc_status(
         decision_reason=latest.decision_reason,
         verified_at=latest.verified_at,
     )
+
+
+def build_client_kyc_redirect_response(return_to: Optional[str] = None):
+    """
+    Build a redirect response back to the client app after Dojah verification.
+    This is used by the /client/kyc/redirect endpoint in main.py.
+    """
+    frontend_url = (settings.FRONTEND_URL or "ardena://").rstrip("/")
+    # Default deep link if no return_to is provided
+    deep_link = f"{frontend_url}/kyc/result"
+    
+    if return_to:
+        deep_link = return_to
+        
+    return RedirectResponse(url=deep_link)

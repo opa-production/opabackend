@@ -9,9 +9,10 @@ import logging
 from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import RedirectResponse
 
 from app.auth import get_current_host
 from app.config import settings
@@ -164,3 +165,18 @@ async def get_host_kyc_status(
         decision_reason=latest.decision_reason,
         verified_at=latest.verified_at,
     )
+
+
+def build_kyc_redirect_response(return_to: Optional[str] = None):
+    """
+    Build a redirect response back to the host app after Dojah verification.
+    This is used by the /host/kyc/redirect endpoint in main.py.
+    """
+    host_frontend_url = (settings.HOST_FRONTEND_URL or "ardenahost://").rstrip("/")
+    # Default deep link if no return_to is provided
+    deep_link = f"{host_frontend_url}/kyc/result"
+    
+    if return_to:
+        deep_link = return_to
+        
+    return RedirectResponse(url=deep_link)
