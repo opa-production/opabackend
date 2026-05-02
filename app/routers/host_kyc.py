@@ -139,7 +139,13 @@ async def get_host_kyc_status(
     # 30 minutes is plenty of time for a user to complete the widget flow.
     PENDING_EXPIRY = timedelta(minutes=30)
     if latest and latest.status == "pending":
-        age = datetime.now(timezone.utc) - latest.created_at.replace(tzinfo=timezone.utc)
+        # Ensure comparison is timezone-aware and accurate
+        now = datetime.now(timezone.utc)
+        created_at = latest.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        
+        age = now - created_at
         if age > PENDING_EXPIRY:
             latest = None
 
