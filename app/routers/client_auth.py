@@ -449,17 +449,42 @@ async def update_client_profile(
         current_client.bio = request.bio
     if request.fun_fact is not None:
         current_client.fun_fact = request.fun_fact
-    
+
     # Update required fields (always provided)
     current_client.mobile_number = request.mobile_number
     current_client.id_number = request.id_number
     current_client.date_of_birth = request.date_of_birth
     current_client.gender = request.gender
-    current_client.updated_at = datetime.now(timezone.utc)
+    # Set updated_at as a Python value to avoid async greenlet issues during
+    # response serialization (onupdate=func.now() is a server-side expression
+    # that can leave the column in an expired state after flush)
+    now = datetime.now(timezone.utc)
+    current_client.updated_at = now
 
     await db.commit()
-    await db.refresh(current_client)
-    return current_client
+    # Do NOT call db.refresh() here — expire_on_commit=False keeps all
+    # Python-set values in memory, and refresh() re-expires the onupdate
+    # column which causes MissingGreenlet when Pydantic serializes the response
+    return ClientProfileResponse(
+        id=current_client.id,
+        full_name=current_client.full_name,
+        email=current_client.email,
+        bio=current_client.bio,
+        fun_fact=current_client.fun_fact,
+        mobile_number=current_client.mobile_number,
+        id_number=current_client.id_number,
+        date_of_birth=current_client.date_of_birth,
+        gender=current_client.gender,
+        avatar_url=current_client.avatar_url,
+        id_document_url=current_client.id_document_url,
+        license_document_url=current_client.license_document_url,
+        terms_accepted_at=current_client.terms_accepted_at,
+        email_notifications_enabled=current_client.email_notifications_enabled,
+        sms_notifications_enabled=current_client.sms_notifications_enabled,
+        in_app_notifications_enabled=current_client.in_app_notifications_enabled,
+        created_at=current_client.created_at,
+        updated_at=now,
+    )
 
 
 @router.put("/client/change-password")
