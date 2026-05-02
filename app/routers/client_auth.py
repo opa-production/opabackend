@@ -455,7 +455,8 @@ async def update_client_profile(
     current_client.id_number = request.id_number
     current_client.date_of_birth = request.date_of_birth
     current_client.gender = request.gender
-    
+    current_client.updated_at = datetime.now(timezone.utc)
+
     await db.commit()
     await db.refresh(current_client)
     return current_client
