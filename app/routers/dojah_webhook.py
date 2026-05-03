@@ -172,6 +172,7 @@ async def dojah_webhook(request: Request) -> Response:
 @router.get("/dojah/client-callback")
 async def dojah_client_callback(
     reference_id: str = Query(default=""),
+    reference_id_camel: str = Query(default="", alias="referenceId"),
     status_param: str = Query(default="", alias="status"),
 ) -> Response:
     """
@@ -183,7 +184,10 @@ async def dojah_client_callback(
     on its first poll, not after waiting for the async webhook), then
     redirect the user to the client app deep link.
     """
-    frontend_url = (settings.FRONTEND_URL or "").rstrip("/")
+    frontend_url = (settings.FRONTEND_URL or "oparides://").rstrip("/")
+
+    # Dojah may send reference_id or referenceId depending on widget version
+    reference_id = reference_id or reference_id_camel
 
     logger.info("[Dojah callback] ref=%s status=%s", reference_id, status_param)
 
@@ -191,12 +195,14 @@ async def dojah_client_callback(
     # This ensures the app sees the result immediately instead of waiting.
     if reference_id:
         status_lower = (status_param or "").lower()
-        if status_lower in ("success", "completed", "verified", "true", "1"):
+        if status_lower in ("success", "completed", "verified", "true", "1", "approved"):
             optimistic_status = "approved"
         elif status_lower in ("failed", "declined", "error", "rejected", "false", "0"):
             optimistic_status = "declined"
         else:
-            optimistic_status = None
+            # No recognisable status — treat callback hit as optimistic approval;
+            # the full webhook will confirm or correct this.
+            optimistic_status = "approved"
 
         if optimistic_status:
             try:
@@ -246,6 +252,7 @@ Please return to the Ardena app to continue.</p>
 @router.get("/dojah/host-callback")
 async def dojah_host_callback(
     reference_id: str = Query(default=""),
+    reference_id_camel: str = Query(default="", alias="referenceId"),
     status_param: str = Query(default="", alias="status"),
 ) -> Response:
     """
@@ -257,16 +264,18 @@ async def dojah_host_callback(
     """
     host_frontend_url = (settings.HOST_FRONTEND_URL or "").rstrip("/")
 
+    reference_id = reference_id or reference_id_camel
+
     logger.info("[Dojah host-callback] ref=%s status=%s", reference_id, status_param)
 
     if reference_id:
         status_lower = (status_param or "").lower()
-        if status_lower in ("success", "completed", "verified", "true", "1"):
+        if status_lower in ("success", "completed", "verified", "true", "1", "approved"):
             optimistic_status = "approved"
         elif status_lower in ("failed", "declined", "error", "rejected", "false", "0"):
             optimistic_status = "declined"
         else:
-            optimistic_status = None
+            optimistic_status = "approved"
 
         if optimistic_status:
             try:
