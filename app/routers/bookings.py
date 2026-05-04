@@ -441,20 +441,6 @@ async def create_booking(
         ["host-bookings-list"],
     )
 
-    # Notify host of new booking (fire-and-forget)
-    _client_name = current_client.full_name or "A client"
-    _car_label = f"{car.name} {car.model or ''}".strip()
-    _start = request.start_date.strftime("%d %b %Y")
-    asyncio.ensure_future(notify_host_new_booking(
-        car.host_id, booking_id, _client_name, _car_label, _start
-    ))
-
-    # SMS: booking received (1 of 4)
-    if current_client.mobile_number:
-        asyncio.ensure_future(sms_service.send_booking_created(
-            current_client.mobile_number, _car_label, _start
-        ))
-
     # Attach already-loaded car (with host) so no extra round-trip is needed
     booking.car = car
 
@@ -1112,6 +1098,10 @@ async def get_host_bookings(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid status. Valid values: {[s.value for s in BookingStatus]}",
             )
+    else:
+        # Exclude PENDING bookings (unpaid) so they don't clutter the host's view.
+        # Once paid, they become CONFIRMED and will appear here.
+        stmt = stmt.filter(Booking.status != BookingStatus.PENDING)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
