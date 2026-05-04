@@ -54,7 +54,7 @@ def _host_cars_cache_key(
     Stable cache key for host cars list.
     Ignores volatile dependency objects (e.g., DB session) that would prevent cache hits.
     """
-    host = kwargs.get("current_host")
+    host = kwargs.get("kwargs", kwargs).get("current_host")
     host_id = getattr(host, "id", "anon")
     query = ""
     path = "/host/cars"

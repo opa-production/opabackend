@@ -23,7 +23,7 @@ def host_scoped_cache_key(
     The `host_id` segment lets invalidate_host_cache_namespaces do a targeted
     SCAN without touching other hosts' keys.
     """
-    host = kwargs.get("current_host")
+    host = kwargs.get("kwargs", kwargs).get("current_host")
     host_id = getattr(host, "id", "anon")
     path = request.url.path if request is not None else f"/{func.__name__}"
     query = str(request.query_params) if request is not None else ""
