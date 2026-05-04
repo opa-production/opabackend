@@ -1,7 +1,7 @@
 """
 Client-Host Messaging endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, select
@@ -124,9 +124,11 @@ async def send_message_to_host(
 @router.get("/client/messages/host/{host_id}", response_model=ClientHostConversationResponse)
 async def get_conversation_with_host(
     host_id: int,
+    response: Response,
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db)
 ):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     """
     Get the conversation with a specific host
     
@@ -213,9 +215,11 @@ async def get_conversation_with_host(
 
 @router.get("/client/messages", response_model=ClientHostConversationListResponse)
 async def get_client_conversations(
+    response: Response,
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db)
 ):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     """
     Get all conversations for the authenticated client
     
@@ -355,11 +359,13 @@ async def send_message_to_client(
 @router.get("/host/messages/client/{client_id}", response_model=ClientHostConversationResponse)
 async def get_conversation_with_client(
     client_id: int,
+    response: Response,
     skip: int = Query(0, ge=0, description="Number of messages to skip (oldest-first pagination)"),
     limit: int = Query(50, ge=1, le=200, description="Maximum messages to return"),
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db)
 ):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     """
     Get the conversation with a specific client
     
@@ -446,9 +452,11 @@ async def get_conversation_with_client(
 
 @router.get("/host/messages", response_model=ClientHostConversationListResponse)
 async def get_host_conversations(
+    response: Response,
     current_host: Host = Depends(get_current_host),
     db: AsyncSession = Depends(get_db)
 ):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     """
     Get all conversations for the authenticated host
     
